@@ -1,0 +1,42 @@
+# Vibe CNC — Fanuc-Style (Windows 11 Frontend)
+# Passe diese Werte an deine Umgebung an.
+
+ui:
+  font_base_pt: 12
+  dark_bg: "#1A1A1A"
+  black_bg: "#000000"
+  fanuc_yellow: "#FFC800"
+  crt_green: "#6CFF6C"
+  crt_green_dim: "#4ACF4A"
+  cyan: "#56D6FF"
+  white: "#EDEDED"
+
+paths:
+  camotics_exe: 'C:\Program Files\CAMotics\camotics.exe'   # Pfad zur CAMotics-EXE
+  sim_share: '\\linuxcnc-vm\sim\incoming'                  # Optional: SMB-Share zur LinuxCNC-VM
+
+policies:
+  protected_m_codes: [62, 63, 64, 65]                      # Roboter-/Luft-M-Codes: nicht ändern/auskommentieren
+  require_header_codes: ["G18", "G40", "G80", "G97"]       # Header-Guards
+  require_units: "G21"                                     # mm
+  require_origin: "G54"                                    # Nullpunkt
+
+ai:
+  mode: "claude"          # "claude" (Cloud) oder "ollama" (lokal)
+  offline: false          # true = keine HTTP-Calls (nur Lint + Stubs)
+
+  # --- Claude (Anthropic) ---
+  anthropic:
+    base_url: "https://api.anthropic.com/v1/messages"
+    model: "claude-sonnet-4-20250514"                      # ⭐ UPGRADE: Sonnet 4 (vorher: claude-3-5-sonnet-20240620)
+    api_key_env: "ANTHROPIC_API_KEY"                       # per setx ANTHROPIC_API_KEY "sk-ant-..."
+    max_output_tokens: 800
+
+  # --- Ollama (lokal) ---
+  ollama:
+    base_url: "http://127.0.0.1:11434/api/chat"
+    model: "qwen2.5:7b-instruct-q4_0"
+    system_prompt: |
+      Du bist ein strenger CNC-Reviewer. Halte dich strikt an die Policies.
+      Antworte mit: 1) Liste von Regelverstößen (Zeile, Regel, kurzer Fix),
+      2) optional unified diff. Keine kosmetischen Änderungen.

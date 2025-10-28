@@ -1,0 +1,61 @@
+{
+  "units": "metric",
+  "machine": "FANUC 0i‑TF Plus (Takisawa)",
+  "tool_table": [
+    {
+      "t": 1,
+      "name": "CNMG1204P-S Außen",
+      "type": "turn_rough",
+      "insert_radius_mm": 0.8,
+      "holder": "PCLNR2525",
+      "limits": {
+        "vc_max": 180,
+        "ap_max": 2.0,
+        "f_max": 0.35
+      }
+    },
+    {
+      "t": 7,
+      "name": "Groove ORing",
+      "type": "groove",
+      "limits": {
+        "vc_max": 120,
+        "ap_max": 0.6,
+        "f_max": 0.2
+      }
+    },
+    {
+      "t": 5,
+      "name": "Bohrer 8.2",
+      "type": "drill",
+      "d_mm": 8.2,
+      "limits": {
+        "vc_max": 80,
+        "ap_max": 2.5,
+        "f_max": 0.18
+      }
+    },
+    {
+      "t": 11,
+      "name": "DCMT11T308 Innen",
+      "type": "turn_finish",
+      "insert_radius_mm": 0.4,
+      "holder": "SDJCR2020",
+      "limits": {
+        "vc_max": 220,
+        "ap_max": 0.8,
+        "f_max": 0.25
+      }
+    },
+    {
+      "t": 30,
+      "name": "Gewindeformer M10x1",
+      "type": "thread_form",
+      "limits": {
+        "vc_max": 25,
+        "ap_max": 0.0,
+        "f_max": 0.0
+      }
+    }
+  ]
+}
