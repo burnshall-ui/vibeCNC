@@ -1,4 +1,4 @@
-import os, subprocess, shutil, tempfile
+import os, subprocess, shutil, tempfile, re
 from typing import Tuple
 from pathlib import Path
 
@@ -8,6 +8,34 @@ class CamoticsBridge:
         self.process = None
         # Feste Temp-Datei für Hot-Reload
         self.tmp_file = os.path.join(tempfile.gettempdir(), "vibe_cnc_live.nc")
+
+    def _sanitize_for_camotics(self, code: str) -> str:
+        """Bereinigt Fanuc G-Code für CAMotics (LinuxCNC-Parser)"""
+        lines = code.split('\n')
+        sanitized = []
+
+        for line in lines:
+            # G50 entfernen (Fanuc CSS Limit - CAMotics kennt das nicht)
+            if re.search(r'\bG50\b', line, re.IGNORECASE):
+                line = re.sub(r'\bG50\s+S\d+', '', line, flags=re.IGNORECASE)
+
+            # G96 durch G97 ersetzen (CSS → RPM Mode)
+            line = re.sub(r'\bG96\b', 'G97', line, flags=re.IGNORECASE)
+
+            # Kommentare mit --- bereinigen (CAMotics denkt das sind Minus-Operatoren)
+            if '(' in line and ')' in line:
+                def clean_comment(match):
+                    comment = match.group(1)
+                    # Ersetze --- durch = (oder entferne sie)
+                    comment = comment.replace('---', '===')
+                    return f'({comment})'
+                line = re.sub(r'\((.*?)\)', clean_comment, line)
+
+            # Leere Zeilen nach Bereinigung skippen
+            if line.strip():
+                sanitized.append(line)
+
+        return '\n'.join(sanitized)
 
     def _validate_exe_path(self, exe_path: str) -> Tuple[bool, str]:
         """Validates if CAMotics executable path is valid"""
@@ -31,21 +59,24 @@ class CamoticsBridge:
     def quick_sim(self, code_text: str) -> Tuple[bool, str]:
         """Quick Sim: Schreibt Code in feste Datei und startet/reloaded CAMotics"""
         exe = self.cfg['paths'].get('camotics_exe', 'camotics.exe')
-        
+
         # Validate executable
         valid, exe_path = self._validate_exe_path(exe)
         if not valid:
             return (False, exe_path)
-        
+
         try:
             # Create temp directory if needed
             temp_dir = os.path.dirname(self.tmp_file)
             os.makedirs(temp_dir, exist_ok=True)
-            
+
+            # Bereinige Code für CAMotics (Fanuc → LinuxCNC)
+            sanitized_code = self._sanitize_for_camotics(code_text)
+
             # Write to temp file
             try:
                 with open(self.tmp_file, "w", encoding="utf-8") as f:
-                    f.write(code_text)
+                    f.write(sanitized_code)
             except IOError as e:
                 return (False, f"Fehler beim Schreiben der Temp-Datei: {e}")
             
@@ -80,7 +111,7 @@ class CamoticsBridge:
             except OSError as e:
                 return (False, f"OS-Fehler beim Starten von CAMotics: {e}")
             
-            return (True, f"CAMotics gestartet mit {os.path.basename(self.tmp_file)}")
+            return (True, f"CAMotics gestartet (Code bereinigt für LinuxCNC-Parser)")
             
         except Exception as e:
             return (False, f"Unerwarteter Fehler: {type(e).__name__}: {str(e)}")

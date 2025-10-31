@@ -61,7 +61,8 @@ class GCodeEditor(QPlainTextEdit):
         super().__init__()
         self.c = colors
         self.error_lines = []  # Liste von Fehler-Zeilen
-        
+        self.sim_current_line = None  # Aktuelle Simulationszeile (gelber Marker)
+
         self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
@@ -109,8 +110,15 @@ class GCodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(blockNumber + 1)
+                line_num = blockNumber + 1
+
+                # Gelber Simulations-Marker (vertikaler Balken links)
+                if self.sim_current_line == line_num:
+                    marker_rect = QRect(0, top, 4, int(self.blockBoundingRect(block).height()))
+                    painter.fillRect(marker_rect, QColor(self.c['FANUC_YELLOW']))
+
                 # Markiere Error-Zeilen rot
-                if (blockNumber + 1) in self.error_lines:
+                if line_num in self.error_lines:
                     painter.setPen(QColor("#FF4444"))
                 else:
                     painter.setPen(QColor("#7f7f7f"))
@@ -133,6 +141,16 @@ class GCodeEditor(QPlainTextEdit):
         self.error_lines = []
         self._lineArea.update()
         self._highlightCurrentLine()
+
+    def set_sim_line(self, line_number: int):
+        """Setzt den gelben Simulations-Marker auf eine Zeile"""
+        self.sim_current_line = line_number
+        self._lineArea.update()
+
+    def clear_sim_line(self):
+        """Entfernt den Simulations-Marker"""
+        self.sim_current_line = None
+        self._lineArea.update()
 
     def _highlightCurrentLine(self):
         # Simplified highlighting without ExtraSelections for PyQt6 compatibility

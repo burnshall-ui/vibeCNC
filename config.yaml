@@ -12,8 +12,11 @@ ui:
   white: "#EDEDED"
 
 paths:
-  camotics_exe: 'C:\Program Files\CAMotics\camotics.exe'   # Pfad zur CAMotics-EXE
-  sim_share: '\\linuxcnc-vm\sim\incoming'                  # Optional: SMB-Share zur LinuxCNC-VM
+  camotics_exe: 'C:\Program Files (x86)\CAMotics\camotics.exe'   # Pfad zur CAMotics-EXE
+  sim_share: '\\linuxcnc-vm\sim\incoming'                        # Optional: SMB-Share zur LinuxCNC-VM
+
+machine:
+  chuck_z_limit: -5.0        # Spannfutter-Grenze (Z < -5mm → Kollisionswarnung)
 
 policies:
   protected_m_codes: [62, 63, 64, 65]                      # Roboter-/Luft-M-Codes: nicht ändern/auskommentieren
@@ -22,7 +25,7 @@ policies:
   require_origin: "G54"                                    # Nullpunkt
 
 ai:
-  mode: "claude"          # "claude" (Cloud) oder "ollama" (lokal)
+  mode: "ollama"          # "claude" (Cloud) oder "ollama" (lokal)
   offline: false          # true = keine HTTP-Calls (nur Lint + Stubs)
 
   # --- Claude (Anthropic) ---
@@ -35,7 +38,7 @@ ai:
   # --- Ollama (lokal) ---
   ollama:
     base_url: "http://127.0.0.1:11434/api/chat"
-    model: "qwen2.5:7b-instruct-q4_0"
+    model: "granite3.3:8b"
     system_prompt: |
       Du bist ein strenger CNC-Reviewer. Halte dich strikt an die Policies.
       Antworte mit: 1) Liste von Regelverstößen (Zeile, Regel, kurzer Fix),

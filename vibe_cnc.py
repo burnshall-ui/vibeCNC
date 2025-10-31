@@ -2,7 +2,7 @@
 import os, sys, json, re, subprocess, shutil
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QSize, QRect, QTimer, QSettings, QEvent, QObject, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QSize, QRect, QTimer, QSettings, QEvent, QObject, pyqtSignal, QThread, QRunnable, QThreadPool, pyqtSlot
 from PyQt6.QtGui import QFont, QColor, QTextFormat, QAction, QKeySequence, QIcon, QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -17,23 +17,30 @@ from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.claude_client import AIClient
 from vibe_cnc.camotics_bridge import CamoticsBridge
+from vibe_cnc.gcode_plotter import GCodePlotterWidget
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-class AIWorker(QObject):
+class AIWorkerSignals(QObject):
+    """Signals for AIWorker (QRunnable can't have signals directly)"""
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, fn, *args):
+class AIWorker(QRunnable):
+    def __init__(self, fn, args, callback):
         super().__init__()
         self.fn = fn
         self.args = args
+        self.callback = callback
+        self.signals = AIWorkerSignals()
+        self.signals.finished.connect(callback)
 
+    @pyqtSlot()
     def run(self):
         try:
             ok, resp = self.fn(*self.args)
         except Exception as e:
             ok, resp = False, f"❌ KI-Threadfehler: {type(e).__name__}: {e}"
-        self.finished.emit(ok, resp)
+        self.signals.finished.emit(ok, resp)
 
 
 class Main(QMainWindow):
@@ -44,6 +51,20 @@ class Main(QMainWindow):
         self.settings = QSettings("VibeCNC", "VibeCNC")
         self.current_file = None
         self._ai_busy = False
+
+        # --- Simulation State ---
+        self.sim_state = "STOPPED"  # STOPPED, RUNNING, PAUSED
+        self.sim_current_line = 0
+        self.sim_lines = []
+        self.sim_timer = QTimer()
+        self.sim_timer.timeout.connect(self._sim_step)
+
+        # --- Live Position Tracking ---
+        self.sim_x = 0.0
+        self.sim_z = 0.0
+        self.sim_tool = 0
+        self.sim_s = 0
+        self.sim_f = 0.0
 
         # --- Settings & Managers ---
         cfg_path = os.path.join(HERE, "config.yaml")
@@ -96,13 +117,32 @@ class Main(QMainWindow):
         rv.addWidget(self.chat); rv.addWidget(self.input)
         right = TitlePanel("Vibe CNC — ASSIST", rightBox, self.cfg_colors)
 
+        # --- BOTTOM: 2D Plotter ---
+        chuck_z = self.cfg.data.get('machine', {}).get('chuck_z_limit', -5.0)
+        self.plotter = GCodePlotterWidget(self.cfg_colors, chuck_z=chuck_z)
+        bottom = TitlePanel("WERKSTÜCK (2D)", self.plotter, self.cfg_colors)
+
         # --- SPLITTER ---
         self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.addWidget(left); self.split.addWidget(self.title_center); self.split.addWidget(right)
         self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 2); self.split.setStretchFactor(2, 1)
 
+        # --- Control Buttons (Fanuc-Style) ---
+        ctrl = QWidget(); ch = QHBoxLayout(ctrl); ch.setContentsMargins(0,8,0,4); ch.setSpacing(8)
+        self.btnCycleStart = QPushButton("▶ CYCLE START"); self.btnCycleStart.setObjectName("CycleStart")
+        self.btnFeedHold = QPushButton("⏸ FEED HOLD"); self.btnFeedHold.setObjectName("FeedHold")
+        self.btnOptStop = QPushButton("⊙ OPT STOP"); self.btnOptStop.setObjectName("ControlToggle")
+        self.btnOptStop.setCheckable(True)
+        self.btnSingleBlock = QPushButton("⊙ SINGLE BLOCK"); self.btnSingleBlock.setObjectName("ControlToggle")
+        self.btnSingleBlock.setCheckable(True)
+        ch.addWidget(self.btnCycleStart)
+        ch.addWidget(self.btnFeedHold)
+        ch.addWidget(self.btnOptStop)
+        ch.addWidget(self.btnSingleBlock)
+        ch.addStretch()
+
         # --- Softkeys ---
-        soft = QWidget(); sh = QHBoxLayout(soft); sh.setContentsMargins(0,8,0,8); sh.setSpacing(8)
+        soft = QWidget(); sh = QHBoxLayout(soft); sh.setContentsMargins(0,4,0,8); sh.setSpacing(8)
         self.btnOpen = QPushButton("OPEN"); self.btnOpen.setObjectName("Softkey")
         self.btnSave = QPushButton("SAVE"); self.btnSave.setObjectName("Softkey")
         self.btnSim  = QPushButton("SEND 2 SIM"); self.btnSim.setObjectName("Softkey")
@@ -116,11 +156,19 @@ class Main(QMainWindow):
         self.setStatusBar(self.status)
         self.status.showMessage("Bereit", 3000)
 
+        # --- Vertical Splitter (Top: Editor/Chat | Bottom: Plot) ---
+        self.vsplit = QSplitter(Qt.Orientation.Vertical)
+        self.vsplit.addWidget(self.split)
+        self.vsplit.addWidget(bottom)
+        self.vsplit.setStretchFactor(0, 3)  # Editor-Bereich: 75%
+        self.vsplit.setStretchFactor(1, 1)  # Plot-Bereich: 25%
+
         # --- Root ---
         root = QWidget(); v = QVBoxLayout(root)
         v.setContentsMargins(10,10,10,10); v.setSpacing(0)
-        v.addWidget(self.split, stretch=1)
-        v.addWidget(soft, stretch=0)
+        v.addWidget(self.vsplit, stretch=1)
+        v.addWidget(ctrl, stretch=0)  # Control-Buttons oben
+        v.addWidget(soft, stretch=0)  # Softkeys unten
         v.setContentsMargins(10,10,10,10)
         self.setCentralWidget(root)
 
@@ -136,6 +184,17 @@ class Main(QMainWindow):
         self.btnGen.clicked.connect(self.action_generate)
         self.btnSim.clicked.connect(self.action_send_to_sim)
         self.input.returnPressed.connect(self.action_analyze)
+
+        # --- Control Signals ---
+        self.btnCycleStart.clicked.connect(self.action_cycle_start)
+        self.btnFeedHold.clicked.connect(self.action_feed_hold)
+        self.btnOptStop.toggled.connect(self.action_opt_stop_toggled)
+        self.btnSingleBlock.toggled.connect(self.action_single_block_toggled)
+
+        # --- Plotter Live-Update ---
+        self.editor.textChanged.connect(self._on_editor_changed)
+        self.editor.cursorPositionChanged.connect(self._on_cursor_changed)
+        self.plotter.line_clicked.connect(self._on_plot_clicked)
         
         # --- Tool Integration ---
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -153,6 +212,11 @@ class Main(QMainWindow):
         QAction(self, shortcut=QKeySequence.StandardKey.ZoomOut, triggered=self.zoom_out)
         QAction(self, shortcut=QKeySequence.StandardKey.Save, triggered=self.action_save)
         QAction(self, shortcut=QKeySequence.StandardKey.Open, triggered=self.action_open)
+
+        # --- Control Shortcuts ---
+        QAction(self, shortcut=Qt.Key.Key_Space, triggered=self.action_cycle_start)
+        QAction(self, shortcut=Qt.Key.Key_F, triggered=self.action_feed_hold)
+        QAction(self, shortcut=Qt.Key.Key_Escape, triggered=self._sim_stop)
 
         # UI state
         self._restore_state()
@@ -174,6 +238,48 @@ class Main(QMainWindow):
             QPushButton#PanelTab {{ background:{c['FANUC_YELLOW']}; color:#000; font-weight:600; padding:6px 10px; border:0; }}
             QPushButton#PanelTab:checked {{ background:{c['FANUC_YELLOW']}; }}
             QPushButton#PanelTab:!checked {{ background:#E0B300; opacity:0.75; }}
+
+            /* Control Buttons (Fanuc-Style) */
+            QPushButton#CycleStart {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00DD00, stop:1 #009900);
+                color: #FFF;
+                font-weight: bold;
+                font-size: 14px;
+                border: 2px solid #00FF00;
+                border-radius: 4px;
+                padding: 10px 20px;
+            }}
+            QPushButton#CycleStart:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00FF00, stop:1 #00BB00); }}
+            QPushButton#CycleStart:pressed {{ background: #006600; border-color: #00AA00; }}
+
+            QPushButton#FeedHold {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FF9900, stop:1 #CC6600);
+                color: #000;
+                font-weight: bold;
+                border: 2px solid #FF8800;
+                border-radius: 4px;
+                padding: 10px 20px;
+            }}
+            QPushButton#FeedHold:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFAA00, stop:1 #DD7700); }}
+            QPushButton#FeedHold:pressed {{ background: #AA5500; }}
+
+            QPushButton#ControlToggle {{
+                background: #333;
+                color: #AAA;
+                border: 2px solid #555;
+                border-radius: 4px;
+                padding: 10px 16px;
+                font-weight: bold;
+            }}
+            QPushButton#ControlToggle:hover {{ background: #444; border-color: #666; }}
+            QPushButton#ControlToggle:checked {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {c['FANUC_YELLOW']}, stop:1 #CC9900);
+                color: #000;
+                border-color: {c['FANUC_YELLOW']};
+            }}
+            QPushButton#ControlToggle:checked:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFDD00, stop:1 #DDAA00);
+            }}
         """)
 
     def _apply_scaling(self):
@@ -181,14 +287,18 @@ class Main(QMainWindow):
         scale = max(0.9, min(1.6, w / 1600))
         def set_font(widget, mul=1.0):
             f = QFont("Consolas"); f.setPointSizeF(self.base_pt * scale * mul); widget.setFont(f)
-        set_font(self.editor, 1.1)
-        set_font(self.chat, 1.0)
-        set_font(self.input, 1.0)
-        set_font(self.table, 1.0)
+        set_font(self.editor, 0.95)  # Editor: kleiner
+        set_font(self.chat, 0.9)     # Chat: kleiner
+        set_font(self.input, 0.9)    # Input: kleiner
+        set_font(self.table, 0.9)    # Tabelle: kleiner
+        set_font(self.macroTable, 0.9)  # Makro-Tabelle: kleiner
         for b in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen]:
-            set_font(b, 0.95); b.setMinimumHeight(int(34 * scale))
+            set_font(b, 0.9); b.setMinimumHeight(int(34 * scale))
         for l in self.findChildren(QLabel, "PanelTitle"):
             f = l.font(); f.setPointSizeF(self.base_pt * scale * 0.95); f.setBold(True); l.setFont(f)
+        # Tabs (WERKZEUGE/MAKROS): normale Größe
+        for tab in [self.btnTabTools, self.btnTabMacros]:
+            set_font(tab, 1.0)
         self.editor.setViewportMargins(self.editor.lineNumberAreaWidth(), 0, 0, 0)
 
     def _set_ai_busy(self, busy: bool):
@@ -204,15 +314,8 @@ class Main(QMainWindow):
         self._set_ai_busy(True)
         self.status.showMessage(status_message, 0)
 
-        thread = QThread(self)
-        worker = AIWorker(fn, *args)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(lambda ok, resp, handler=completion_handler: self._on_ai_task_finished(ok, resp, handler))
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+        worker = AIWorker(fn, args, lambda ok, resp, handler=completion_handler: self._on_ai_task_finished(ok, resp, handler))
+        QThreadPool.globalInstance().start(worker)
 
     def _on_ai_task_finished(self, ok: bool, resp: str, handler):
         try:
@@ -259,6 +362,225 @@ class Main(QMainWindow):
         else:
             self.chat.append(f"<span style='color:{self.cfg_colors['FANUC_YELLOW']}'>Fehler:</span> {resp}")
             self.status.showMessage("❌ KI-Fehler", 5000)
+
+    def _on_editor_changed(self):
+        """Editor-Änderung → Plot-Update (mit 500ms Debounce)"""
+        code = self.editor.toPlainText()
+        self.plotter.pending_code = code
+        self.plotter.update_plot()
+
+    def _on_cursor_changed(self):
+        """Cursor-Position im Editor → Highlight im Plot"""
+        cursor = self.editor.textCursor()
+        line_num = cursor.blockNumber() + 1  # QTextEdit zählt ab 0
+        self.plotter.highlight_line(line_num)
+
+    def _on_plot_clicked(self, line_num: int):
+        """Klick im Plot → Springe zu Zeile im Editor"""
+        cursor = self.editor.textCursor()
+        # Gehe zu Zeile (line_num ist 1-basiert)
+        block = self.editor.document().findBlockByLineNumber(line_num - 1)
+        if block.isValid():
+            cursor.setPosition(block.position())
+            self.editor.setTextCursor(cursor)
+            self.editor.centerCursor()
+            self.editor.setFocus()
+
+    # --- Control Actions ---
+    def action_cycle_start(self):
+        """CYCLE START Button → Startet/Fortsetzt 2D-Simulation"""
+        single_block = self.btnSingleBlock.isChecked()
+        opt_stop = self.btnOptStop.isChecked()
+
+        mode_info = []
+        if single_block:
+            mode_info.append("SINGLE BLOCK")
+        if opt_stop:
+            mode_info.append("OPT STOP")
+
+        mode_str = f" ({', '.join(mode_info)})" if mode_info else ""
+        self.chat.append(f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>CNC:</span> CYCLE START{mode_str}")
+
+        # Starte 2D-Simulation
+        self._sim_start()
+
+    def action_feed_hold(self):
+        """FEED HOLD Button → Pausiert Simulation"""
+        self.chat.append(f"<span style='color:{self.cfg_colors['FANUC_YELLOW']}'>CNC:</span> FEED HOLD gedrückt")
+        self._sim_pause()
+
+    def action_opt_stop_toggled(self, checked: bool):
+        """OPTIONAL STOP Toggle → M01 aktiv/inaktiv"""
+        state = "EIN" if checked else "AUS"
+        icon = "⊙" if checked else "○"
+        self.status.showMessage(f"{icon} OPTIONAL STOP: {state}", 2000)
+        self.chat.append(f"<span style='color:{self.cfg_colors['CYAN']}'>CNC:</span> OPTIONAL STOP → {state}")
+
+    def action_single_block_toggled(self, checked: bool):
+        """SINGLE BLOCK Toggle → Einzelsatz-Modus"""
+        state = "EIN" if checked else "AUS"
+        icon = "⊙" if checked else "○"
+        self.status.showMessage(f"{icon} SINGLE BLOCK: {state}", 2000)
+        self.chat.append(f"<span style='color:{self.cfg_colors['CYAN']}'>CNC:</span> SINGLE BLOCK → {state}")
+
+    # --- Simulation Engine ---
+    def _sim_start(self):
+        """Startet oder setzt die Simulation fort"""
+        if self.sim_state == "STOPPED":
+            # Simulation neu starten
+            code = self.editor.toPlainText()
+            self.sim_lines = [line.strip() for line in code.split('\n')]
+            self.sim_current_line = 0
+            self.sim_state = "RUNNING"
+
+            # Live-Position zurücksetzen
+            self.sim_x = 0.0
+            self.sim_z = 0.0
+            self.sim_tool = 0
+            self.sim_s = 0
+            self.sim_f = 0.0
+
+            # Live-Drawing: Start bei Zeile 0 (nichts gezeichnet)
+            self.plotter.set_live_max_line(0)
+
+            # Geschwindigkeit: 200ms pro Zeile (Standard), 500ms für SINGLE BLOCK
+            interval = 500 if self.btnSingleBlock.isChecked() else 200
+            self.sim_timer.start(interval)
+
+            self.status.showMessage("▶ Simulation läuft", 0)
+            self.chat.append(f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>SIM:</span> Simulation gestartet")
+
+            # Gelben Marker einblenden
+            self.editor.set_sim_line(1)
+
+        elif self.sim_state == "PAUSED":
+            # Simulation fortsetzen
+            self.sim_state = "RUNNING"
+            interval = 500 if self.btnSingleBlock.isChecked() else 200
+            self.sim_timer.start(interval)
+            self.status.showMessage("▶ Simulation fortgesetzt", 0)
+            self.chat.append(f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>SIM:</span> Fortgesetzt")
+
+    def _sim_step(self):
+        """Führt einen Simulations-Schritt aus (eine G-Code-Zeile)"""
+        if self.sim_state != "RUNNING":
+            return
+
+        # Prüfe ob Simulation fertig
+        if self.sim_current_line >= len(self.sim_lines):
+            self._sim_stop()
+            self.chat.append(f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>SIM:</span> Programm beendet (M30)")
+            return
+
+        # Aktuelle Zeile holen
+        line = self.sim_lines[self.sim_current_line]
+        line_num = self.sim_current_line + 1  # 1-basiert
+
+        # Zeile im Editor highlighten + Gelben Marker setzen
+        self.editor.set_sim_line(line_num)
+        self.plotter.highlight_line(line_num)
+        block = self.editor.document().findBlockByLineNumber(self.sim_current_line)
+        if block.isValid():
+            cursor = self.editor.textCursor()
+            cursor.setPosition(block.position())
+            self.editor.setTextCursor(cursor)
+            self.editor.centerCursor()
+
+        # Status aktualisieren
+        self.status.showMessage(f"▶ SIM: N{line_num} {line[:30]}...", 0)
+
+        # Parse aktuelle Zeile für Live-Position
+        self._update_sim_position(line)
+
+        # Live-Drawing: Zeichne nur bis zur aktuellen Zeile
+        self.plotter.set_live_max_line(line_num)
+
+        # M-Codes prüfen
+        if 'M01' in line.upper() and self.btnOptStop.isChecked():
+            # Optional Stop
+            self._sim_pause()
+            self.chat.append(f"<span style='color:{self.cfg_colors['FANUC_YELLOW']}'>SIM:</span> M01 - OPTIONAL STOP (Zeile {line_num})")
+            self.status.showMessage(f"⏸ M01 - OPTIONAL STOP (N{line_num})", 0)
+            self.sim_current_line += 1  # Zeile ist abgearbeitet
+            return
+
+        if 'M30' in line.upper() or 'M02' in line.upper():
+            # Programm-Ende
+            self.sim_current_line += 1
+            self._sim_stop()
+            self.chat.append(f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>SIM:</span> Programm beendet (M30/M02)")
+            return
+
+        # Nächste Zeile
+        self.sim_current_line += 1
+
+        # SINGLE BLOCK: Nach einer Zeile pausieren
+        if self.btnSingleBlock.isChecked():
+            self._sim_pause()
+
+    def _sim_pause(self):
+        """Pausiert die Simulation"""
+        if self.sim_state == "RUNNING":
+            self.sim_state = "PAUSED"
+            self.sim_timer.stop()
+            self.status.showMessage("⏸ Simulation pausiert", 0)
+
+    def _sim_stop(self):
+        """Stoppt die Simulation komplett"""
+        self.sim_state = "STOPPED"
+        self.sim_timer.stop()
+        self.sim_current_line = 0
+        self.sim_lines = []
+        self.status.showMessage("⏹ Simulation gestoppt", 3000)
+
+        # Gelben Marker entfernen
+        self.editor.clear_sim_line()
+
+        # Live-Position-Anzeige entfernen
+        self.plotter.clear_live_position()
+
+        # Live-Drawing zurücksetzen (alle Linien anzeigen)
+        self.plotter.clear_live_max_line()
+
+    def _update_sim_position(self, line: str):
+        """Parst eine G-Code-Zeile und aktualisiert die Live-Position"""
+        # Kommentare entfernen
+        line = re.sub(r'\(.*?\)', '', line).strip()
+        if not line:
+            return
+
+        # X/Z-Koordinaten extrahieren
+        x_match = re.search(r'X([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+        z_match = re.search(r'Z([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+
+        if x_match:
+            self.sim_x = float(x_match.group(1))
+        if z_match:
+            self.sim_z = float(z_match.group(1))
+
+        # Werkzeug
+        t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
+        if t_match:
+            self.sim_tool = int(t_match.group(1)) // 100  # T0101 -> T1
+
+        # Spindeldrehzahl
+        s_match = re.search(r'S(\d+)', line, re.IGNORECASE)
+        if s_match:
+            self.sim_s = int(s_match.group(1))
+
+        # Vorschub
+        f_match = re.search(r'F([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+        if f_match:
+            self.sim_f = float(f_match.group(1))
+
+        # An Plotter übergeben (zeige immer X und Z, auch wenn 0)
+        self.plotter.set_live_position(
+            x=self.sim_x,
+            z=self.sim_z,
+            tool=self.sim_tool if self.sim_tool > 0 else None,
+            s=self.sim_s if self.sim_s > 0 else None,
+            f=self.sim_f if self.sim_f > 0.0 else None
+        )
 
     def resizeEvent(self, e):
         super().resizeEvent(e); self._apply_scaling()
@@ -550,15 +872,24 @@ class Main(QMainWindow):
     def _save_state(self):
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("splitter", self.split.saveState())
+        self.settings.setValue("vsplitter", self.vsplit.saveState())
         self.settings.setValue("base_pt", self.base_pt)
-    
+        self.settings.setValue("opt_stop", self.btnOptStop.isChecked())
+        self.settings.setValue("single_block", self.btnSingleBlock.isChecked())
+
     def _restore_state(self):
         g = self.settings.value("geometry")
         if g is not None: self.restoreGeometry(g)
         s = self.settings.value("splitter")
         if s is not None: self.split.restoreState(s)
+        vs = self.settings.value("vsplitter")
+        if vs is not None: self.vsplit.restoreState(vs)
         bp = self.settings.value("base_pt")
         if bp is not None: self.base_pt = int(bp)
+        opt = self.settings.value("opt_stop", False, type=bool)
+        if opt: self.btnOptStop.setChecked(True)
+        sb = self.settings.value("single_block", False, type=bool)
+        if sb: self.btnSingleBlock.setChecked(True)
 
 if __name__ == "__main__":
     # High-DPI Support für Windows 11

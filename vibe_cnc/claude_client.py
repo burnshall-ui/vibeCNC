@@ -100,10 +100,10 @@ class AIClient:
         try:
             o = self.cfg['ai']['ollama']
             base_url = o.get("base_url", "")
-            
+
             if not base_url:
                 return (False, "❌ config.yaml fehlerhaft: ai.ollama.base_url fehlt")
-            
+
             data = {
                 "model": o.get("model", "qwen2.5:7b-instruct"),
                 "messages": [
@@ -112,14 +112,14 @@ class AIClient:
                 ],
                 "stream": False
             }
-            
+
             # Make API request with timeout
             try:
-                r = requests.post(base_url, json=data, timeout=60)
+                r = requests.post(base_url, json=data, timeout=120)
             except requests.exceptions.ConnectionError:
                 return (False, "❌ Ollama: Verbindung fehlgeschlagen. Ist Ollama gestartet? (z.B. 'ollama serve')")
             except requests.exceptions.Timeout:
-                return (False, "❌ Ollama: Timeout nach 60s. Modell zu langsam?")
+                return (False, "❌ Ollama: Timeout nach 120s. Modell zu langsam?")
             except requests.exceptions.RequestException as e:
                 return (False, f"❌ Ollama: Netzwerk-Fehler - {str(e)}")
             
