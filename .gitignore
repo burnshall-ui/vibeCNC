@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary Files
+_tmp/
+*.tmp
+*.bak
+*.log
+nul
+
+# Project Specific
+programs/*.nc
+!programs/O0001_DEMO.nc
+tools/*.db-journal
+*.sqlite3-journal
+
+# Personal Notes (nicht im Repo)
+ZIELBILD.md
+TODO.md
+NOTES.md
