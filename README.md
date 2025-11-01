@@ -33,9 +33,13 @@
 
 ### 🛠️ Professional Tools
 - **Syntax Highlighting** - Fanuc-style color coding with line numbers
-- **Tool Library** - Quick access to your tool database with double-click insertion
-- **Macro Library** - Reusable G-Code macros (G65, M98)
+- **Tool Library** - Quick access with double-click insertion, right-click to edit (in-app editor)
+- **Macro Library** - Reusable G-Code macros (G65, M98) with in-app editor
+- **Find & Replace** - Full-featured search with Ctrl+F/Ctrl+H, regex support
+- **Recent Files** - Quick access to last 5 programs
+- **Settings Dialog** - In-app configuration editor (machine, AI, paths, UI)
 - **Policy Engine** - Enforce safety rules and coding standards
+- **G41/G42 Compensation** - Tool nose radius compensation with arc handling and corner intersections
 - **CAMotics Integration** - 3D simulation support (optional)
 
 ### 🎨 Fanuc-Style UI
@@ -117,6 +121,8 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 | `Esc` | Stop simulation |
 | `F5` | Quick CAMotics simulation |
 | `Ctrl+L` | Lint only (no AI) |
+| `Ctrl+F` | Find dialog |
+| `Ctrl+H` | Find & Replace dialog |
 | `Ctrl+S` | Save file |
 | `Ctrl+Shift+S` | Save and copy to VM |
 | `Ctrl+O` | Open file |
@@ -134,7 +140,9 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 ## ⚙️ Configuration
 
-Edit `config.yaml` to customize:
+**Quick Config:** Use the in-app **⚙️ SETTINGS** button for GUI-based configuration.
+
+**Manual Config:** Edit `config.yaml` to customize:
 
 ### UI Settings
 ```yaml
@@ -174,7 +182,9 @@ policies:
 
 ### Tool Library
 
-Edit `tools/tools.json`:
+**Quick Edit:** Right-click any tool in the app → Tool Editor, or use **+ NEUES TOOL** button.
+
+**Manual Edit:** Edit `tools/tools.json`:
 ```json
 {
   "1": {
@@ -226,12 +236,14 @@ vibe_cnc/
 - [x] Real-time position tracking
 - [x] Dual AI support (Claude + Ollama)
 - [x] Interactive 2D plotter
-- [x] Tool and macro libraries
+- [x] Tool and macro libraries with in-app editors
 - [x] Fanuc-style controls
+- [x] Find & Replace in editor
+- [x] G41/G42 tool nose radius compensation
+- [x] Settings dialog for configuration
+- [x] Recent files list
 
 ### 🚧 In Progress
-- [ ] Search & Replace in editor
-- [ ] Macro editor (in-app)
 - [ ] Program statistics (cycle time, tool changes)
 - [ ] Snippet library / favorites
 

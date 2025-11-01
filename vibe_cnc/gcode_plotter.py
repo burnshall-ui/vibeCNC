@@ -30,12 +30,17 @@ class GCodeParser:
         self.mode = 'G00'  # G00=Eilgang, G01=Schnitt, G02=CW-Bogen, G03=CCW-Bogen
         self.i = 0.0  # Bogen-Parameter (X-Offset Mittelpunkt)
         self.k = 0.0  # Bogen-Parameter (Z-Offset Mittelpunkt)
+        # Tool Nose Radius Kompensation (G40/G41/G42)
+        self.comp = 'G40'   # aktuell: G40=aus, G41=links, G42=rechts (bezogen auf Bewegungsrichtung)
+        self.tnr = 0.0      # Eckenradius (mm)
         self.paths = {
             'rapid': [],       # G00 (grau gestrichelt)
             'cut': [],         # G01 (grün durchgezogen)
             'arc': [],         # G02/G03 (grün Bogen)
             'tool_changes': [], # Werkzeugwechsel
-            'collisions': []   # Kollisionen (rot)
+            'collisions': [],   # Kollisionen (rot)
+            'comp_cut': [],     # kompensierte Bahn (G41/G42), gelb
+            'comp_arc': []      # kompensierte Bögen (G41/G42), gelb
         }
 
     def parse(self, gcode: str) -> dict:
@@ -45,6 +50,9 @@ class GCodeParser:
         lines = gcode.split('\n')
         for line_num, line in enumerate(lines, 1):
             self._parse_line(line, line_num)
+
+        # Post-Processing: Ecken verschneiden (Lookahead Corner Handling)
+        self._intersect_compensated_corners()
 
         return self.paths
 
@@ -66,6 +74,12 @@ class GCodeParser:
                 self.mode = 'G02'
             elif g in ['03', '3']:
                 self.mode = 'G03'
+            elif g in ['40']:
+                self.comp = 'G40'
+            elif g in ['41']:
+                self.comp = 'G41'
+            elif g in ['42']:
+                self.comp = 'G42'
             elif g in ['71']:  # G71 Schruppzyklus (vereinfacht)
                 self.mode = 'G71'
             elif g in ['72']:  # G72 Planzyklus (vereinfacht)
@@ -81,6 +95,15 @@ class GCodeParser:
                 'tool': self.tool,
                 'line': line_num
             })
+            # Eckenradius aus Tools laden (tools.json) – optional
+            try:
+                from .tool_model import load_tools_json
+                j = load_tools_json()
+                tool_items = {int(it.get('t', 0)): it for it in j.get('tool_table', [])}
+                tool_info = tool_items.get(self.tool, {})
+                self.tnr = float(tool_info.get('insert_radius_mm', 0.0) or 0.0)
+            except Exception:
+                self.tnr = 0.0
 
         # X/Z/I/K-Koordinaten extrahieren
         x_match = re.search(r'X([-+]?\d*\.?\d+)', line, re.IGNORECASE)
@@ -114,23 +137,117 @@ class GCodeParser:
                 self.paths['rapid'].append(segment_data)
             elif self.mode == 'G01':
                 self.paths['cut'].append(segment_data)
+                # Kompensierte Bahn (vereinfachte TNR-Kompensation nur für Linearzüge)
+                if self.comp in ('G41', 'G42') and self.tnr > 0.0:
+                    (x1, z1), (x2, z2), _ = segment_data
+                    dx = x2 - x1
+                    dz = z2 - z1
+                    seg_len = math.hypot(dx, dz)
+                    if seg_len > 1e-6:
+                        # Linksnormale/rechtsnormale relativ zur Bewegungsrichtung
+                        nx_left = -dz / seg_len
+                        nz_left = dx / seg_len
+                        if self.comp == 'G41':
+                            offx, offz = nx_left * self.tnr, nz_left * self.tnr
+                        else:  # G42
+                            offx, offz = -nx_left * self.tnr, -nz_left * self.tnr
+                        cx1, cz1 = x1 + offx, z1 + offz
+                        cx2, cz2 = x2 + offx, z2 + offz
+                        self.paths['comp_cut'].append([(cx1, cz1), (cx2, cz2), line_num])
             elif self.mode in ['G02', 'G03']:
                 # Kreisbogen: Mittelpunkt = (x + i, z + k)
                 cx = self.x + self.i
                 cz = self.z + self.k
                 radius = math.sqrt(self.i**2 + self.k**2)
                 clockwise = (self.mode == 'G02')
-                self.paths['arc'].append({
+                arc_data = {
                     'start': (self.x, self.z),
                     'end': (new_x, new_z),
                     'center': (cx, cz),
                     'radius': radius,
                     'cw': clockwise,
                     'line': line_num
-                })
+                }
+                self.paths['arc'].append(arc_data)
+
+                # Kompensierte Bögen (G41/G42)
+                if self.comp in ('G41', 'G42') and self.tnr > 0.0:
+                    # G41 (links): Radius vergrößern (Werkzeug außen)
+                    # G42 (rechts): Radius verkleinern (Werkzeug innen)
+                    if self.comp == 'G41':
+                        comp_radius = radius + self.tnr
+                    else:  # G42
+                        comp_radius = radius - self.tnr
+
+                    # Verhindere negative Radien (würde Fehler geben)
+                    if comp_radius > 0.0:
+                        self.paths['comp_arc'].append({
+                            'start': (self.x, self.z),
+                            'end': (new_x, new_z),
+                            'center': (cx, cz),
+                            'radius': comp_radius,
+                            'cw': clockwise,
+                            'line': line_num
+                        })
 
             self.x = new_x
             self.z = new_z
+
+    def _intersect_compensated_corners(self):
+        """Verschneidet Ecken von kompensierten Pfaden (Lookahead Corner Handling)"""
+        if len(self.paths['comp_cut']) < 2:
+            return
+
+        # Iteriere durch aufeinanderfolgende Segmente
+        for i in range(len(self.paths['comp_cut']) - 1):
+            seg1 = self.paths['comp_cut'][i]
+            seg2 = self.paths['comp_cut'][i + 1]
+
+            (x1, z1), (x2, z2), line1 = seg1
+            (x3, z3), (x4, z4), line2 = seg2
+
+            # Prüfe ob Segmente verbunden sind (Endpunkt von seg1 nahe Startpunkt von seg2)
+            dist = math.hypot(x2 - x3, z2 - z3)
+            if dist > 0.1:  # Nicht verbunden, skip
+                continue
+
+            # Berechne Schnittpunkt der beiden Geraden
+            intersection = self._line_intersection(x1, z1, x2, z2, x3, z3, x4, z4)
+
+            if intersection is not None:
+                ix, iz = intersection
+                # Aktualisiere Endpunkt von seg1 und Startpunkt von seg2
+                self.paths['comp_cut'][i] = [(x1, z1), (ix, iz), line1]
+                self.paths['comp_cut'][i + 1] = [(ix, iz), (x4, z4), line2]
+
+    def _line_intersection(self, x1, z1, x2, z2, x3, z3, x4, z4):
+        """
+        Berechnet Schnittpunkt zweier Geraden (nicht Segmente, sondern unendliche Geraden).
+        Gerade 1: durch (x1,z1) und (x2,z2)
+        Gerade 2: durch (x3,z3) und (x4,z4)
+        Returns: (x, z) oder None falls parallel
+        """
+        # Richtungsvektoren
+        dx1 = x2 - x1
+        dz1 = z2 - z1
+        dx2 = x4 - x3
+        dz2 = z4 - z3
+
+        # Determinante (Kreuzprodukt in 2D)
+        det = dx1 * dz2 - dz1 * dx2
+
+        # Parallel oder identisch
+        if abs(det) < 1e-10:
+            return None
+
+        # Parameter t für Gerade 1
+        t = ((x3 - x1) * dz2 - (z3 - z1) * dx2) / det
+
+        # Schnittpunkt
+        ix = x1 + t * dx1
+        iz = z1 + t * dz1
+
+        return (ix, iz)
 
 
 class GCodePlotterWidget(QWidget):
@@ -278,6 +395,40 @@ class GCodePlotterWidget(QWidget):
             # Live-Drawing: Nur bis live_max_line zeichnen
             if self.live_max_line is None or line <= self.live_max_line:
                 self.ax.plot([x1, x2], [z1, z2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
+                has_paths = True
+
+        # Kompensierte Schnittbahnen (G41/G42) - gelb gestrichelt
+        for segment in self.paths_cache.get('comp_cut', []):
+            (x1, z1), (x2, z2), line = segment
+            if self.live_max_line is None or line <= self.live_max_line:
+                self.ax.plot([x1, x2], [z1, z2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                            linestyle='--', alpha=0.9, zorder=3)
+                has_paths = True
+
+        # Kompensierte Bögen (G41/G42) - gelb gestrichelt
+        for arc in self.paths_cache.get('comp_arc', []):
+            if self.live_max_line is None or arc['line'] <= self.live_max_line:
+                cx, cz = arc['center']
+                radius = arc['radius']
+                x1, z1 = arc['start']
+                x2, z2 = arc['end']
+
+                # Winkel berechnen
+                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
+                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+
+                if arc['cw']:  # G02: Clockwise
+                    if angle2 > angle1:
+                        angle2 -= 360
+                else:  # G03: Counter-clockwise
+                    if angle1 > angle2:
+                        angle1 -= 360
+
+                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                                       angle=0, theta1=angle1, theta2=angle2,
+                                       color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                                       linestyle='--', alpha=0.9, zorder=3)
+                self.ax.add_patch(arc_patch)
                 has_paths = True
 
         # Kreisbögen (G02/G03) - grün Bogen
@@ -668,6 +819,40 @@ class GCodePlotterWidget(QWidget):
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
                 self.ax.plot([x1, x2], [z1, z2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
+                has_paths = True
+
+        # Kompensierte Schnittbahnen (G41/G42) - gelb gestrichelt
+        for segment in self.paths_cache.get('comp_cut', []):
+            (x1, z1), (x2, z2), line = segment
+            if self.live_max_line is None or line <= self.live_max_line:
+                self.ax.plot([x1, x2], [z1, z2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                            linestyle='--', alpha=0.9, zorder=3)
+                has_paths = True
+
+        # Kompensierte Bögen (G41/G42) - gelb gestrichelt
+        for arc in self.paths_cache.get('comp_arc', []):
+            if self.live_max_line is None or arc['line'] <= self.live_max_line:
+                cx, cz = arc['center']
+                radius = arc['radius']
+                x1, z1 = arc['start']
+                x2, z2 = arc['end']
+
+                # Winkel berechnen
+                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
+                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+
+                if arc['cw']:  # G02: Clockwise
+                    if angle2 > angle1:
+                        angle2 -= 360
+                else:  # G03: Counter-clockwise
+                    if angle1 > angle2:
+                        angle1 -= 360
+
+                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                                       angle=0, theta1=angle1, theta2=angle2,
+                                       color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                                       linestyle='--', alpha=0.9, zorder=3)
+                self.ax.add_patch(arc_patch)
                 has_paths = True
 
         # Kreisbögen (G02/G03)

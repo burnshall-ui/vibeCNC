@@ -53,6 +53,63 @@ class LintEngine:
             if re.search(r'\bG76\b', ln):
                 if not re.search(r'\b[FRS]\d', ln):
                     finds.append(self._f(i+1, "G76", "Gewinde: F/S/R Parameter prüfen (Heuristik)."))
+
+        # 6) G41/G42 – einfache Prüfungen (Fanuc TNR)
+        comp_active = False
+        comp_start_line = None
+        current_tool = None
+        tool_radius_map = {}
+        try:
+            from .tool_model import load_tools_json
+            j = load_tools_json()
+            for it in j.get("tool_table", []):
+                try:
+                    t = int(it.get("t", 0))
+                    r = float(it.get("insert_radius_mm", 0.0) or 0.0)
+                    tool_radius_map[t] = r
+                except Exception:
+                    pass
+        except Exception:
+            tool_radius_map = {}
+
+        for i, ln in enumerate(lines):
+            # Kommentare auslassen für einfache Suche
+            code_ln = re.sub(r'\(.*?\)', '', ln)
+            # Werkzeugwechsel
+            m_t = re.search(r'\bT(\d+)\b', code_ln)
+            if m_t:
+                try:
+                    current_tool = int(m_t.group(1)) // 100
+                except Exception:
+                    current_tool = None
+                if comp_active:
+                    finds.append(self._f(i+1, "G41/G42", "Vor Werkzeugwechsel G40 aufheben."))
+
+            # Kompensation on/off
+            if re.search(r'\bG0?41\b', code_ln) or re.search(r'\bG0?42\b', code_ln):
+                comp_active = True
+                comp_start_line = i+1
+                # Werkzeugradius vorhanden?
+                if current_tool is not None:
+                    r = tool_radius_map.get(current_tool, 0.0)
+                    if r <= 0.0:
+                        finds.append(self._f(i+1, "G41/G42", f"Tool T{current_tool:02d}: insert_radius_mm fehlt (tools.json)."))
+                # Lead-in nächste Bewegung prüfen (nächste Zeile mit Bewegung)
+                for j in range(i+1, min(i+6, len(lines))):
+                    nxt = re.sub(r'\(.*?\)', '', lines[j])
+                    if re.search(r'\bX[-+]?\d', nxt) or re.search(r'\bZ[-+]?\d', nxt):
+                        if re.search(r'\bG0?0\b', nxt):
+                            finds.append(self._f(j+1, "G41/G42", "Lead-in nicht mit G00 – G01 verwenden."))
+                        if re.search(r'\bG0?[23]\b', nxt):
+                            finds.append(self._f(j+1, "G41/G42", "Bögen direkt nach G41/G42 vermeiden (Lead-in linear)."))
+                        break
+            if re.search(r'\bG0?40\b', code_ln):
+                comp_active = False
+                comp_start_line = None
+
+        # Offene Kompensation am Programmende
+        if comp_active:
+            finds.append(self._f(len(lines), "G41/G42", "Vor Programmende G40 setzen."))
         return finds
 
     def _first_index(self, lines, pattern):
