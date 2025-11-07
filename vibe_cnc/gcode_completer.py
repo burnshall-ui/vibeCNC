@@ -45,15 +45,26 @@ class GCodeCompleter(QCompleter):
         "G02": "Kreisinterpolation im Uhrzeigersinn (G02 X... Z... R... F...)",
         "G03": "Kreisinterpolation gegen Uhrzeigersinn (G03 X... Z... R... F...)",
         "G04": "Verweilzeit (G04 P... oder G04 U...)",
+        "G10": "Programmierbare Dateneinstellung (G10 P... X... Z... R...)",
         "G18": "ZX-Ebene (Drehmaschine)",
         "G20": "Zoll-Eingabe",
         "G21": "Metrische Eingabe",
+        "G27": "Referenzpunkt-Check (G27 X... Z...)",
         "G28": "Referenzpunkt anfahren (G28 U0 W0)",
+        "G32": "Gewindeschneiden einfach (G32 Z... F...)",
         "G40": "Werkzeugkorrektur ausschalten",
         "G41": "Werkzeugkorrektur links (G41)",
         "G42": "Werkzeugkorrektur rechts (G42)",
         "G50": "Koordinatensystem setzen (G50 S... / X... Z...)",
         "G54": "Nullpunktverschiebung 1",
+        "G55": "Nullpunktverschiebung 2",
+        "G56": "Nullpunktverschiebung 3",
+        "G57": "Nullpunktverschiebung 4",
+        "G58": "Nullpunktverschiebung 5",
+        "G59": "Nullpunktverschiebung 6",
+        "G65": "Makro-Call (G65 P... A... B... C...)",
+        "G66": "Makro-Modalaufruf (G66 P... A... B...)",
+        "G67": "Makro-Modalaufruf abwählen",
         "G70": "Fertigbearbeitungszyklus (G70 P... Q...)",
         "G71": "Schrupp-Zyklus außen (G71 U... R... P... Q... D... F...)",
         "G72": "Schrupp-Zyklus Plan (G72 W... R... P... Q... D... F...)",
@@ -80,9 +91,19 @@ class GCodeCompleter(QCompleter):
         "M03": "Spindel rechts (M03 S...)",
         "M04": "Spindel links (M04 S...)",
         "M05": "Spindel stopp",
+        "M06": "Werkzeugwechsel (M06 T...)",
         "M08": "Kühlmittel EIN",
         "M09": "Kühlmittel AUS",
+        "M10": "Spannfutter auf (4. Achse)",
+        "M11": "Spannfutter zu (4. Achse)",
+        "M19": "Spindelorientierung (M19 R...)",
         "M30": "Programmende mit Reset",
+        "M41": "Getriebe-Stufe 1 (niedrig)",
+        "M42": "Getriebe-Stufe 2",
+        "M43": "Getriebe-Stufe 3",
+        "M44": "Getriebe-Stufe 4 (hoch)",
+        "M78": "Externes Programm aufrufen (M78 P...)",
+        "M79": "Externes Programm Ende",
         "M98": "Unterprogramm rufen (M98 P...)",
         "M99": "Unterprogramm Ende",
     }
@@ -225,8 +246,8 @@ class GCodeCompleter(QCompleter):
         
         # 6. Fallback: Alle G-Codes anzeigen wenn nichts gefunden
         if not suggestions:
-            # Zeige Top 10 häufigste G-Codes
-            common = ["G00", "G01", "G71", "G40", "G50", "M03", "M05", "M30"]
+            # Zeige Top häufigste G-Codes und M-Codes
+            common = ["G00", "G01", "G71", "G54", "G40", "G50", "G96", "M03", "M05", "M19", "M30"]
             for code in common:
                 if code.startswith("G"):
                     suggestions.append(code)
