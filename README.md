@@ -17,22 +17,23 @@
 
 ---
 
-## ✨ Features
+##  Features
 
-### 🎯 Live Simulation
+###  Live Simulation
 - **Progressive Path Drawing** - Toolpaths appear line-by-line as the program executes, just like a real CNC
 - **Real-Time Position Display** - Live X, Z, Tool, Spindle Speed, and Feedrate overlay
 - **2D Visualization** - Interactive lathe simulation with zoom, pan, and click-to-jump
 - **Collision Detection** - Automatic chuck limit warnings with visual highlights
 
-### 🤖 AI-Powered Assistance
+###  AI-Powered Assistance
 - **Dual AI Support** - Works with both Claude (cloud) and Ollama (local)
 - **Smart Code Review** - Analyzes G-Code for policy violations and safety issues
 - **Code Generation** - Generate G-Code snippets from natural language
 - **Context-Aware** - Understands your tooling, material, and machine configuration
 
-### 🛠️ Professional Tools
+###  Professional Tools
 - **Syntax Highlighting** - Fanuc-style color coding with line numbers
+- **Autocomplete & IntelliSense** - Context-aware G/M-code completion with Ctrl+Space
 - **Tool Library** - Quick access with double-click insertion, right-click to edit (in-app editor)
 - **Macro Library** - Reusable G-Code macros (G65, M98) with in-app editor
 - **Find & Replace** - Full-featured search with Ctrl+F/Ctrl+H, regex support
@@ -42,7 +43,7 @@
 - **G41/G42 Compensation** - Tool nose radius compensation with arc handling and corner intersections
 - **CAMotics Integration** - 3D simulation support (optional)
 
-### 🎨 Fanuc-Style UI
+###  Fanuc-Style UI
 - **Authentic Look** - CRT green on black, yellow highlights
 - **Control Panel** - CYCLE START, FEED HOLD, OPT STOP, SINGLE BLOCK
 - **Keyboard Shortcuts** - F5 for quick sim, Spacebar for cycle start
@@ -50,13 +51,13 @@
 
 ---
 
-## 📸 Screenshots
+##  Screenshots
 
 *Coming soon - Add your screenshots to `/docs/screenshots/`*
 
 ---
 
-## 🚀 Installation
+##  Installation
 
 ### Prerequisites
 - **Python 3.13** (or 3.10+)
@@ -101,7 +102,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 ---
 
-## 🎮 Usage
+##  Usage
 
 ### Basic Workflow
 
@@ -120,6 +121,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 | `F` | FEED HOLD (pause simulation) |
 | `Esc` | Stop simulation |
 | `F5` | Quick CAMotics simulation |
+| `Ctrl+Space` | Trigger autocomplete (IntelliSense) |
 | `Ctrl+L` | Lint only (no AI) |
 | `Ctrl+F` | Find dialog |
 | `Ctrl+H` | Find & Replace dialog |
@@ -138,7 +140,7 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 
 ---
 
-## ⚙️ Configuration
+##  Configuration
 
 **Quick Config:** Use the in-app **⚙️ SETTINGS** button for GUI-based configuration.
 
@@ -202,7 +204,7 @@ policies:
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 vibe_cnc/
@@ -229,9 +231,9 @@ vibe_cnc/
 
 ---
 
-## 🎯 Roadmap
+##  Roadmap
 
-### ✅ Completed
+###  Completed
 - [x] Live simulation with progressive drawing
 - [x] Real-time position tracking
 - [x] Dual AI support (Claude + Ollama)
@@ -242,12 +244,13 @@ vibe_cnc/
 - [x] G41/G42 tool nose radius compensation
 - [x] Settings dialog for configuration
 - [x] Recent files list
+- [x] Autocomplete & IntelliSense (context-aware G-Code completion)
 
-### 🚧 In Progress
+###  In Progress
 - [ ] Program statistics (cycle time, tool changes)
 - [ ] Snippet library / favorites
 
-### 💡 Planned
+###  Planned
 - [ ] Network simulation (RPC to LinuxCNC VM)
 - [ ] DXF import for geometry
 - [ ] Conversational programming wizard
@@ -255,7 +258,7 @@ vibe_cnc/
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome! Please:
 
@@ -267,13 +270,13 @@ Contributions are welcome! Please:
 
 ---
 
-## 📜 License
+##  License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **Fanuc** - For inspiring the UI design
 - **CAMotics** - 3D simulation integration
@@ -291,6 +294,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <div align="center">
-  <p>Built with ❤️ for machinists and CNC enthusiasts</p>
-  <p>🤖 Enhanced with AI by <a href="https://claude.ai">Claude Code</a></p>
+  <p>Built by machinist and CNC enthusiast</p>
+  <p> Enhanced with AI by <a href="https://claude.ai">Claude Code</a></p>
 </div>

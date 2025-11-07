@@ -4,7 +4,7 @@ from PyQt6.QtCore import QAbstractTableModel, Qt, QVariant
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class ToolModel(QAbstractTableModel):
-    HEADERS = ["T", "GEOM (D)", "KOMMENTAR"]
+    HEADERS = ["T", "D", "KOMMENTAR"]
     def __init__(self):
         super().__init__()
         self.rows = self._load_tools()

@@ -20,6 +20,7 @@ from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.claude_client import AIClient
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
+from vibe_cnc.gcode_completer import install_completer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,16 +85,26 @@ class Main(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Spaltenbreiten: T=5 Zeichen, D=6 Zeichen, Kommentar=Rest
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # T
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # D
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # KOMMENTAR
+        self.table.setColumnWidth(0, 50)   # T: 5 Zeichen
+        self.table.setColumnWidth(1, 60)   # D: 6 Zeichen
 
         self.macroTable = QTableView()
         self.macroTable.setModel(MacroModel())
         self.macroTable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.macroTable.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.macroTable.verticalHeader().hide()
-        self.macroTable.horizontalHeader().setStretchLastSection(True)
-        self.macroTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Spaltenbreiten: NR=8 Zeichen, NAME=Rest, CATEGORY=normal
+        macroHeader = self.macroTable.horizontalHeader()
+        macroHeader.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)    # NR
+        macroHeader.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # NAME
+        macroHeader.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)    # CATEGORY
+        self.macroTable.setColumnWidth(0, 80)   # NR: 8 Zeichen
+        self.macroTable.setColumnWidth(2, 100)  # CATEGORY: normal
 
         # Tool-Panel mit New-Button
         toolPanel = QWidget()
@@ -102,7 +113,7 @@ class Main(QMainWindow):
         toolPanelLayout.setSpacing(4)
         toolPanelLayout.addWidget(self.table)
 
-        self.btnNewTool = QPushButton("+ NEUES TOOL")
+        self.btnNewTool = QPushButton("+ NEW TOOL")
         self.btnNewTool.setObjectName("Softkey")
         toolPanelLayout.addWidget(self.btnNewTool)
 
@@ -113,7 +124,7 @@ class Main(QMainWindow):
         macroPanelLayout.setSpacing(4)
         macroPanelLayout.addWidget(self.macroTable)
 
-        self.btnNewMacro = QPushButton("+ NEUES MACRO")
+        self.btnNewMacro = QPushButton("+ NEW MACRO")
         self.btnNewMacro.setObjectName("Softkey")
         macroPanelLayout.addWidget(self.btnNewMacro)
 
@@ -123,8 +134,8 @@ class Main(QMainWindow):
         self.leftStack.addWidget(macroPanel)
 
         header = QWidget(); hb = QHBoxLayout(header); hb.setContentsMargins(0,0,0,0); hb.setSpacing(1)
-        self.btnTabTools = QPushButton("WERKZEUGE"); self.btnTabTools.setObjectName("PanelTab"); self.btnTabTools.setCheckable(True); self.btnTabTools.setChecked(True)
-        self.btnTabMacros = QPushButton("MAKROS"); self.btnTabMacros.setObjectName("PanelTab"); self.btnTabMacros.setCheckable(True)
+        self.btnTabTools = QPushButton("TOOLS"); self.btnTabTools.setObjectName("PanelTab"); self.btnTabTools.setCheckable(True); self.btnTabTools.setChecked(True)
+        self.btnTabMacros = QPushButton("MACROS"); self.btnTabMacros.setObjectName("PanelTab"); self.btnTabMacros.setCheckable(True)
         hb.addWidget(self.btnTabTools); hb.addWidget(self.btnTabMacros)
 
         leftBox = QWidget(); lv = QVBoxLayout(leftBox); lv.setContentsMargins(0,0,0,0); lv.setSpacing(0)
@@ -135,10 +146,13 @@ class Main(QMainWindow):
         self.editor = GCodeEditor(self.cfg_colors)
         self.highlighter = GCodeHighlighter(self.editor.document(), self.cfg_colors)
         self.title_center = TitlePanel("PROGRAM (EDIT) — Vibe CNC", self.editor, self.cfg_colors)
+        
+        # --- Autocomplete: Install nach Editor + Models ---
+        self.completer = install_completer(self.editor, self.table.model(), self.macroTable.model())
 
         # --- RIGHT: Chat ---
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
-        self.input = QLineEdit(); self.input.setPlaceholderText("> Schreibe G71 für T2, Tiefe 5.0 …")
+        self.input = QLineEdit(); self.input.setPlaceholderText("> Write G71 for T2, depth 5.0 ...")
         rightBox = QWidget(); rv = QVBoxLayout(rightBox); rv.setContentsMargins(0,0,0,0); rv.setSpacing(6)
         rv.addWidget(self.chat); rv.addWidget(self.input)
         right = TitlePanel("Vibe CNC — ASSIST", rightBox, self.cfg_colors)
@@ -146,7 +160,7 @@ class Main(QMainWindow):
         # --- BOTTOM: 2D Plotter ---
         chuck_z = self.cfg.data.get('machine', {}).get('chuck_z_limit', -5.0)
         self.plotter = GCodePlotterWidget(self.cfg_colors, chuck_z=chuck_z)
-        bottom = TitlePanel("WERKSTÜCK (2D)", self.plotter, self.cfg_colors)
+        bottom = TitlePanel("SIMULATION", self.plotter, self.cfg_colors)
 
         # --- SPLITTER ---
         self.split = QSplitter(Qt.Orientation.Horizontal)
@@ -340,7 +354,7 @@ class Main(QMainWindow):
             set_font(b, 0.9); b.setMinimumHeight(int(34 * scale))
         for l in self.findChildren(QLabel, "PanelTitle"):
             f = l.font(); f.setPointSizeF(self.base_pt * scale * 0.95); f.setBold(True); l.setFont(f)
-        # Tabs (WERKZEUGE/MAKROS): normale Größe
+        # Tabs (TOOLS/MACROS): normal size
         for tab in [self.btnTabTools, self.btnTabMacros]:
             set_font(tab, 1.0)
         self.editor.setViewportMargins(self.editor.lineNumberAreaWidth(), 0, 0, 0)
@@ -413,12 +427,12 @@ class Main(QMainWindow):
         dialog.exec()
 
     def on_new_tool_clicked(self):
-        """'+ NEUES TOOL' Button → Öffne Dialog für neues Tool"""
+        """'+ NEW TOOL' Button - Open dialog for new tool"""
         dialog = ToolEditorDialog(self.table.model(), tool_num=None, parent=self)
         dialog.exec()
 
     def on_new_macro_clicked(self):
-        """'+ NEUES MACRO' Button → Öffne Dialog für neues Macro"""
+        """'+ NEW MACRO' Button - Open dialog for new macro"""
         dialog = MacroEditorDialog(self.macroTable.model(), macro_nr=None, parent=self)
         dialog.exec()
 
