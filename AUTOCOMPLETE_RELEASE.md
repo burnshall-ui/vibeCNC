@@ -1,189 +1,189 @@
-# 🎉 Autocomplete & IntelliSense Release
+# Autocomplete & IntelliSense Release
 
 **Version:** Vibe CNC v1.1  
 **Feature:** Context-aware G-Code Autocomplete  
-**Datum:** 2025-11-07
+**Date:** 2025-11-07
 
 ---
 
-## 🚀 Was ist neu?
+## What's New?
 
-### ⚡ Autocomplete & IntelliSense
-Vibe CNC hat jetzt **intelligentes Autocomplete** für G-Code-Programmierung!
+### Autocomplete & IntelliSense
+Vibe CNC now features **intelligent autocomplete** for G-Code programming!
 
-**Hauptfeatures:**
-- ✅ **G-Code Completion** - Alle wichtigen Fanuc G-Codes (G00, G01, G71-G76, ...)
-- ✅ **M-Code Completion** - M03, M08, M30, M98, etc.
-- ✅ **Tool Completion** - Automatisch aus deiner Tool-Library
-- ✅ **Makro Completion** - M98 P... zeigt deine Makros
-- ✅ **Parameter-Hints** - X, Z, F, S mit Beschreibungen
-- ✅ **Fanuc-Style UI** - Gelbes Popup auf schwarz, wie gewohnt
-- ✅ **Ctrl+Space** - Manueller Trigger jederzeit
+**Main Features:**
+- **G-Code Completion** - All important Fanuc G-Codes (G00, G01, G71-G76, ...)
+- **M-Code Completion** - M03, M08, M30, M98, etc.
+- **Tool Completion** - Automatically from your Tool Library
+- **Macro Completion** - M98 P... shows your macros
+- **Parameter Hints** - X, Z, F, S with descriptions
+- **Fanuc-Style UI** - Yellow popup on black background
+- **Ctrl+Space** - Manual trigger anytime
 
 ---
 
-## 📦 Neue Dateien
+## New Files
 
 ```
 vibe_cnc/
-├── gcode_completer.py          ← NEU: Autocomplete-Engine
+├── gcode_completer.py          <- NEW: Autocomplete Engine
 │
 docs/
-├── AUTOCOMPLETE.md             ← NEU: Vollständige Dokumentation
-└── AUTOCOMPLETE_CHEATSHEET.md  ← NEU: Quick-Reference
+├── AUTOCOMPLETE.md             <- NEW: Complete Documentation
+└── AUTOCOMPLETE_CHEATSHEET.md  <- NEW: Quick Reference
 
 examples/
-└── autocomplete_demo.nc        ← NEU: Test-Programm
+└── autocomplete_demo.nc        <- NEW: Test Program
 ```
 
 ---
 
-## 🎮 Verwendung
+## Usage
 
-### Automatisch beim Tippen:
+### Automatic Trigger:
 ```gcode
-G      → Zeigt G-Codes
-M      → Zeigt M-Codes
-T0     → Zeigt T0101, T0201, ...
-M98 P  → Zeigt Makro-Liste
+G      -> Shows G-Codes
+M      -> Shows M-Codes
+T0     -> Shows T0101, T0201, ...
+M98 P  -> Shows Macro List
 ```
 
-### Manuell:
+### Manual:
 ```
-Ctrl+Space → Zeigt Vorschläge an aktueller Position
+Ctrl+Space -> Shows suggestions at current position
 ```
 
 ### Navigation:
 ```
-↑/↓    → Durch Liste navigieren
-Enter  → Vorschlag übernehmen
-Esc    → Popup schließen
+Up/Down -> Navigate through list
+Enter   -> Accept suggestion
+Esc     -> Close popup
 ```
 
 ---
 
-## 💡 Beispiele
+## Examples
 
-### Vorher (ohne Autocomplete):
+### Before (without Autocomplete):
 ```gcode
-G71 U1.0 R0.5 P100 Q110 D500 F0.25  ← 45 Sekunden Tipparbeit
+G71 U1.0 R0.5 P100 Q110 D500 F0.25  <- 45 seconds of typing
 ```
 
-### Nachher (mit Autocomplete):
+### After (with Autocomplete):
 ```
-G7[↓]U1.0 R0.5 P100 Q110 D500 F0.25  ← 10 Sekunden!
-   └─ Wähle G71 aus Popup
+G7[Down]U1.0 R0.5 P100 Q110 D500 F0.25  <- 10 seconds!
+   Select G71 from popup
 ```
 
-**Zeitersparnis: ~80%** ⚡
+**Time saved: ~80%**
 
 ---
 
-## 🎨 Features im Detail
+## Features in Detail
 
 ### 1. Context-Aware Suggestions
-Das System versteht den Kontext:
-- Nach `M98` → zeigt nur Makro-Nummern (P...)
-- Nach `T` → zeigt nur vorhandene Tools aus Library
-- Nach `G7` → zeigt nur G70-G79 Zyklen
+The system understands context:
+- After `M98` -> shows only macro numbers (P...)
+- After `T` -> shows only available tools from library
+- After `G7` -> shows only G70-G79 cycles
 
-### 2. Tool-Library Integration
-Deine Tools erscheinen automatisch:
+### 2. Tool Library Integration
+Your tools appear automatically:
 ```
-T0 → T0101 (Werkzeug 1: CNMG1204P-SM)
-     T0201 (Werkzeug 2: DCMT11T3)
-     T0301 (Werkzeug 3: Stechplatte)
-```
-
-### 3. Makro-Library Integration
-Deine Makros sind direkt auswählbar:
-```
-M98 P9 → P9001 (Bohrzyklus Peck)
-         P9002 (Ansenken 90°)
-         P9010 (Antasten Z)
+T0 -> T0101 (Tool 1: CNMG1204P-SM)
+      T0201 (Tool 2: DCMT11T3)
+      T0301 (Tool 3: Grooving Insert)
 ```
 
-### 4. Beschreibungen & Tooltips
-Jeder Vorschlag hat eine Erklärung:
+### 3. Macro Library Integration
+Your macros are directly selectable:
 ```
-G71 → Schrupp-Zyklus außen (G71 U... R... P... Q... D... F...)
+M98 P9 -> P9001 (Peck Drilling Cycle)
+          P9002 (Countersink 90°)
+          P9010 (Probe Z)
+```
+
+### 4. Descriptions & Tooltips
+Every suggestion has an explanation:
+```
+G71 -> Rough turning cycle (G71 U... R... P... Q... D... F...)
 ```
 
 ---
 
-## 🔧 Installation
+## Installation
 
-**Bereits installiert, wenn du das Repo aktualisiert hast!**
+**Already installed if you updated the repo!**
 
-Falls manuell nötig:
+If manual installation needed:
 ```bash
-# Pull neueste Version
+# Pull latest version
 git pull origin main
 
-# Dependencies (sollten bereits vorhanden sein)
+# Dependencies (should already be present)
 pip install PyQt6
 
-# Starten
+# Start
 python vibe_cnc.py
 ```
 
 ---
 
-## 📖 Dokumentation
+## Documentation
 
-| Dokument | Inhalt |
-|----------|--------|
-| **[AUTOCOMPLETE.md](docs/AUTOCOMPLETE.md)** | Vollständige Feature-Doku |
-| **[AUTOCOMPLETE_CHEATSHEET.md](docs/AUTOCOMPLETE_CHEATSHEET.md)** | Quick-Reference |
-| **[autocomplete_demo.nc](examples/autocomplete_demo.nc)** | Test-Programm |
+| Document | Content |
+|----------|---------|
+| **[AUTOCOMPLETE.md](docs/AUTOCOMPLETE.md)** | Complete Feature Documentation |
+| **[AUTOCOMPLETE_CHEATSHEET.md](docs/AUTOCOMPLETE_CHEATSHEET.md)** | Quick Reference |
+| **[autocomplete_demo.nc](examples/autocomplete_demo.nc)** | Test Program |
 
 ---
 
-## 🐛 Bekannte Probleme
+## Known Issues
 
-Keine! 🎉
+None!
 
-Falls du Bugs findest:
+If you find bugs:
 1. Check [AUTOCOMPLETE.md](docs/AUTOCOMPLETE.md#troubleshooting)
-2. Öffne ein Issue auf GitHub
+2. Open an issue on GitHub
 
 ---
 
-## 🎯 Roadmap (Next Steps)
+## Roadmap (Next Steps)
 
-### Geplant für v1.2:
-- [ ] **Snippet-Expansion:** `g71` → Kompletter Zyklus mit Platzhaltern
-- [ ] **Parameter-Hints während Eingabe:** Nach `G71 ` zeige `U`, `R`, `P`
-- [ ] **Frequenz-basierte Sortierung:** Häufige Codes zuerst
-- [ ] **Custom User-Snippets:** Eigene Abkürzungen definieren
-- [ ] **Multi-Line Templates:** Komplette Programmblöcke
-
----
-
-## 👥 Credits
-
-**Entwickelt von:** Vibe CNC Team  
-**Feature-Request:** Community  
-**Testing:** CNC-Enthusiasten weltweit
+### Planned for v1.2:
+- [ ] **Snippet Expansion:** `g71` -> Complete cycle with placeholders
+- [ ] **Parameter Hints during input:** After `G71 ` show `U`, `R`, `P`
+- [ ] **Frequency-based sorting:** Most used codes first
+- [ ] **Custom User Snippets:** Define your own abbreviations
+- [ ] **Multi-Line Templates:** Complete program blocks
 
 ---
 
-## 🎉 Feedback
+## Credits
 
-Wir freuen uns über Feedback!
-- ⭐ **Star** das Repo, wenn es dir gefällt
-- 🐛 **Report Bugs** via GitHub Issues
-- 💡 **Feature-Requests** sind willkommen
-- 📣 **Teile** Vibe CNC mit deinen Kollegen
+**Developed by:** Vibe CNC Team  
+**Feature Request:** Community  
+**Testing:** CNC enthusiasts worldwide
+
+---
+
+## Feedback
+
+We appreciate feedback!
+- **Star** the repo if you like it
+- **Report Bugs** via GitHub Issues
+- **Feature Requests** are welcome
+- **Share** Vibe CNC with your colleagues
 
 ---
 
 <div align="center">
-  <h2>🚀 Happy Coding with Autocomplete!</h2>
-  <p><i>"Schneller programmieren, weniger Fehler, mehr CNC-Fun!"</i></p>
+  <h2>Happy Coding with Autocomplete!</h2>
+  <p><i>"Code faster, fewer errors, more CNC fun!"</i></p>
   
   <p>
-    <a href="https://github.com/burnshall-ui/vibeCNC">⭐ Star auf GitHub</a>
+    <a href="https://github.com/burnshall-ui/vibeCNC">Star on GitHub</a>
   </p>
 </div>
 
