@@ -161,7 +161,7 @@ ai:
   offline: false            # true = no AI calls
 
   ollama:
-    base_url: "http://127.0.0.1:11434/api/chat"
+    base_url: "http://127.0.0.1:11111/api/chat"
     model: "granite3.3:8b"  # Fast and accurate
 
   anthropic:
