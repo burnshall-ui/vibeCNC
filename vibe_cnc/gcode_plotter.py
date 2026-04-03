@@ -19,6 +19,13 @@ class GCodeParser:
 
     def __init__(self, chuck_z: float = -5.0):
         self.chuck_z = chuck_z  # Spannfutter-Grenze
+        # Lade Werkzeugdaten einmalig
+        try:
+            from .tool_model import load_tools_json
+            j = load_tools_json()
+            self.tool_items = {int(it.get('t', 0)): it for it in j.get('tool_table', [])}
+        except Exception:
+            self.tool_items = {}
         self.reset()
 
     def reset(self):
@@ -59,7 +66,8 @@ class GCodeParser:
     def _parse_line(self, line: str, line_num: int):
         """Parst eine einzelne G-Code-Zeile"""
         # Kommentare entfernen
-        line = re.sub(r'\(.*?\)', '', line).strip()
+        line = re.sub(r'\(.*?\)', '', line)
+        line = re.sub(r';.*', '', line).strip()
         if not line or line.startswith('%'):
             return
 
@@ -95,15 +103,9 @@ class GCodeParser:
                 'tool': self.tool,
                 'line': line_num
             })
-            # Eckenradius aus Tools laden (tools.json) – optional
-            try:
-                from .tool_model import load_tools_json
-                j = load_tools_json()
-                tool_items = {int(it.get('t', 0)): it for it in j.get('tool_table', [])}
-                tool_info = tool_items.get(self.tool, {})
-                self.tnr = float(tool_info.get('insert_radius_mm', 0.0) or 0.0)
-            except Exception:
-                self.tnr = 0.0
+            # Eckenradius aus gecachten Tools laden
+            tool_info = self.tool_items.get(self.tool, {})
+            self.tnr = float(tool_info.get('insert_radius_mm', 0.0) or 0.0)
 
         # X/Z/I/K-Koordinaten extrahieren
         x_match = re.search(r'X([-+]?\d*\.?\d+)', line, re.IGNORECASE)
@@ -140,30 +142,38 @@ class GCodeParser:
                 # Kompensierte Bahn (vereinfachte TNR-Kompensation nur für Linearzüge)
                 if self.comp in ('G41', 'G42') and self.tnr > 0.0:
                     (x1, z1), (x2, z2), _ = segment_data
-                    dx = x2 - x1
+                    # Umrechnung in Radius für geometrische Berechnungen
+                    r1 = x1 / 2.0
+                    r2 = x2 / 2.0
+                    dr = r2 - r1
                     dz = z2 - z1
-                    seg_len = math.hypot(dx, dz)
+                    seg_len = math.hypot(dr, dz)
                     if seg_len > 1e-6:
                         # Linksnormale/rechtsnormale relativ zur Bewegungsrichtung
-                        nx_left = -dz / seg_len
-                        nz_left = dx / seg_len
+                        nr_left = -dz / seg_len
+                        nz_left = dr / seg_len
                         if self.comp == 'G41':
-                            offx, offz = nx_left * self.tnr, nz_left * self.tnr
+                            offr, offz = nr_left * self.tnr, nz_left * self.tnr
                         else:  # G42
-                            offx, offz = -nx_left * self.tnr, -nz_left * self.tnr
-                        cx1, cz1 = x1 + offx, z1 + offz
-                        cx2, cz2 = x2 + offx, z2 + offz
+                            offr, offz = -nr_left * self.tnr, -nz_left * self.tnr
+                        cr1, cz1 = r1 + offr, z1 + offz
+                        cr2, cz2 = r2 + offr, z2 + offz
+                        # Zurück in Durchmesser
+                        cx1 = cr1 * 2.0
+                        cx2 = cr2 * 2.0
                         self.paths['comp_cut'].append([(cx1, cz1), (cx2, cz2), line_num])
             elif self.mode in ['G02', 'G03']:
-                # Kreisbogen: Mittelpunkt = (x + i, z + k)
-                cx = self.x + self.i
+                # Kreisbogen: Mittelpunkt im Radius-Raum berechnen
+                r = self.x / 2.0
+                new_r = new_x / 2.0
+                cr = r + self.i
                 cz = self.z + self.k
-                radius = math.sqrt(self.i**2 + self.k**2)
+                radius = math.hypot(self.i, self.k)
                 clockwise = (self.mode == 'G02')
                 arc_data = {
                     'start': (self.x, self.z),
                     'end': (new_x, new_z),
-                    'center': (cx, cz),
+                    'center': (cr * 2.0, cz), # Mittelpunkt als Durchmesser speichern
                     'radius': radius,
                     'cw': clockwise,
                     'line': line_num
@@ -184,7 +194,7 @@ class GCodeParser:
                         self.paths['comp_arc'].append({
                             'start': (self.x, self.z),
                             'end': (new_x, new_z),
-                            'center': (cx, cz),
+                            'center': (cr * 2.0, cz),
                             'radius': comp_radius,
                             'cw': clockwise,
                             'line': line_num
@@ -413,9 +423,12 @@ class GCodePlotterWidget(QWidget):
                 x1, z1 = arc['start']
                 x2, z2 = arc['end']
 
-                # Winkel berechnen
-                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
-                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+                # Winkel berechnen (im Radius-Raum)
+                cr = cx / 2.0
+                r1 = x1 / 2.0
+                r2 = x2 / 2.0
+                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
+                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
 
                 if arc['cw']:  # G02: Clockwise
                     if angle2 > angle1:
@@ -424,7 +437,8 @@ class GCodePlotterWidget(QWidget):
                     if angle1 > angle2:
                         angle1 -= 360
 
-                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                # Breite ist 4*radius (da Durchmesser), Höhe ist 2*radius
+                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
                                        angle=0, theta1=angle1, theta2=angle2,
                                        color=self.colors['FANUC_YELLOW'], linewidth=1.5,
                                        linestyle='--', alpha=0.9, zorder=3)
@@ -440,9 +454,12 @@ class GCodePlotterWidget(QWidget):
                 cx, cz = arc['center']
                 radius = arc['radius']
 
-                # Winkel berechnen
-                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
-                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+                # Winkel berechnen (im Radius-Raum)
+                cr = cx / 2.0
+                r1 = x1 / 2.0
+                r2 = x2 / 2.0
+                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
+                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
 
                 # Bogen zeichnen (matplotlib Arc nutzt X/Y, wir haben X/Z)
                 if arc['cw']:  # G02: Clockwise
@@ -452,7 +469,8 @@ class GCodePlotterWidget(QWidget):
                     if angle1 > angle2:
                         angle1 -= 360
 
-                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                # Breite ist 4*radius (da Durchmesser), Höhe ist 2*radius
+                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
                                        angle=0, theta1=angle1, theta2=angle2,
                                        color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
                 self.ax.add_patch(arc_patch)
@@ -837,9 +855,12 @@ class GCodePlotterWidget(QWidget):
                 x1, z1 = arc['start']
                 x2, z2 = arc['end']
 
-                # Winkel berechnen
-                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
-                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+                # Winkel berechnen (im Radius-Raum)
+                cr = cx / 2.0
+                r1 = x1 / 2.0
+                r2 = x2 / 2.0
+                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
+                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
 
                 if arc['cw']:  # G02: Clockwise
                     if angle2 > angle1:
@@ -848,7 +869,8 @@ class GCodePlotterWidget(QWidget):
                     if angle1 > angle2:
                         angle1 -= 360
 
-                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                # Breite ist 4*radius (da Durchmesser), Höhe ist 2*radius
+                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
                                        angle=0, theta1=angle1, theta2=angle2,
                                        color=self.colors['FANUC_YELLOW'], linewidth=1.5,
                                        linestyle='--', alpha=0.9, zorder=3)
@@ -862,15 +884,21 @@ class GCodePlotterWidget(QWidget):
                 x2, z2 = arc['end']
                 cx, cz = arc['center']
                 radius = arc['radius']
-                angle1 = math.degrees(math.atan2(z1 - cz, x1 - cx))
-                angle2 = math.degrees(math.atan2(z2 - cz, x2 - cx))
+                # Winkel berechnen (im Radius-Raum)
+                cr = cx / 2.0
+                r1 = x1 / 2.0
+                r2 = x2 / 2.0
+                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
+                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
                 if arc['cw']:
                     if angle2 > angle1:
                         angle2 -= 360
                 else:
                     if angle1 > angle2:
                         angle1 -= 360
-                arc_patch = patches.Arc((cx, cz), 2*radius, 2*radius,
+                
+                # Breite ist 4*radius (da Durchmesser), Höhe ist 2*radius
+                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
                                        angle=0, theta1=angle1, theta2=angle2,
                                        color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
                 self.ax.add_patch(arc_patch)

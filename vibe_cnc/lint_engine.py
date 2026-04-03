@@ -31,18 +31,24 @@ class LintEngine:
 
         # 3) Protected M-codes unchanged
         for i, ln in enumerate(lines):
+            # Kommentare ignorieren für M-Code Prüfung
+            code_ln = re.sub(r'\(.*?\)', '', ln)
+            code_ln = re.sub(r';.*', '', code_ln)
             for m in self.protected_m:
-                pat = rf'\bM{m}\b'
-                if re.search(pat, ln):
+                pat = rf'\bM0?{m}\b'
+                if re.search(pat, code_ln):
                     if ln.strip().startswith('(') or ln.strip().startswith(';'):
                         finds.append(self._f(i+1, "M-Invarianz", f"M{m} nicht auskommentieren (invariant)."))
-                    if "M" in ln and re.search(r'\bM0?\b', ln):
-                        finds.append(self._f(i+1, "M-Invarianz", f"M{m} nicht überschreiben."))
+                
+                # Prüfe ob ein anderer M-Code den geschützten überschreibt
+                m_codes = re.findall(r'\bM\d+\b', code_ln)
+                if len(m_codes) > 1 and any(re.match(pat, mc) for mc in m_codes):
+                    finds.append(self._f(i+1, "M-Invarianz", f"M{m} nicht mit anderem M-Code überschreiben."))
 
         # 4) End-of-program retract
         end_idx = max(len(lines)-3, 0)
         end_block = " ".join(lines[end_idx:])
-        if ("M30" in end_block) and not (re.search(r'\bZ\d', end_block) and re.search(r'\bX\d', end_block)):
+        if ("M30" in end_block) and not (re.search(r'\bZ[-+]?\d', end_block) and re.search(r'\bX[-+]?\d', end_block)):
             finds.append(self._f(len(lines), "Rückzug", "Vor M30: Z in sichere Ebene, dann X rausfahren."))
 
         # 5) G7x sanity (rough)

@@ -3,6 +3,13 @@ from PyQt6.QtCore import QAbstractTableModel, Qt, QVariant
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _parse_tool_number(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
 class ToolModel(QAbstractTableModel):
     HEADERS = ["T", "D", "KOMMENTAR"]
     def __init__(self):
@@ -15,11 +22,13 @@ class ToolModel(QAbstractTableModel):
         try:
             db = os.path.join(HERE, "tools", "tools.db")
             conn = sqlite3.connect(db)
-            cur = conn.cursor()
-            cur.execute("SELECT t, COALESCE(d_mm,'-') AS d, name FROM tools ORDER BY t ASC;")
-            rows = cur.fetchall()
-            conn.close()
-            return rows
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT t, COALESCE(d_mm,'-') AS d, name FROM tools ORDER BY t ASC;")
+                rows = cur.fetchall()
+                return rows
+            finally:
+                conn.close()
         except Exception as e:
             # Fallback: JSON
             j = load_tools_json()
@@ -34,7 +43,10 @@ class ToolModel(QAbstractTableModel):
         j = load_tools_json()
         tools = {}
         for item in j.get("tool_table", []):
-            tools[int(item.get("t", 0))] = item
+            tool_num = _parse_tool_number(item.get("t"))
+            if tool_num is None:
+                continue
+            tools[tool_num] = item
         return tools
 
     def get_tool_info(self, tool_num: int) -> dict:

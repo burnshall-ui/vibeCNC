@@ -28,12 +28,27 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDEs
+# Testing & Quality
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDEs & Editors
 .vscode/
+.cursor/
 .idea/
 *.swp
 *.swo
 *~
+
+# AI Tools
+.claude/
+
+# Environment Variables
+.env
+.env.*
 
 # OS
 .DS_Store
@@ -53,6 +68,8 @@ programs/*.nc
 !programs/O0001_DEMO.nc
 tools/*.db-journal
 *.sqlite3-journal
+*.db-wal
+*.db-shm
 
 # Personal Notes (nicht im Repo)
 ZIELBILD.md

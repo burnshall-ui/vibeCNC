@@ -67,11 +67,13 @@ class MacroModel(QAbstractTableModel):
     def _load_rows(self):
         try:
             conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT nr, name, COALESCE(category,'') FROM macros ORDER BY nr ASC;")
-            rows = cur.fetchall()
-            conn.close()
-            return rows
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT nr, name, COALESCE(category,'') FROM macros ORDER BY nr ASC;")
+                rows = cur.fetchall()
+                return rows
+            finally:
+                conn.close()
         except Exception:
             return []
 
@@ -79,19 +81,21 @@ class MacroModel(QAbstractTableModel):
     def get_macro(self, nr: int) -> Optional[dict]:
         try:
             conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT nr, name, category, call_type, description FROM macros WHERE nr=?;", (nr,))
-            row = cur.fetchone()
-            conn.close()
-            if not row:
-                return None
-            return {
-                "nr": row[0],
-                "name": row[1],
-                "category": row[2] or '',
-                "call_type": row[3] or 'M98',
-                "description": row[4] or '',
-            }
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT nr, name, category, call_type, description FROM macros WHERE nr=?;", (nr,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "nr": row[0],
+                    "name": row[1],
+                    "category": row[2] or '',
+                    "call_type": row[3] or 'M98',
+                    "description": row[4] or '',
+                }
+            finally:
+                conn.close()
         except Exception:
             return None
 

@@ -308,7 +308,10 @@ class CompleterEventFilter(QObject):
                         if completion:  # Nur wenn nicht leer
                             insert_completion(self.editor, self.completer, completion)
                         self.completer.popup().hide()
-                    return True  # Event konsumiert
+                        return True  # Event konsumiert
+                    # Kein Item selektiert: Popup schließen und Event durchlassen
+                    self.completer.popup().hide()
+                    return False
                 elif key_event.key() == Qt.Key.Key_Escape:
                     self.completer.popup().hide()
                     return True  # Event konsumiert
@@ -335,8 +338,9 @@ class CompleterEventFilter(QObject):
         """Zeige Autocomplete"""
         try:
             cursor = self.editor.textCursor()
+            pos_in_block = cursor.positionInBlock()
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
-            text_before = cursor.selectedText()
+            text_before = cursor.selectedText()[:pos_in_block]
             
             if self.completer.update_for_context(text_before):
                 # Einfacher Aufruf ohne custom rect
@@ -379,10 +383,9 @@ def insert_completion(editor, completer, completion):
         words = line_text.split()
         if words:
             prefix = words[-1].upper()
-            
-            # Gehe zum Ende und lösche Prefix
+
+            # Lösche Prefix rückwärts von aktueller Cursor-Position
             cursor = editor.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
             cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, len(prefix))
             cursor.removeSelectedText()
         

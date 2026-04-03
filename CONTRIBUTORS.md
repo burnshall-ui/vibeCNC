@@ -49,4 +49,4 @@ This project was built with the collaboration of human expertise in CNC machinin
 and AI assistance in software architecture, bringing together decades of manufacturing
 knowledge with modern development practices.
 
-**Built with ❤️ for the CNC community**
+
