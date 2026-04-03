@@ -4,7 +4,7 @@ class SettingsManager:
     def __init__(self, path:str):
         self.path = path
         if not os.path.exists(self.path):
-            raise FileNotFoundError(f"config.yaml nicht gefunden: {self.path}")
+            raise FileNotFoundError(f"config.yaml not found: {self.path}")
         with open(self.path, "r", encoding="utf-8") as f:
             self.data = yaml.safe_load(f) or {}
     def colors(self):

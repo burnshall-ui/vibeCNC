@@ -1,4 +1,4 @@
-# vibe_cnc.py — Hauptprogramm (UI + Wiring) — Vibe CNC
+# vibe_cnc.py — Main program (UI + Wiring) — Vibe CNC
 import os, sys, json, re, subprocess, shutil
 from datetime import datetime
 
@@ -42,7 +42,7 @@ class AIWorker(QRunnable):
         try:
             ok, resp = self.fn(*self.args)
         except Exception as e:
-            ok, resp = False, f"❌ KI-Threadfehler: {type(e).__name__}: {e}"
+            ok, resp = False, f"❌ AI thread error: {type(e).__name__}: {e}"
         self.signals.finished.emit(ok, resp)
 
 
@@ -85,7 +85,7 @@ class Main(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.verticalHeader().hide()
-        # Spaltenbreiten: T=5 Zeichen, D=6 Zeichen, Kommentar=Rest
+        # Column widths: T=5 chars, D=6 chars, Comment=Rest
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # T
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # D
@@ -98,7 +98,7 @@ class Main(QMainWindow):
         self.macroTable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.macroTable.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.macroTable.verticalHeader().hide()
-        # Spaltenbreiten: NR=8 Zeichen, NAME=Rest, CATEGORY=normal
+        # Column widths: NR=8 chars, NAME=Rest, CATEGORY=normal
         macroHeader = self.macroTable.horizontalHeader()
         macroHeader.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)    # NR
         macroHeader.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # NAME
@@ -106,7 +106,7 @@ class Main(QMainWindow):
         self.macroTable.setColumnWidth(0, 80)   # NR: 8 Zeichen
         self.macroTable.setColumnWidth(2, 100)  # CATEGORY: normal
 
-        # Tool-Panel mit New-Button
+        # Tool-Panel with New-Button
         toolPanel = QWidget()
         toolPanelLayout = QVBoxLayout(toolPanel)
         toolPanelLayout.setContentsMargins(0, 0, 0, 0)
@@ -117,7 +117,7 @@ class Main(QMainWindow):
         self.btnNewTool.setObjectName("Softkey")
         toolPanelLayout.addWidget(self.btnNewTool)
 
-        # Macro-Panel mit New-Button
+        # Macro-Panel with New-Button
         macroPanel = QWidget()
         macroPanelLayout = QVBoxLayout(macroPanel)
         macroPanelLayout.setContentsMargins(0, 0, 0, 0)
@@ -147,7 +147,7 @@ class Main(QMainWindow):
         self.highlighter = GCodeHighlighter(self.editor.document(), self.cfg_colors)
         self.title_center = TitlePanel("PROGRAM (EDIT) — Vibe CNC", self.editor, self.cfg_colors)
         
-        # --- Autocomplete: Install nach Editor + Models ---
+        # --- Autocomplete: Install after Editor + Models ---
         self.completer = install_completer(self.editor, self.table.model(), self.macroTable.model())
 
         # --- RIGHT: Chat ---
@@ -186,13 +186,13 @@ class Main(QMainWindow):
         self.btnOpen = QPushButton("OPEN ▼"); self.btnOpen.setObjectName("Softkey")
         self.btnSave = QPushButton("SAVE"); self.btnSave.setObjectName("Softkey")
 
-        # Recent Files Menu für OPEN Button
+        # Recent Files Menu for OPEN Button
         self.recent_files_menu = QMenu(self)
         self.btnOpen.setMenu(self.recent_files_menu)
         self._update_recent_files_menu()
         self.btnSim  = QPushButton("SEND 2 SIM"); self.btnSim.setObjectName("Softkey")
-        self.btnAna  = QPushButton("KI: ANALYZE"); self.btnAna.setObjectName("Softkey")
-        self.btnGen  = QPushButton("KI: GEN-CODE"); self.btnGen.setObjectName("Softkey")
+        self.btnAna  = QPushButton("AI: ANALYZE"); self.btnAna.setObjectName("Softkey")
+        self.btnGen  = QPushButton("AI: GEN-CODE"); self.btnGen.setObjectName("Softkey")
         self.btnSettings = QPushButton("⚙️ SETTINGS"); self.btnSettings.setObjectName("Softkey")
         for w in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen, self.btnSettings]:
             sh.addWidget(w)
@@ -200,21 +200,21 @@ class Main(QMainWindow):
         # --- Status Bar ---
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("Bereit", 3000)
+        self.status.showMessage("Ready", 3000)
 
         # --- Vertical Splitter (Top: Editor/Chat | Bottom: Plot) ---
         self.vsplit = QSplitter(Qt.Orientation.Vertical)
         self.vsplit.addWidget(self.split)
         self.vsplit.addWidget(bottom)
-        self.vsplit.setStretchFactor(0, 3)  # Editor-Bereich: 75%
-        self.vsplit.setStretchFactor(1, 1)  # Plot-Bereich: 25%
+        self.vsplit.setStretchFactor(0, 3)  # Editor area: 75%
+        self.vsplit.setStretchFactor(1, 1)  # Plot area: 25%
 
         # --- Root ---
         root = QWidget(); v = QVBoxLayout(root)
         v.setContentsMargins(10,10,10,10); v.setSpacing(0)
         v.addWidget(self.vsplit, stretch=1)
-        v.addWidget(ctrl, stretch=0)  # Control-Buttons oben
-        v.addWidget(soft, stretch=0)  # Softkeys unten
+        v.addWidget(ctrl, stretch=0)  # Control buttons top
+        v.addWidget(soft, stretch=0)  # Softkeys bottom
         v.setContentsMargins(10,10,10,10)
         self.setCentralWidget(root)
 
@@ -268,7 +268,7 @@ class Main(QMainWindow):
         self.addAction(QAction(self, shortcut=QKeySequence.StandardKey.Save, triggered=self.action_save))
         self.addAction(QAction(self, shortcut=QKeySequence.StandardKey.Open, triggered=self.action_open))
 
-        # Find/Replace Dialog (erstellt bei Bedarf)
+        # Find/Replace Dialog (created on demand)
         self.find_replace_dialog = None
 
         # --- Control Shortcuts ---
@@ -345,11 +345,11 @@ class Main(QMainWindow):
         scale = max(0.9, min(1.6, w / 1600))
         def set_font(widget, mul=1.0):
             f = QFont("Consolas"); f.setPointSizeF(self.base_pt * scale * mul); widget.setFont(f)
-        set_font(self.editor, 0.95)  # Editor: kleiner
-        set_font(self.chat, 0.9)     # Chat: kleiner
-        set_font(self.input, 0.9)    # Input: kleiner
-        set_font(self.table, 0.9)    # Tabelle: kleiner
-        set_font(self.macroTable, 0.9)  # Makro-Tabelle: kleiner
+        set_font(self.editor, 0.95)  # Editor: smaller
+        set_font(self.chat, 0.9)     # Chat: smaller
+        set_font(self.input, 0.9)    # Input: smaller
+        set_font(self.table, 0.9)    # Table: smaller
+        set_font(self.macroTable, 0.9)  # Macro table: smaller
         for b in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen, self.btnSettings]:
             set_font(b, 0.9); b.setMinimumHeight(int(34 * scale))
         for l in self.findChildren(QLabel, "PanelTitle"):
@@ -366,7 +366,7 @@ class Main(QMainWindow):
 
     def _start_ai_task(self, status_message: str, fn, args, completion_handler):
         if self._ai_busy:
-            self.status.showMessage("⚠️ KI-Auftrag läuft bereits", 5000)
+            self.status.showMessage("⚠️ AI task already running", 5000)
             return
 
         self._set_ai_busy(True)
@@ -387,7 +387,7 @@ class Main(QMainWindow):
         self.btnTabMacros.setChecked(idx == 1)
 
     def on_macro_double_click(self, index):
-        """Doppelklick auf Macro → Insert in Editor"""
+        """Double click on Macro → Insert in Editor"""
         if not index.isValid():
             return
         row = index.row()
@@ -397,7 +397,7 @@ class Main(QMainWindow):
         except Exception:
             return
 
-        # call_type aus DB ermitteln (M98 oder G65)
+        # get call_type from DB (M98 or G65)
         try:
             macro = self.macroTable.model().get_macro(nr)
             call_type = (macro or {}).get('call_type', 'M98').upper()
@@ -410,7 +410,7 @@ class Main(QMainWindow):
         cursor.insertText(text)
 
     def on_macro_right_click(self, position):
-        """Rechtsklick auf Macro → Edit/Delete Dialog"""
+        """Right click on Macro → Edit/Delete Dialog"""
         index = self.macroTable.indexAt(position)
         if not index.isValid():
             return
@@ -422,7 +422,7 @@ class Main(QMainWindow):
         except Exception:
             return
 
-        # Öffne Macro-Editor Dialog
+        # Open Macro-Editor Dialog
         dialog = MacroEditorDialog(self.macroTable.model(), macro_nr=nr, parent=self)
         dialog.exec()
 
@@ -437,55 +437,55 @@ class Main(QMainWindow):
         dialog.exec()
 
     def _append_user_message(self, text: str):
-        """Zeigt User-Nachricht im Chat an (mit Trennlinie und blauem Stil)"""
+        """Shows user message in chat (with separator and blue style)"""
         self.chat.append("<hr style='border:1px solid #444; margin:8px 0;'>")
         self.chat.append(f"<div style='background:#1A2530; padding:8px; border-left:3px solid {self.cfg_colors['CYAN']}; margin:4px 0;'>"
-                        f"<span style='color:{self.cfg_colors['CYAN']}; font-weight:bold;'>👤 Du:</span> {text}</div>")
+                        f"<span style='color:{self.cfg_colors['CYAN']}; font-weight:bold;'>👤 You:</span> {text}</div>")
 
     def _append_assistant_message(self, role: str, text: str, is_error: bool = False):
-        """Zeigt Assistant-Nachricht im Chat an (mit grünem/gelben Stil)"""
+        """Shows assistant message in chat (with green/yellow style)"""
         color = self.cfg_colors['FANUC_YELLOW'] if is_error else self.cfg_colors['CRT_GREEN']
         icon = "⚠️" if is_error else "🤖"
         self.chat.append(f"<div style='background:#1A1A1A; padding:8px; border-left:3px solid {color}; margin:4px 0;'>"
                         f"<span style='color:{color}; font-weight:bold;'>{icon} {role}:</span><br>{text}</div>")
 
     def _append_system_message(self, text: str):
-        """Zeigt System-Nachricht im Chat an (CNC/Simulation, neutral grau)"""
+        """Shows system message in chat (CNC/Simulation, neutral gray)"""
         self.chat.append(f"<div style='background:#0A0A0A; padding:6px; border-left:2px solid #555; margin:2px 0;'>"
                         f"<span style='color:#888; font-size:0.9em;'>⚙️ CNC:</span> <span style='color:#AAA;'>{text}</span></div>")
 
     def _handle_analyze_response(self, ok: bool, resp: str, role: str):
         if ok:
             self._append_assistant_message(role, resp)
-            self.status.showMessage("✅ KI-Analyse: Fertig", 5000)
+            self.status.showMessage("✅ AI Analysis: Done", 5000)
         else:
-            self._append_assistant_message("Fehler", resp, is_error=True)
-            self.status.showMessage("❌ KI-Fehler", 5000)
+            self._append_assistant_message("Error", resp, is_error=True)
+            self.status.showMessage("❌ AI Error", 5000)
 
     def _handle_generate_response(self, ok: bool, resp: str, who: str):
         if ok:
             self._append_assistant_message(who, resp)
-            self.status.showMessage("✅ Code generiert", 5000)
+            self.status.showMessage("✅ Code generated", 5000)
         else:
-            self._append_assistant_message("Fehler", resp, is_error=True)
-            self.status.showMessage("❌ KI-Fehler", 5000)
+            self._append_assistant_message("Error", resp, is_error=True)
+            self.status.showMessage("❌ AI Error", 5000)
 
     def _on_editor_changed(self):
-        """Editor-Änderung → Plot-Update (mit 500ms Debounce)"""
+        """Editor change → Plot update (with 500ms debounce)"""
         code = self.editor.toPlainText()
         self.plotter.pending_code = code
         self.plotter.update_plot()
 
     def _on_cursor_changed(self):
-        """Cursor-Position im Editor → Highlight im Plot"""
+        """Cursor position in editor → Highlight in plot"""
         cursor = self.editor.textCursor()
-        line_num = cursor.blockNumber() + 1  # QTextEdit zählt ab 0
+        line_num = cursor.blockNumber() + 1  # QTextEdit counts from 0
         self.plotter.highlight_line(line_num)
 
     def _on_plot_clicked(self, line_num: int):
-        """Klick im Plot → Springe zu Zeile im Editor"""
+        """Click in plot → Jump to line in editor"""
         cursor = self.editor.textCursor()
-        # Gehe zu Zeile (line_num ist 1-basiert)
+        # Go to line (line_num is 1-based)
         block = self.editor.document().findBlockByLineNumber(line_num - 1)
         if block.isValid():
             cursor.setPosition(block.position())
@@ -495,7 +495,7 @@ class Main(QMainWindow):
 
     # --- Control Actions ---
     def action_cycle_start(self):
-        """CYCLE START Button → Startet/Fortsetzt 2D-Simulation"""
+        """CYCLE START Button → Starts/Resumes 2D simulation"""
         single_block = self.btnSingleBlock.isChecked()
         opt_stop = self.btnOptStop.isChecked()
 
@@ -508,82 +508,82 @@ class Main(QMainWindow):
         mode_str = f" ({', '.join(mode_info)})" if mode_info else ""
         self._append_system_message(f"▶ CYCLE START{mode_str}")
 
-        # Starte 2D-Simulation
+        # Start 2D simulation
         self._sim_start()
 
     def action_feed_hold(self):
-        """FEED HOLD Button → Pausiert Simulation"""
-        self._append_system_message("⏸ FEED HOLD gedrückt")
+        """FEED HOLD Button → Pauses simulation"""
+        self._append_system_message("⏸ FEED HOLD pressed")
         self._sim_pause()
 
     def action_opt_stop_toggled(self, checked: bool):
-        """OPTIONAL STOP Toggle → M01 aktiv/inaktiv"""
-        state = "EIN" if checked else "AUS"
+        """OPTIONAL STOP Toggle → M01 active/inactive"""
+        state = "ON" if checked else "OFF"
         icon = "⊙" if checked else "○"
         self.status.showMessage(f"{icon} OPTIONAL STOP: {state}", 2000)
         self._append_system_message(f"⊙ OPTIONAL STOP → {state}")
 
     def action_single_block_toggled(self, checked: bool):
-        """SINGLE BLOCK Toggle → Einzelsatz-Modus"""
-        state = "EIN" if checked else "AUS"
+        """SINGLE BLOCK Toggle → Single block mode"""
+        state = "ON" if checked else "OFF"
         icon = "⊙" if checked else "○"
         self.status.showMessage(f"{icon} SINGLE BLOCK: {state}", 2000)
         self._append_system_message(f"⊙ SINGLE BLOCK → {state}")
 
     # --- Simulation Engine ---
     def _sim_start(self):
-        """Startet oder setzt die Simulation fort"""
+        """Starts or resumes the simulation"""
         if self.sim_state == "STOPPED":
-            # Simulation neu starten
+            # Restart simulation
             code = self.editor.toPlainText()
             self.sim_lines = [line.strip() for line in code.split('\n')]
             self.sim_current_line = 0
             self.sim_state = "RUNNING"
 
-            # Live-Position zurücksetzen
+            # Reset live position
             self.sim_x = 0.0
             self.sim_z = 0.0
             self.sim_tool = 0
             self.sim_s = 0
             self.sim_f = 0.0
 
-            # Live-Drawing: Start bei Zeile 0 (nichts gezeichnet)
+            # Live-Drawing: Start at line 0 (nothing drawn)
             self.plotter.set_live_max_line(0)
 
-            # Geschwindigkeit: 200ms pro Zeile (Standard), 500ms für SINGLE BLOCK
+            # Speed: 200ms per line (default), 500ms for SINGLE BLOCK
             interval = 500 if self.btnSingleBlock.isChecked() else 200
             self.sim_timer.start(interval)
 
-            self.status.showMessage("▶ Simulation läuft", 0)
-            self._append_system_message("🎬 Simulation gestartet")
+            self.status.showMessage("▶ Simulation running", 0)
+            self._append_system_message("🎬 Simulation started")
 
-            # Gelben Marker einblenden
+            # Show yellow marker
             self.editor.set_sim_line(1)
 
         elif self.sim_state == "PAUSED":
-            # Simulation fortsetzen
+            # Resume simulation
             self.sim_state = "RUNNING"
             interval = 500 if self.btnSingleBlock.isChecked() else 200
             self.sim_timer.start(interval)
-            self.status.showMessage("▶ Simulation fortgesetzt", 0)
-            self._append_system_message("▶ Simulation fortgesetzt")
+            self.status.showMessage("▶ Simulation resumed", 0)
+            self._append_system_message("▶ Simulation resumed")
 
     def _sim_step(self):
-        """Führt einen Simulations-Schritt aus (eine G-Code-Zeile)"""
+        """Executes one simulation step (one G-Code line)"""
         if self.sim_state != "RUNNING":
             return
 
-        # Prüfe ob Simulation fertig
+        # Check if simulation is finished
         if self.sim_current_line >= len(self.sim_lines):
             self._sim_stop()
-            self._append_system_message("✅ Programm beendet (M30)")
+            self._append_system_message("✅ Program finished (M30)")
             return
 
-        # Aktuelle Zeile holen
+        # Get current line
         line = self.sim_lines[self.sim_current_line]
-        line_num = self.sim_current_line + 1  # 1-basiert
+        line_num = self.sim_current_line + 1  # 1-based
 
-        # Zeile im Editor highlighten + Gelben Marker setzen
+        # Highlight line in editor + set yellow marker
         self.editor.set_sim_line(line_num)
         self.plotter.highlight_line(line_num)
         block = self.editor.document().findBlockByLineNumber(self.sim_current_line)
@@ -593,70 +593,70 @@ class Main(QMainWindow):
             self.editor.setTextCursor(cursor)
             self.editor.centerCursor()
 
-        # Status aktualisieren
+        # Update status
         self.status.showMessage(f"▶ SIM: N{line_num} {line[:30]}...", 0)
 
-        # Parse aktuelle Zeile für Live-Position
+        # Parse current line for live position
         self._update_sim_position(line)
 
-        # Live-Drawing: Zeichne nur bis zur aktuellen Zeile
+        # Live-Drawing: Draw only up to current line
         self.plotter.set_live_max_line(line_num)
 
-        # M-Codes prüfen
+        # Check M-Codes
         if 'M01' in line.upper() and self.btnOptStop.isChecked():
             # Optional Stop
             self._sim_pause()
             self._append_system_message(f"⏸ M01 - OPTIONAL STOP (Zeile {line_num})")
             self.status.showMessage(f"⏸ M01 - OPTIONAL STOP (N{line_num})", 0)
-            self.sim_current_line += 1  # Zeile ist abgearbeitet
+            self.sim_current_line += 1  # Line is processed
             return
 
         if 'M30' in line.upper() or 'M02' in line.upper():
-            # Programm-Ende
+            # Program end
             self.sim_current_line += 1
             self._sim_stop()
-            self._append_system_message("✅ Programm beendet (M30/M02)")
+            self._append_system_message("✅ Program finished (M30/M02)")
             return
 
-        # Nächste Zeile
+        # Next line
         self.sim_current_line += 1
 
-        # SINGLE BLOCK: Nach einer Zeile pausieren
+        # SINGLE BLOCK: Pause after one line
         if self.btnSingleBlock.isChecked():
             self._sim_pause()
 
     def _sim_pause(self):
-        """Pausiert die Simulation"""
+        """Pauses the simulation"""
         if self.sim_state == "RUNNING":
             self.sim_state = "PAUSED"
             self.sim_timer.stop()
-            self.status.showMessage("⏸ Simulation pausiert", 0)
+            self.status.showMessage("⏸ Simulation paused", 0)
 
     def _sim_stop(self):
-        """Stoppt die Simulation komplett"""
+        """Stops the simulation completely"""
         self.sim_state = "STOPPED"
         self.sim_timer.stop()
         self.sim_current_line = 0
         self.sim_lines = []
-        self.status.showMessage("⏹ Simulation gestoppt", 3000)
+        self.status.showMessage("⏹ Simulation stopped", 3000)
 
-        # Gelben Marker entfernen
+        # Remove yellow marker
         self.editor.clear_sim_line()
 
-        # Live-Position-Anzeige entfernen
+        # Remove live position display
         self.plotter.clear_live_position()
 
-        # Live-Drawing zurücksetzen (alle Linien anzeigen)
+        # Reset live drawing (show all lines)
         self.plotter.clear_live_max_line()
 
     def _update_sim_position(self, line: str):
-        """Parst eine G-Code-Zeile und aktualisiert die Live-Position"""
-        # Kommentare entfernen
+        """Parses a G-Code line and updates the live position"""
+        # Remove comments
         line = re.sub(r'\(.*?\)', '', line).strip()
         if not line:
             return
 
-        # X/Z-Koordinaten extrahieren
+        # Extract X/Z coordinates
         x_match = re.search(r'X([-+]?\d*\.?\d+)', line, re.IGNORECASE)
         z_match = re.search(r'Z([-+]?\d*\.?\d+)', line, re.IGNORECASE)
 
@@ -665,22 +665,22 @@ class Main(QMainWindow):
         if z_match:
             self.sim_z = float(z_match.group(1))
 
-        # Werkzeug
+        # Tool
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
         if t_match:
             self.sim_tool = int(t_match.group(1)) // 100  # T0101 -> T1
 
-        # Spindeldrehzahl
+        # Spindle speed
         s_match = re.search(r'S(\d+)', line, re.IGNORECASE)
         if s_match:
             self.sim_s = int(s_match.group(1))
 
-        # Vorschub
+        # Feed rate
         f_match = re.search(r'F([-+]?\d*\.?\d+)', line, re.IGNORECASE)
         if f_match:
             self.sim_f = float(f_match.group(1))
 
-        # An Plotter übergeben (zeige immer X und Z, auch wenn 0)
+        # Pass to plotter (always show X and Z, even if 0)
         self.plotter.set_live_position(
             x=self.sim_x,
             z=self.sim_z,
@@ -697,11 +697,11 @@ class Main(QMainWindow):
 
     # --- Find/Replace ---
     def show_find_dialog(self):
-        """Ctrl+F: Öffne Find/Replace Dialog im Find-Modus"""
+        """Ctrl+F: Open Find/Replace Dialog in Find mode"""
         if self.find_replace_dialog is None:
             self.find_replace_dialog = FindReplaceDialog(self.editor, self)
 
-        # Wenn Text selektiert ist, übernehme ihn als Suchtext
+        # If text is selected, use it as search text
         cursor = self.editor.textCursor()
         if cursor.hasSelection():
             selected_text = cursor.selectedText()
@@ -714,11 +714,11 @@ class Main(QMainWindow):
         self.find_replace_dialog.find_input.selectAll()
 
     def show_replace_dialog(self):
-        """Ctrl+H: Öffne Find/Replace Dialog im Replace-Modus"""
+        """Ctrl+H: Open Find/Replace Dialog in Replace mode"""
         if self.find_replace_dialog is None:
             self.find_replace_dialog = FindReplaceDialog(self.editor, self)
 
-        # Wenn Text selektiert ist, übernehme ihn als Suchtext
+        # If text is selected, use it as search text
         cursor = self.editor.textCursor()
         if cursor.hasSelection():
             selected_text = cursor.selectedText()
@@ -727,71 +727,70 @@ class Main(QMainWindow):
         self.find_replace_dialog.show()
         self.find_replace_dialog.raise_()
         self.find_replace_dialog.activateWindow()
-        self.find_replace_dialog.replace_input.setFocus()  # Focus auf Replace-Feld
+        self.find_replace_dialog.replace_input.setFocus()  # Focus on Replace field
 
     # --- Recent Files ---
     def _get_recent_files(self):
-        """Lade Recent Files aus Settings (max 5)"""
+        """Load Recent Files from Settings (max 5)"""
         recent = self.settings.value("recent_files", [])
         if not isinstance(recent, list):
             recent = []
         return recent[:5]  # Max 5
 
     def _add_to_recent_files(self, filepath):
-        """Füge Datei zur Recent Files Liste hinzu"""
+        """Add file to Recent Files list"""
         recent = self._get_recent_files()
 
-        # Entferne Duplikate
+        # Remove duplicates
         if filepath in recent:
             recent.remove(filepath)
 
-        # Füge an erster Stelle ein
+        # Insert at first position
         recent.insert(0, filepath)
 
-        # Max 5 behalten
+        # Keep max 5
         recent = recent[:5]
 
-        # Speichern
+        # Save
         self.settings.setValue("recent_files", recent)
 
-        # UI aktualisieren
+        # Update UI
         self._update_recent_files_menu()
 
     def _update_recent_files_menu(self):
-        """Aktualisiere das Recent Files Dropdown-Menü"""
+        """Update the Recent Files dropdown menu"""
         self.recent_files_menu.clear()
 
-        # "Datei öffnen..." als erste Option
-        open_action = self.recent_files_menu.addAction("📂 Datei öffnen...")
+        open_action = self.recent_files_menu.addAction("📂 Open File...")
         open_action.triggered.connect(self._open_file_dialog)
 
         recent = self._get_recent_files()
 
         if recent:
             self.recent_files_menu.addSeparator()
-            self.recent_files_menu.addSection("Zuletzt geöffnet:")
+            self.recent_files_menu.addSection("Recently Opened:")
 
             for filepath in recent:
-                # Prüfe ob Datei noch existiert
+                # Check if file still exists
                 if not os.path.exists(filepath):
                     continue
 
                 filename = os.path.basename(filepath)
                 action = self.recent_files_menu.addAction(f"📄 {filename}")
-                # Lambda mit default argument um filepath zu capturen
+                # Lambda with default argument to capture filepath
                 action.triggered.connect(lambda checked=False, p=filepath: self._open_recent_file(p))
 
     def _open_file_dialog(self):
-        """Öffne normalen File-Dialog"""
-        path, _ = QFileDialog.getOpenFileName(self, "Programm öffnen", "", "G-Code (*.nc *.txt *.tap *.gcode);;Alle Dateien (*)")
+        """Open normal file dialog"""
+        path, _ = QFileDialog.getOpenFileName(self, "Open Program", "", "G-Code (*.nc *.txt *.tap *.gcode);;All Files (*)")
         if path:
             self._load_file(path)
 
     def _open_recent_file(self, filepath):
-        """Öffne eine Datei aus der Recent Files Liste"""
+        """Open a file from the Recent Files list"""
         if not os.path.exists(filepath):
-            QMessageBox.warning(self, "Datei nicht gefunden", f"Datei existiert nicht mehr:\n{filepath}")
-            # Entferne aus Recent Files
+            QMessageBox.warning(self, "File Not Found", f"File no longer exists:\n{filepath}")
+            # Remove from Recent Files
             recent = self._get_recent_files()
             if filepath in recent:
                 recent.remove(filepath)
@@ -802,14 +801,14 @@ class Main(QMainWindow):
         self._load_file(filepath)
 
     def _load_file(self, path):
-        """Lade Datei in Editor"""
+        """Load file into editor"""
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
         except OSError as e:
             msg = e.strerror if getattr(e, "strerror", None) else str(e)
-            QMessageBox.warning(self, "Datei öffnen fehlgeschlagen", f"{path}\n\n{msg}")
-            self.status.showMessage("❌ Öffnen fehlgeschlagen", 5000)
+            QMessageBox.warning(self, "Open Failed", f"{path}\n\n{msg}")
+            self.status.showMessage("❌ Open failed", 5000)
             return
 
         self.editor.setPlainText(content)
@@ -817,20 +816,20 @@ class Main(QMainWindow):
         title = f"PROGRAM (EDIT) — {os.path.basename(path)} — Vibe CNC"
         self.title_center.header.setText(title)
         self.editor.clear_error_lines()
-        self.status.showMessage(f"Geladen: {os.path.basename(path)}", 3000)
+        self.status.showMessage(f"Loaded: {os.path.basename(path)}", 3000)
 
-        # Zur Recent Files hinzufügen
+        # Add to Recent Files
         self._add_to_recent_files(path)
 
     # --- File Ops ---
     def action_open(self):
-        """Wird vom Shortcut aufgerufen - öffne Dialog"""
+        """Called by shortcut - open dialog"""
         self._open_file_dialog()
 
     def action_save(self):
         target_path = self.current_file
         if not target_path:
-            target_path, _ = QFileDialog.getSaveFileName(self, "Programm speichern", "DEIN_TEIL.nc", "G-Code (*.nc *.txt *.tap *.gcode)")
+            target_path, _ = QFileDialog.getSaveFileName(self, "Save Program", "YOUR_PART.nc", "G-Code (*.nc *.txt *.tap *.gcode)")
             if not target_path:
                 return
 
@@ -839,60 +838,60 @@ class Main(QMainWindow):
                 f.write(self.editor.toPlainText())
         except OSError as e:
             msg = e.strerror if getattr(e, "strerror", None) else str(e)
-            QMessageBox.warning(self, "Speichern fehlgeschlagen", f"{target_path}\n\n{msg}")
-            self.status.showMessage("❌ Speichern fehlgeschlagen", 5000)
+            QMessageBox.warning(self, "Save Failed", f"{target_path}\n\n{msg}")
+            self.status.showMessage("❌ Save failed", 5000)
             return
 
         self.current_file = target_path
         title = f"PROGRAM (EDIT) — {os.path.basename(target_path)} — Vibe CNC"
         self.title_center.header.setText(title)
-        self.status.showMessage(f"Gespeichert: {os.path.basename(target_path)}", 3000)
+        self.status.showMessage(f"Saved: {os.path.basename(target_path)}", 3000)
 
-        # Zur Recent Files hinzufügen
+        # Add to Recent Files
         self._add_to_recent_files(target_path)
 
     # --- Quick Sim (F5) ---
     def quick_sim(self):
-        """F5: Quick Sim mit CAMotics (Hot-Reload)"""
+        """F5: Quick Sim with CAMotics (Hot-Reload)"""
         code = self.editor.toPlainText()
         
-        # Auto-Lint vor Sim
+        # Auto-Lint before Sim
         findings = self.linter.run_all(code)
         if findings:
-            # Zeige Error-Marker
+            # Show error markers
             error_lines = [f['line'] for f in findings]
             self.editor.set_error_lines(error_lines)
             
-            # Warnung bei kritischen Fehlern (>2)
+            # Warning on critical errors (>2)
             if len(findings) > 2:
                 reply = QMessageBox.question(
                     self, 
-                    "Lint-Fehler", 
-                    f"{len(findings)} Fehler gefunden:\n\n" + 
-                    "\n".join([f"• Zeile {f['line']}: {f['rule']}" for f in findings[:5]]) +
+                    "Lint Errors", 
+                    f"{len(findings)} errors found:\n\n" + 
+                    "\n".join([f"• Line {f['line']}: {f['rule']}" for f in findings[:5]]) +
                     ("\n..." if len(findings) > 5 else "") +
-                    "\n\nTrotzdem simulieren?",
+                    "\n\nSimulate anyway?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 if reply != QMessageBox.StandardButton.Yes:
-                    self.status.showMessage(f"❌ Sim abgebrochen: {len(findings)} Fehler", 5000)
+                    self.status.showMessage(f"❌ Sim cancelled: {len(findings)} errors", 5000)
                     return
         else:
             self.editor.clear_error_lines()
         
-        # Starte CAMotics
-        self.status.showMessage("⚙️ Starte CAMotics...", 2000)
+        # Start CAMotics
+        self.status.showMessage("⚙️ Starting CAMotics...", 2000)
         ok, msg = self.camotics.quick_sim(code)
         
         if ok:
             self.status.showMessage(f"✅ {msg}", 5000)
         else:
             self.status.showMessage(f"❌ {msg}", 5000)
-            QMessageBox.warning(self, "CAMotics Fehler", msg)
+            QMessageBox.warning(self, "CAMotics Error", msg)
 
     # --- Save + VM Copy (Ctrl+Shift+S) ---
     def save_and_vm(self):
-        """Ctrl+Shift+S: Speichert und kopiert ins VM-Share"""
+        """Ctrl+Shift+S: Saves and copies to VM share"""
         code = self.editor.toPlainText()
         
         # Lint-Check
@@ -900,50 +899,50 @@ class Main(QMainWindow):
         if findings:
             error_lines = [f['line'] for f in findings]
             self.editor.set_error_lines(error_lines)
-            self.status.showMessage(f"⚠️ {len(findings)} Fehler — trotzdem in VM kopiert", 5000)
+            self.status.showMessage(f"⚠️ {len(findings)} errors — copied to VM anyway", 5000)
         else:
             self.editor.clear_error_lines()
         
-        # Dateiname bestimmen
+        # Determine filename
         if self.current_file:
             filename = os.path.basename(self.current_file)
         else:
             filename = "live_test.nc"
         
         # Copy to VM
-        self.status.showMessage("⚙️ Kopiere zu VM...", 2000)
+        self.status.showMessage("⚙️ Copying to VM...", 2000)
         ok, msg = self.camotics.save_and_copy_to_vm(code, filename)
         
         if ok:
             self.status.showMessage(f"✅ VM-Copy: {filename}", 5000)
-            self._append_system_message(f"✅ Datei in VM kopiert: {msg}")
+            self._append_system_message(f"✅ File copied to VM: {msg}")
         else:
-            self.status.showMessage(f"❌ VM-Copy Fehler", 5000)
-            QMessageBox.warning(self, "VM-Copy Fehler", msg)
+            self.status.showMessage(f"❌ VM Copy Error", 5000)
+            QMessageBox.warning(self, "VM Copy Error", msg)
 
     # --- Lint Only (Ctrl+L) ---
     def lint_only(self):
-        """Ctrl+L: Nur Linting, ohne KI"""
+        """Ctrl+L: Only linting, without AI"""
         code = self.editor.toPlainText()
         findings = self.linter.run_all(code)
 
         if findings:
             error_lines = [f['line'] for f in findings]
             self.editor.set_error_lines(error_lines)
-            self.status.showMessage(f"⚠️ Lint: {len(findings)} Fehler gefunden", 5000)
-            lint_text = f"<b>{len(findings)} Fund(e):</b><br>"
+            self.status.showMessage(f"⚠️ Lint: {len(findings)} errors found", 5000)
+            lint_text = f"<b>{len(findings)} finding(s):</b><br>"
             for f in findings:
-                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Zeile {f['line']}: {f['rule']}</span> — {f['message']}<br>"
+                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Line {f['line']}: {f['rule']}</span> — {f['message']}<br>"
             self._append_assistant_message("Lint", lint_text.rstrip('<br>'), is_error=True)
         else:
             self.editor.clear_error_lines()
             self.status.showMessage("✅ Lint: OK", 3000)
-            self._append_assistant_message("Lint", "✅ Keine Probleme gefunden")
+            self._append_assistant_message("Lint", "✅ No issues found")
 
     # --- Lint & AI ---
     def action_analyze(self):
-        """KI: ANALYZE Button + Enter im Input"""
-        # User-Eingabe anzeigen und leeren (falls vorhanden)
+        """AI: ANALYZE Button + Enter in Input"""
+        # Show user input and clear (if present)
         user_text = self.input.text().strip()
         if user_text:
             self._append_user_message(user_text)
@@ -955,21 +954,21 @@ class Main(QMainWindow):
         if findings:
             error_lines = [f['line'] for f in findings]
             self.editor.set_error_lines(error_lines)
-            lint_text = f"<b>{len(findings)} Fund(e):</b><br>"
+            lint_text = f"<b>{len(findings)} finding(s):</b><br>"
             for f in findings:
-                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Zeile {f['line']}: {f['rule']}</span> — {f['message']}<br>"
+                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Line {f['line']}: {f['rule']}</span> — {f['message']}<br>"
             self._append_assistant_message("Lint", lint_text.rstrip('<br>'), is_error=True)
         else:
             self.editor.clear_error_lines()
-            self._append_assistant_message("Lint", "✅ Keine Probleme gefunden")
+            self._append_assistant_message("Lint", "✅ No issues found")
 
         if self.cfg.data['ai'].get('offline', False):
-            self._append_assistant_message("VibeCNC", "Offline-Modus aktiv — keine KI-Abfrage.", is_error=True)
-            self.status.showMessage("⚠️ Offline-Modus", 3000)
+            self._append_assistant_message("VibeCNC", "Offline mode active — no AI queries.", is_error=True)
+            self.status.showMessage("⚠️ Offline Mode", 3000)
             return
 
         mode = self.cfg.data['ai'].get('mode', 'claude')
-        # Kontext bauen
+        # Build context
         selected = self.editor.textCursor().selectedText().replace('\u2029', '\n')
         snippet = selected if selected.strip() else code[:8000]
         tools_json = load_tools_json()
@@ -978,90 +977,90 @@ class Main(QMainWindow):
             with open(policies_path, "r", encoding="utf-8") as f:
                 policies = f.read()
         else:
-            policies = "Keine Policies gefunden."
+            policies = "No policies found."
 
         format_rules = """
-WICHTIG - Formatierung:
-- Nutze HTML-Tags für Struktur (wird in HTML-Widget angezeigt)
-- Überschriften: <b>Überschrift</b>
-- Absätze: Doppelte Zeilenumbrüche <br><br>
-- Listen: Bullet Points mit • oder nummeriert (1., 2., ...)
-- Code-Blöcke: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>code</pre>
-- KEINE Markdown (**, ##, etc.) - nur HTML!
+IMPORTANT - Formatting:
+- Use HTML tags for structure (displayed in HTML widget)
+- Headings: <b>Heading</b>
+- Paragraphs: Double line breaks <br><br>
+- Lists: Bullet points with • or numbered (1., 2., ...)
+- Code blocks: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>code</pre>
+- NO Markdown (**, ##, etc.) - HTML only!
 
-Beispiel gute Antwort:
-<b>Analyse-Ergebnis:</b><br><br>
-• Zeile 5: G21 fehlt im Header<br>
-• Zeile 12: G40 vor Werkzeugwechsel setzen<br><br>
-<b>Empfohlene Fixes:</b><br>
-1. Header erweitern mit G21<br>
-2. G40 vor T-Code einfügen
+Example good response:
+<b>Analysis Result:</b><br><br>
+• Line 5: G21 missing in header<br>
+• Line 12: Set G40 before tool change<br><br>
+<b>Recommended Fixes:</b><br>
+1. Extend header with G21<br>
+2. Insert G40 before T-code
 """
-        prompt = f"Maschine: FANUC 0i‑TF, Material: 42CrMo4\nPolicies:\n{policies}\nTools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\nCode:\n```\n{snippet}\n```\n\nAufgabe: Liste Regelverstöße (Zeile/Regel/Fix). Optional unified diff. Keine kosmetischen Änderungen.\n\n{format_rules}"
+        prompt = f"Machine: FANUC 0i-TF, Material: 42CrMo4\nPolicies:\n{policies}\nTools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\nCode:\n```\n{snippet}\n```\n\nTask: List rule violations (line/rule/fix). Optional unified diff. No cosmetic changes.\n\n{format_rules}"
         ai_fn = self.ai.ask_claude if mode == 'claude' else self.ai.ask_ollama
         role = "Claude" if mode == 'claude' else "LLM"
-        self._start_ai_task("⚙️ KI-Analyse läuft...", ai_fn, (prompt,), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
+        self._start_ai_task("⚙️ AI analysis running...", ai_fn, (prompt,), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
 
     def action_generate(self):
         """KI: GEN-CODE Button"""
         user = self.input.text().strip()
         if not user:
-            user = "Erzeuge G71-Schruppzyklus für T1, Zustellung 0.4, f0.25."
+            user = "Generate G71 roughing cycle for T1, DOC 0.4, f0.25."
 
-        # User-Eingabe anzeigen und leeren
+        # Show user input and clear
         self._append_user_message(user)
         self.input.clear()
 
         if self.cfg.data['ai'].get('offline', False):
-            offline_msg = "Offline — Gen‑Stub: G00/G01‑Block vorgeschlagen.<br><pre style='color:#6CFF6C;'>G00 X36. Z2.\nG01 Z0. F0.25\nG01 X-5.\nG00 X200.\n</pre>"
+            offline_msg = "Offline — Gen‑Stub: G00/G01 block suggested.<br><pre style='color:#6CFF6C;'>G00 X36. Z2.\nG01 Z0. F0.25\nG01 X-5.\nG00 X200.\n</pre>"
             self._append_assistant_message("VibeCNC", offline_msg, is_error=True)
-            self.status.showMessage("⚠️ Offline-Modus", 3000)
+            self.status.showMessage("⚠️ Offline Mode", 3000)
             return
 
-        # Formatierungs-Regeln hinzufügen
+        # Add formatting rules
         format_rules = """
 
-WICHTIG - Formatierung deiner Antwort:
-- Nutze HTML-Tags (wird in HTML-Widget angezeigt)
-- Überschriften: <b>Überschrift</b>
-- Absätze: Doppelte Zeilenumbrüche <br><br> zwischen Abschnitten
-- Listen: Bullet Points mit • oder nummeriert (1., 2., ...)
-- G-Code: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>G-Code hier</pre>
-- KEINE Markdown (**, ##, ```), nur HTML!
+IMPORTANT - Response formatting:
+- Use HTML tags (displayed in HTML widget)
+- Headings: <b>Heading</b>
+- Paragraphs: Double line breaks <br><br> between sections
+- Lists: Bullet points with • or numbered (1., 2., ...)
+- G-Code: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>G-Code here</pre>
+- NO Markdown (**, ##, ```), HTML only!
 
-Beispiel:
-<b>G-Code für Schruppzyklus:</b><br><br>
+Example:
+<b>G-Code for Roughing Cycle:</b><br><br>
 <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>
 G71 U1.0 R0.5
 G71 P10 Q20 U0.4 W0.1 D500 F0.25
 </pre><br>
-<b>Erklärung:</b><br>
-• U1.0: Zustellung<br>
-• D500: Drehzahl
+<b>Explanation:</b><br>
+• U1.0: Depth of cut<br>
+• D500: RPM
 """
         enhanced_prompt = user + format_rules
 
         mode = self.cfg.data['ai'].get('mode', 'claude')
         who = "Claude" if mode == 'claude' else "LLM"
-        self._start_ai_task("⚙️ KI generiert Code...", self.ai.ask, (enhanced_prompt,), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
+        self._start_ai_task("⚙️ AI generating code...", self.ai.ask, (enhanced_prompt,), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
 
     # --- Settings ---
     def action_settings(self):
-        """⚙️ SETTINGS Button → Öffne Settings Dialog"""
+        """⚙️ SETTINGS Button → Open Settings Dialog"""
         dialog = SettingsDialog(self.cfg, parent=self)
         dialog.exec()
 
     # --- Simulation Bridge (Legacy) ---
     def action_send_to_sim(self):
-        """SEND 2 SIM Button (mit Datei-Dialog)"""
+        """SEND 2 SIM Button (with File Dialog)"""
         # Save temp file and launch CAMotics OR copy to VM share
         tmp_dir = os.path.join(HERE, "_tmp")
         try:
             os.makedirs(tmp_dir, exist_ok=True)
         except OSError as e:
             msg = e.strerror if getattr(e, "strerror", None) else str(e)
-            QMessageBox.warning(self, "SIM-Export fehlgeschlagen", f"Temp-Verzeichnis konnte nicht erstellt werden:\n\n{msg}")
-            self.status.showMessage("❌ SIM-Export fehlgeschlagen", 5000)
+            QMessageBox.warning(self, "SIM Export Failed", f"Could not create temp directory:\n\n{msg}")
+            self.status.showMessage("❌ SIM export failed", 5000)
             return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(tmp_dir, f"sim_{ts}.nc")
@@ -1070,8 +1069,8 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
                 f.write(self.editor.toPlainText())
         except OSError as e:
             msg = e.strerror if getattr(e, "strerror", None) else str(e)
-            QMessageBox.warning(self, "SIM-Export fehlgeschlagen", f"Datei konnte nicht geschrieben werden:\n{path}\n\n{msg}")
-            self.status.showMessage("❌ SIM-Export fehlgeschlagen", 5000)
+            QMessageBox.warning(self, "SIM Export Failed", f"Could not write file:\n{path}\n\n{msg}")
+            self.status.showMessage("❌ SIM export failed", 5000)
             return
         
         ok, msg = self.camotics.launch(path)
@@ -1079,14 +1078,14 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
             # try share copy
             ok2, msg2 = self.camotics.copy_to_share(path)
             if ok2:
-                self._append_system_message(f"✅ Datei in VM‑Share kopiert: {msg2}")
+                self._append_system_message(f"✅ File copied to VM share: {msg2}")
                 self.status.showMessage(f"✅ VM-Copy: {os.path.basename(msg2)}", 5000)
             else:
-                self._append_assistant_message("VibeCNC", f"{msg} — Share fehlgeschlagen: {msg2}", is_error=True)
-                self.status.showMessage(f"❌ Sim-Fehler", 5000)
+                self._append_assistant_message("VibeCNC", f"{msg} — Share failed: {msg2}", is_error=True)
+                self.status.showMessage(f"❌ Sim Error", 5000)
         else:
-            self._append_system_message(f"✅ CAMotics gestartet ({msg})")
-            self.status.showMessage(f"✅ CAMotics gestartet", 5000)
+            self._append_system_message(f"✅ CAMotics started ({msg})")
+            self.status.showMessage(f"✅ CAMotics started", 5000)
 
     # --- Tool Integration Handlers ---
     def on_tool_right_click(self, position):
@@ -1124,9 +1123,9 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
         
         # Update status
         tool_name = tool_model.get_tool_info(tool_num).get("name", "")
-        self.status.showMessage(f"Tool T{tool_num:02d}01 geladen: {tool_name}", 3000)
+        self.status.showMessage(f"Tool T{tool_num:02d}01 loaded: {tool_name}", 3000)
 
-    # --- Persistenz ---
+    # --- Persistence ---
     def closeEvent(self, e: QCloseEvent):
         self._save_state(); return super().closeEvent(e)
     
@@ -1153,7 +1152,7 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
         if sb: self.btnSingleBlock.setChecked(True)
 
 if __name__ == "__main__":
-    # High-DPI Support für Windows 11
+    # High-DPI Support for Windows 11
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)

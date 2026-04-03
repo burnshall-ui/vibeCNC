@@ -33,7 +33,7 @@ def ensure_macro_db() -> None:
                 # inkompatibles Schema → neu anlegen
                 cur.execute("DROP TABLE IF EXISTS macros;")
                 conn.commit()
-        # Erstelle Zieltabelle (falls nicht vorhanden oder gedroppt)
+        # Create target table (if not exists or dropped)
         cur.execute(SCHEMA_SQL)
         # Seed examples (idempotent via OR IGNORE)
         seed = [
@@ -57,7 +57,7 @@ class MacroModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
         ensure_macro_db()
-        # zusätzliche Absicherung: Seed, falls DB bereits existiert, aber leer ist
+        # additional safeguard: Seed if DB already exists but is empty
         try:
             self._seed_examples_if_empty()
         except Exception:

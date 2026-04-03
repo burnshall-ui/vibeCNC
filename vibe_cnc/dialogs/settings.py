@@ -10,22 +10,21 @@ from PyQt6.QtWidgets import (
 
 
 class SettingsDialog(QDialog):
-    """Settings Dialog für VibeCNC"""
+    """Settings Dialog for VibeCNC"""
 
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self.cfg = config_manager
-        self.setWindowTitle("Einstellungen")
+        self.setWindowTitle("Settings")
         self.setModal(True)
         self.resize(700, 500)
 
         layout = QVBoxLayout(self)
 
-        # Tab Widget
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
 
-        # --- Tab 1: Maschine ---
+        # --- Tab 1: Machine ---
         machine_tab = QWidget()
         machine_layout = QFormLayout(machine_tab)
 
@@ -34,11 +33,11 @@ class SettingsDialog(QDialog):
         self.chuck_z_input.setValue(self.cfg.data.get('machine', {}).get('chuck_z_limit', -5.0))
         self.chuck_z_input.setSuffix(" mm")
         self.chuck_z_input.setDecimals(1)
-        machine_layout.addRow("Chuck Z-Limit (Kollisionsgrenze):", self.chuck_z_input)
+        machine_layout.addRow("Chuck Z-Limit (Collision Boundary):", self.chuck_z_input)
 
-        self.tabs.addTab(machine_tab, "⚙️ Maschine")
+        self.tabs.addTab(machine_tab, "Machine")
 
-        # --- Tab 2: KI ---
+        # --- Tab 2: AI ---
         ai_tab = QWidget()
         ai_layout = QFormLayout(ai_tab)
 
@@ -46,9 +45,9 @@ class SettingsDialog(QDialog):
         self.ai_mode_combo.addItems(["claude", "ollama"])
         current_mode = self.cfg.data.get('ai', {}).get('mode', 'ollama')
         self.ai_mode_combo.setCurrentText(current_mode)
-        ai_layout.addRow("KI-Modus:", self.ai_mode_combo)
+        ai_layout.addRow("AI Mode:", self.ai_mode_combo)
 
-        self.ai_offline_check = QCheckBox("Offline-Modus (keine API-Calls)")
+        self.ai_offline_check = QCheckBox("Offline Mode (no API calls)")
         self.ai_offline_check.setChecked(self.cfg.data.get('ai', {}).get('offline', False))
         ai_layout.addRow("", self.ai_offline_check)
 
@@ -64,9 +63,9 @@ class SettingsDialog(QDialog):
         )
         ai_layout.addRow("Ollama Model:", self.ollama_model_input)
 
-        self.tabs.addTab(ai_tab, "🤖 KI")
+        self.tabs.addTab(ai_tab, "AI")
 
-        # --- Tab 3: Pfade ---
+        # --- Tab 3: Paths ---
         paths_tab = QWidget()
         paths_layout = QFormLayout(paths_tab)
 
@@ -76,7 +75,7 @@ class SettingsDialog(QDialog):
         )
         paths_layout.addRow("CAMotics EXE:", self.camotics_path_input)
 
-        camotics_browse = QPushButton("Durchsuchen...")
+        camotics_browse = QPushButton("Browse...")
         camotics_browse.clicked.connect(self._browse_camotics)
         paths_layout.addRow("", camotics_browse)
 
@@ -84,9 +83,9 @@ class SettingsDialog(QDialog):
         self.vm_share_input.setText(
             self.cfg.data.get('paths', {}).get('sim_share', '\\\\linuxcnc-vm\\sim\\incoming')
         )
-        paths_layout.addRow("VM-Share (SMB):", self.vm_share_input)
+        paths_layout.addRow("VM Share (SMB):", self.vm_share_input)
 
-        self.tabs.addTab(paths_tab, "📁 Pfade")
+        self.tabs.addTab(paths_tab, "Paths")
 
         # --- Tab 4: UI ---
         ui_tab = QWidget()
@@ -96,14 +95,14 @@ class SettingsDialog(QDialog):
         self.font_size_input.setRange(8, 24)
         self.font_size_input.setValue(self.cfg.data.get('ui', {}).get('font_base_pt', 12))
         self.font_size_input.setSuffix(" pt")
-        ui_layout.addRow("Font-Größe:", self.font_size_input)
+        ui_layout.addRow("Font Size:", self.font_size_input)
 
-        self.tabs.addTab(ui_tab, "🎨 UI")
+        self.tabs.addTab(ui_tab, "UI")
 
         # --- Buttons ---
         btn_row = QHBoxLayout()
-        self.btn_save = QPushButton("Speichern")
-        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_save = QPushButton("Save")
+        self.btn_cancel = QPushButton("Cancel")
 
         self.btn_save.setObjectName("Softkey")
         self.btn_cancel.setObjectName("Softkey")
@@ -118,16 +117,13 @@ class SettingsDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
 
     def _browse_camotics(self):
-        """Browse-Dialog für CAMotics EXE"""
         path, _ = QFileDialog.getOpenFileName(
-            self, "CAMotics EXE auswählen", "", "Executable (*.exe);;Alle Dateien (*)"
+            self, "Select CAMotics EXE", "", "Executable (*.exe);;All Files (*)"
         )
         if path:
             self.camotics_path_input.setText(path)
 
     def save_settings(self):
-        """Speichere Settings in config.yaml"""
-        # Update config dict
         self.cfg.data['machine']['chuck_z_limit'] = self.chuck_z_input.value()
         self.cfg.data['ai']['mode'] = self.ai_mode_combo.currentText()
         self.cfg.data['ai']['offline'] = self.ai_offline_check.isChecked()
@@ -137,14 +133,13 @@ class SettingsDialog(QDialog):
         self.cfg.data['paths']['sim_share'] = self.vm_share_input.text().strip()
         self.cfg.data['ui']['font_base_pt'] = self.font_size_input.value()
 
-        # Schreibe YAML
         try:
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.yaml")
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.dump(self.cfg.data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-            QMessageBox.information(self, "Gespeichert", "Einstellungen wurden gespeichert.\nBitte VibeCNC neu starten, damit alle Änderungen wirksam werden.")
+            QMessageBox.information(self, "Saved", "Settings saved.\nPlease restart VibeCNC for all changes to take effect.")
             self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")

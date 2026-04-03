@@ -10,15 +10,15 @@ from vibe_cnc.macro_model import DB_PATH
 
 
 class MacroEditorDialog(QDialog):
-    """Dialog zum Bearbeiten/Erstellen von Macros"""
+    """Dialog for editing/creating Macros"""
 
     def __init__(self, macro_model, macro_nr=None, parent=None):
         super().__init__(parent)
         self.macro_model = macro_model
-        self.macro_nr = macro_nr  # None = Neu erstellen, sonst bearbeiten
+        self.macro_nr = macro_nr
         self.is_new = (macro_nr is None)
 
-        self.setWindowTitle("Macro bearbeiten" if not self.is_new else "Neues Macro")
+        self.setWindowTitle("Edit Macro" if not self.is_new else "New Macro")
         self.setModal(True)
         self.resize(600, 500)
 
@@ -28,47 +28,42 @@ class MacroEditorDialog(QDialog):
         # --- Form Fields ---
         form = QFormLayout()
 
-        # Macro-Nummer
         self.nr_input = QSpinBox()
         self.nr_input.setRange(1, 99999)
         self.nr_input.setValue(9000 if self.is_new else macro_nr)
-        form.addRow("Nummer (P-Wert):", self.nr_input)
+        form.addRow("Number (P-Value):", self.nr_input)
 
-        # Name
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("z.B. Bohrzyklus Peck")
+        self.name_input.setPlaceholderText("e.g. Peck Drilling Cycle")
         form.addRow("Name:", self.name_input)
 
-        # Category
         self.category_input = QLineEdit()
-        self.category_input.setPlaceholderText("z.B. Bohren, Drehen, Antasten")
-        form.addRow("Kategorie:", self.category_input)
+        self.category_input.setPlaceholderText("e.g. Drilling, Turning, Probing")
+        form.addRow("Category:", self.category_input)
 
-        # Call-Type
         self.call_type_combo = QComboBox()
         self.call_type_combo.addItems(["M98", "G65"])
-        form.addRow("Call-Type:", self.call_type_combo)
+        form.addRow("Call Type:", self.call_type_combo)
 
         layout.addLayout(form)
 
         # --- Description/Code ---
-        layout.addWidget(QLabel("Beschreibung / Code:"))
+        layout.addWidget(QLabel("Description / Code:"))
         self.description_input = QTextEdit()
-        self.description_input.setPlaceholderText("Beschreibung oder G-Code hier eingeben...")
+        self.description_input.setPlaceholderText("Enter description or G-Code here...")
         self.description_input.setMinimumHeight(200)
         layout.addWidget(self.description_input)
 
         # --- Buttons ---
         btn_row = QHBoxLayout()
-        self.btn_save = QPushButton("Speichern")
-        self.btn_delete = QPushButton("Löschen")
-        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_save = QPushButton("Save")
+        self.btn_delete = QPushButton("Delete")
+        self.btn_cancel = QPushButton("Cancel")
 
         self.btn_save.setObjectName("Softkey")
         self.btn_delete.setObjectName("Softkey")
         self.btn_cancel.setObjectName("Softkey")
 
-        # Delete-Button nur bei Edit anzeigen
         if self.is_new:
             self.btn_delete.hide()
 
@@ -83,15 +78,13 @@ class MacroEditorDialog(QDialog):
         self.btn_delete.clicked.connect(self.delete_macro)
         self.btn_cancel.clicked.connect(self.reject)
 
-        # --- Load existing macro ---
         if not self.is_new:
             self._load_macro()
 
     def _load_macro(self):
-        """Lade Macro-Daten aus DB"""
         macro_data = self.macro_model.get_macro(self.macro_nr)
         if not macro_data:
-            QMessageBox.warning(self, "Fehler", f"Macro {self.macro_nr} nicht gefunden.")
+            QMessageBox.warning(self, "Error", f"Macro {self.macro_nr} not found.")
             self.reject()
             return
 
@@ -107,7 +100,6 @@ class MacroEditorDialog(QDialog):
             self.call_type_combo.setCurrentIndex(index)
 
     def save_macro(self):
-        """Speichere Macro in DB"""
         nr = self.nr_input.value()
         name = self.name_input.text().strip()
         category = self.category_input.text().strip()
@@ -115,20 +107,18 @@ class MacroEditorDialog(QDialog):
         description = self.description_input.toPlainText().strip()
 
         if not name:
-            QMessageBox.warning(self, "Validierung", "Name darf nicht leer sein.")
+            QMessageBox.warning(self, "Validation", "Name must not be empty.")
             return
 
-        # DB Update
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
 
             if self.is_new:
-                # Prüfe ob NR schon existiert
                 cur.execute("SELECT COUNT(1) FROM macros WHERE nr=?;", (nr,))
                 exists = cur.fetchone()[0] > 0
                 if exists:
-                    QMessageBox.warning(self, "Fehler", f"Macro-Nummer {nr} existiert bereits.")
+                    QMessageBox.warning(self, "Error", f"Macro number {nr} already exists.")
                     conn.close()
                     return
 
@@ -147,31 +137,27 @@ class MacroEditorDialog(QDialog):
             conn.commit()
             conn.close()
 
-            # Refresh model
             self.macro_model.rows = self.macro_model._load_rows()
             self.macro_model.layoutChanged.emit()
 
             self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
     def delete_macro(self):
-        """Lösche Macro aus DB"""
         if self.is_new:
             return
 
-        # Bestätigung
         reply = QMessageBox.question(
-            self, "Löschen bestätigen",
-            f"Macro {self.macro_nr} wirklich löschen?",
+            self, "Confirm Delete",
+            f"Really delete Macro {self.macro_nr}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        # DB DELETE
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
@@ -179,11 +165,10 @@ class MacroEditorDialog(QDialog):
             conn.commit()
             conn.close()
 
-            # Refresh model
             self.macro_model.rows = self.macro_model._load_rows()
             self.macro_model.layoutChanged.emit()
 
             self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Löschen fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Error", f"Delete failed:\n{e}")

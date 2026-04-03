@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 class ToolEditorDialog(QDialog):
-    """Dialog zum Bearbeiten/Erstellen von Tools"""
+    """Dialog for editing/creating Tools"""
 
     def __init__(self, tool_model, tool_num=None, parent=None):
         super().__init__(parent)
@@ -22,7 +22,7 @@ class ToolEditorDialog(QDialog):
         self.tool_num = tool_num
         self.is_new = (tool_num is None)
 
-        self.setWindowTitle("Tool bearbeiten" if not self.is_new else "Neues Tool")
+        self.setWindowTitle("Edit Tool" if not self.is_new else "New Tool")
         self.setModal(True)
         self.resize(500, 600)
 
@@ -31,50 +31,44 @@ class ToolEditorDialog(QDialog):
         # --- Form Fields ---
         form = QFormLayout()
 
-        # Tool Number
         self.t_input = QSpinBox()
         self.t_input.setRange(1, 999)
         self.t_input.setValue(1 if self.is_new else tool_num)
-        form.addRow("Tool-Nummer (T):", self.t_input)
+        form.addRow("Tool Number (T):", self.t_input)
 
-        # Name
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("z.B. CNMG1204P-S Außen")
+        self.name_input.setPlaceholderText("e.g. CNMG1204P-S External")
         form.addRow("Name:", self.name_input)
 
-        # Type
         self.type_combo = QComboBox()
         self.type_combo.addItems([
             "turn_rough", "turn_finish", "groove", "drill",
             "thread_form", "boring", "parting", "other"
         ])
-        form.addRow("Typ:", self.type_combo)
+        form.addRow("Type:", self.type_combo)
 
-        # Diameter (optional)
         self.d_mm_input = QDoubleSpinBox()
         self.d_mm_input.setRange(0, 999)
         self.d_mm_input.setDecimals(2)
         self.d_mm_input.setSuffix(" mm")
-        self.d_mm_input.setSpecialValueText("(leer)")
-        form.addRow("Durchmesser (d):", self.d_mm_input)
+        self.d_mm_input.setSpecialValueText("(empty)")
+        form.addRow("Diameter (d):", self.d_mm_input)
 
-        # Insert Radius (optional)
         self.insert_radius_input = QDoubleSpinBox()
         self.insert_radius_input.setRange(0, 99)
         self.insert_radius_input.setDecimals(2)
         self.insert_radius_input.setSuffix(" mm")
-        self.insert_radius_input.setSpecialValueText("(leer)")
-        form.addRow("Eckenradius:", self.insert_radius_input)
+        self.insert_radius_input.setSpecialValueText("(empty)")
+        form.addRow("Insert Radius:", self.insert_radius_input)
 
-        # Holder (optional)
         self.holder_input = QLineEdit()
-        self.holder_input.setPlaceholderText("z.B. PCLNR2525")
-        form.addRow("Halter:", self.holder_input)
+        self.holder_input.setPlaceholderText("e.g. PCLNR2525")
+        form.addRow("Holder:", self.holder_input)
 
         layout.addLayout(form)
 
         # --- Limits Section ---
-        layout.addWidget(QLabel("<b>Bearbeitungsgrenzen:</b>"))
+        layout.addWidget(QLabel("<b>Machining Limits:</b>"))
         limits_form = QFormLayout()
 
         self.vc_max_input = QDoubleSpinBox()
@@ -89,22 +83,22 @@ class ToolEditorDialog(QDialog):
         self.ap_max_input.setDecimals(2)
         self.ap_max_input.setSuffix(" mm")
         self.ap_max_input.setValue(2.0)
-        limits_form.addRow("Ap max (Zustellung):", self.ap_max_input)
+        limits_form.addRow("Ap max (DOC):", self.ap_max_input)
 
         self.f_max_input = QDoubleSpinBox()
         self.f_max_input.setRange(0, 9.99)
         self.f_max_input.setDecimals(3)
-        self.f_max_input.setSuffix(" mm/U")
+        self.f_max_input.setSuffix(" mm/rev")
         self.f_max_input.setValue(0.25)
-        limits_form.addRow("F max (Vorschub):", self.f_max_input)
+        limits_form.addRow("F max (Feed):", self.f_max_input)
 
         layout.addLayout(limits_form)
 
         # --- Buttons ---
         btn_row = QHBoxLayout()
-        self.btn_save = QPushButton("Speichern")
-        self.btn_delete = QPushButton("Löschen")
-        self.btn_cancel = QPushButton("Abbrechen")
+        self.btn_save = QPushButton("Save")
+        self.btn_delete = QPushButton("Delete")
+        self.btn_cancel = QPushButton("Cancel")
 
         self.btn_save.setObjectName("Softkey")
         self.btn_delete.setObjectName("Softkey")
@@ -124,15 +118,13 @@ class ToolEditorDialog(QDialog):
         self.btn_delete.clicked.connect(self.delete_tool)
         self.btn_cancel.clicked.connect(self.reject)
 
-        # --- Load existing tool ---
         if not self.is_new:
             self._load_tool()
 
     def _load_tool(self):
-        """Lade Tool-Daten aus JSON"""
         tool_data = self.tool_model.get_tool_info(self.tool_num)
         if not tool_data:
-            QMessageBox.warning(self, "Fehler", f"Tool {self.tool_num} nicht gefunden.")
+            QMessageBox.warning(self, "Error", f"Tool {self.tool_num} not found.")
             self.reject()
             return
 
@@ -154,12 +146,11 @@ class ToolEditorDialog(QDialog):
         self.f_max_input.setValue(limits.get('f_max', 0.25))
 
     def save_tool(self):
-        """Speichere Tool in tools.json"""
         t = self.t_input.value()
         name = self.name_input.text().strip()
 
         if not name:
-            QMessageBox.warning(self, "Validierung", "Name darf nicht leer sein.")
+            QMessageBox.warning(self, "Validation", "Name must not be empty.")
             return
 
         # Build tool dict
@@ -200,7 +191,7 @@ class ToolEditorDialog(QDialog):
             if not found:
                 # Check if T already exists (for new tools)
                 if self.is_new and any(item.get("t") == t for item in tool_table):
-                    QMessageBox.warning(self, "Fehler", f"Tool-Nummer {t} existiert bereits.")
+                    QMessageBox.warning(self, "Error", f"Tool number {t} already exists.")
                     return
                 # Add new
                 tool_table.append(tool_data)
@@ -211,7 +202,6 @@ class ToolEditorDialog(QDialog):
             with open(tools_json_path, "w", encoding="utf-8") as f:
                 json.dump(j, f, indent=2, ensure_ascii=False)
 
-            # Refresh model
             self.tool_model.rows = self.tool_model._load_tools()
             self.tool_model.tool_data = self.tool_model._load_tool_data()
             self.tool_model.layoutChanged.emit()
@@ -219,16 +209,15 @@ class ToolEditorDialog(QDialog):
             self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
     def delete_tool(self):
-        """Lösche Tool aus tools.json"""
         if self.is_new:
             return
 
         reply = QMessageBox.question(
-            self, "Löschen bestätigen",
-            f"Tool {self.tool_num} wirklich löschen?",
+            self, "Confirm Delete",
+            f"Really delete Tool {self.tool_num}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
@@ -247,7 +236,6 @@ class ToolEditorDialog(QDialog):
             with open(tools_json_path, "w", encoding="utf-8") as f:
                 json.dump(j, f, indent=2, ensure_ascii=False)
 
-            # Refresh model
             self.tool_model.rows = self.tool_model._load_tools()
             self.tool_model.tool_data = self.tool_model._load_tool_data()
             self.tool_model.layoutChanged.emit()
@@ -255,4 +243,4 @@ class ToolEditorDialog(QDialog):
             self.accept()
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Löschen fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Error", f"Delete failed:\n{e}")

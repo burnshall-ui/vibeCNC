@@ -8,40 +8,39 @@ from PyQt6.QtWidgets import (
 
 
 class FindReplaceDialog(QDialog):
-    """Find & Replace Dialog für den G-Code Editor"""
+    """Find & Replace Dialog for the G-Code Editor"""
 
     def __init__(self, editor, parent=None):
         super().__init__(parent)
         self.editor = editor
         self.last_match_pos = -1
 
-        self.setWindowTitle("Suchen & Ersetzen")
-        self.setModal(False)  # Non-modal, damit man weiter im Editor arbeiten kann
+        self.setWindowTitle("Find & Replace")
+        self.setModal(False)
         self.resize(500, 200)
 
-        # Layout
         layout = QVBoxLayout(self)
 
         # --- Find Row ---
         find_row = QHBoxLayout()
-        find_row.addWidget(QLabel("Suchen:"))
+        find_row.addWidget(QLabel("Find:"))
         self.find_input = QLineEdit()
-        self.find_input.setPlaceholderText("Text eingeben...")
+        self.find_input.setPlaceholderText("Enter text...")
         find_row.addWidget(self.find_input)
         layout.addLayout(find_row)
 
         # --- Replace Row ---
         replace_row = QHBoxLayout()
-        replace_row.addWidget(QLabel("Ersetzen:"))
+        replace_row.addWidget(QLabel("Replace:"))
         self.replace_input = QLineEdit()
-        self.replace_input.setPlaceholderText("Ersetzungstext...")
+        self.replace_input.setPlaceholderText("Replacement text...")
         replace_row.addWidget(self.replace_input)
         layout.addLayout(replace_row)
 
         # --- Options ---
         options_row = QHBoxLayout()
-        self.case_sensitive = QCheckBox("Groß-/Kleinschreibung")
-        self.whole_words = QCheckBox("Nur ganze Wörter")
+        self.case_sensitive = QCheckBox("Case Sensitive")
+        self.whole_words = QCheckBox("Whole Words Only")
         options_row.addWidget(self.case_sensitive)
         options_row.addWidget(self.whole_words)
         options_row.addStretch()
@@ -49,11 +48,11 @@ class FindReplaceDialog(QDialog):
 
         # --- Buttons ---
         btn_row = QHBoxLayout()
-        self.btn_find_next = QPushButton("Weiter")
-        self.btn_find_prev = QPushButton("Zurück")
-        self.btn_replace = QPushButton("Ersetzen")
-        self.btn_replace_all = QPushButton("Alle ersetzen")
-        self.btn_close = QPushButton("Schließen")
+        self.btn_find_next = QPushButton("Next")
+        self.btn_find_prev = QPushButton("Previous")
+        self.btn_replace = QPushButton("Replace")
+        self.btn_replace_all = QPushButton("Replace All")
+        self.btn_close = QPushButton("Close")
 
         btn_row.addWidget(self.btn_find_prev)
         btn_row.addWidget(self.btn_find_next)
@@ -72,23 +71,19 @@ class FindReplaceDialog(QDialog):
         self.find_input.returnPressed.connect(self.find_next)
         self.replace_input.returnPressed.connect(self.replace_current)
 
-        # Focus auf Find-Input
         self.find_input.setFocus()
 
     def find_next(self):
-        """Suche nächstes Vorkommen"""
         search_text = self.find_input.text()
         if not search_text:
             return
 
-        # Suchoptionen
         flags = QTextDocument.FindFlag(0)
         if self.case_sensitive.isChecked():
             flags |= QTextDocument.FindFlag.FindCaseSensitively
         if self.whole_words.isChecked():
             flags |= QTextDocument.FindFlag.FindWholeWords
 
-        # Suche ab aktueller Cursor-Position
         cursor = self.editor.textCursor()
         found_cursor = self.editor.document().find(search_text, cursor, flags)
 
@@ -96,29 +91,25 @@ class FindReplaceDialog(QDialog):
             self.editor.setTextCursor(found_cursor)
             self.last_match_pos = found_cursor.position()
         else:
-            # Wrap around - von Anfang suchen
             cursor.movePosition(cursor.MoveOperation.Start)
             found_cursor = self.editor.document().find(search_text, cursor, flags)
             if not found_cursor.isNull():
                 self.editor.setTextCursor(found_cursor)
                 self.last_match_pos = found_cursor.position()
             else:
-                QMessageBox.information(self, "Suchen", f"'{search_text}' nicht gefunden.")
+                QMessageBox.information(self, "Find", f"'{search_text}' not found.")
 
     def find_previous(self):
-        """Suche vorheriges Vorkommen"""
         search_text = self.find_input.text()
         if not search_text:
             return
 
-        # Suchoptionen
         flags = QTextDocument.FindFlag.FindBackward
         if self.case_sensitive.isChecked():
             flags |= QTextDocument.FindFlag.FindCaseSensitively
         if self.whole_words.isChecked():
             flags |= QTextDocument.FindFlag.FindWholeWords
 
-        # Suche rückwärts ab aktueller Cursor-Position
         cursor = self.editor.textCursor()
         found_cursor = self.editor.document().find(search_text, cursor, flags)
 
@@ -126,17 +117,15 @@ class FindReplaceDialog(QDialog):
             self.editor.setTextCursor(found_cursor)
             self.last_match_pos = found_cursor.position()
         else:
-            # Wrap around - von Ende suchen
             cursor.movePosition(cursor.MoveOperation.End)
             found_cursor = self.editor.document().find(search_text, cursor, flags)
             if not found_cursor.isNull():
                 self.editor.setTextCursor(found_cursor)
                 self.last_match_pos = found_cursor.position()
             else:
-                QMessageBox.information(self, "Suchen", f"'{search_text}' nicht gefunden.")
+                QMessageBox.information(self, "Find", f"'{search_text}' not found.")
 
     def replace_current(self):
-        """Ersetze aktuell markierte Fundstelle"""
         search_text = self.find_input.text()
         replace_text = self.replace_input.text()
 
@@ -146,33 +135,26 @@ class FindReplaceDialog(QDialog):
         cursor = self.editor.textCursor()
         if cursor.hasSelection() and cursor.selectedText() == search_text:
             cursor.insertText(replace_text)
-            # Suche nächstes Vorkommen
             self.find_next()
         else:
-            # Kein Match selektiert - suche erstmal
             self.find_next()
 
     def replace_all(self):
-        """Ersetze alle Vorkommen"""
         search_text = self.find_input.text()
         replace_text = self.replace_input.text()
 
         if not search_text:
             return
 
-        # Suchoptionen
         flags = QTextDocument.FindFlag(0)
         if self.case_sensitive.isChecked():
             flags |= QTextDocument.FindFlag.FindCaseSensitively
         if self.whole_words.isChecked():
             flags |= QTextDocument.FindFlag.FindWholeWords
 
-        # Zähle Ersetzungen
         count = 0
         cursor = self.editor.textCursor()
-        cursor.beginEditBlock()  # Undo-Block für alle Ersetzungen
-
-        # Start vom Anfang
+        cursor.beginEditBlock()
         cursor.movePosition(cursor.MoveOperation.Start)
 
         while True:
@@ -186,6 +168,6 @@ class FindReplaceDialog(QDialog):
         cursor.endEditBlock()
 
         if count > 0:
-            QMessageBox.information(self, "Ersetzen", f"{count} Vorkommen ersetzt.")
+            QMessageBox.information(self, "Replace", f"{count} occurrence(s) replaced.")
         else:
-            QMessageBox.information(self, "Ersetzen", f"'{search_text}' nicht gefunden.")
+            QMessageBox.information(self, "Replace", f"'{search_text}' not found.")

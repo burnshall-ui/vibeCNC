@@ -38,7 +38,7 @@ class GCodeHighlighter(QSyntaxHighlighter):
         ]
 
     def highlightBlock(self, text: str):
-        # Kommentare zuerst
+        # Comments first
         for rx, fmt in self.rules[-2:]:
             for m in rx.finditer(text):
                 self.setFormat(m.start(), m.end()-m.start(), fmt)
@@ -60,8 +60,8 @@ class GCodeEditor(QPlainTextEdit):
     def __init__(self, colors: dict):
         super().__init__()
         self.c = colors
-        self.error_lines = []  # Liste von Fehler-Zeilen
-        self.sim_current_line = None  # Aktuelle Simulationszeile (gelber Marker)
+        self.error_lines = []  # List of error lines
+        self.sim_current_line = None  # Current simulation line (yellow marker)
 
         self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -112,12 +112,12 @@ class GCodeEditor(QPlainTextEdit):
                 number = str(blockNumber + 1)
                 line_num = blockNumber + 1
 
-                # Gelber Simulations-Marker (vertikaler Balken links)
+                # Yellow simulation marker (vertical bar on the left)
                 if self.sim_current_line == line_num:
                     marker_rect = QRect(0, top, 4, int(self.blockBoundingRect(block).height()))
                     painter.fillRect(marker_rect, QColor(self.c['FANUC_YELLOW']))
 
-                # Markiere Error-Zeilen rot
+                # Mark error lines red
                 if line_num in self.error_lines:
                     painter.setPen(QColor("#FF4444"))
                 else:
@@ -131,24 +131,24 @@ class GCodeEditor(QPlainTextEdit):
             blockNumber += 1
 
     def set_error_lines(self, line_numbers: list):
-        """Markiert Fehler-Zeilen mit rotem Hintergrund"""
+        """Marks error lines with a red background"""
         self.error_lines = line_numbers
         self._lineArea.update()  # Update Line-Numbers
         self._highlightCurrentLine()  # Update Highlighting
 
     def clear_error_lines(self):
-        """Entfernt alle Fehler-Marker"""
+        """Removes all error markers"""
         self.error_lines = []
         self._lineArea.update()
         self._highlightCurrentLine()
 
     def set_sim_line(self, line_number: int):
-        """Setzt den gelben Simulations-Marker auf eine Zeile"""
+        """Sets the yellow simulation marker to a line"""
         self.sim_current_line = line_number
         self._lineArea.update()
 
     def clear_sim_line(self):
-        """Entfernt den Simulations-Marker"""
+        """Removes the simulation marker"""
         self.sim_current_line = None
         self._lineArea.update()
 
