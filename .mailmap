@@ -1,0 +1,15 @@
+# Canonical commit identity for this repository.
+#
+# Commits were made from several machines with differing git configs. This maps
+# every stray name/address onto one identity so `git log`, `git shortlog` and
+# `git blame` show a single author.
+#
+# Note: this is presentation only. It does not rewrite history, and GitHub's web
+# UI ignores .mailmap — the original addresses remain in the commit objects.
+# Preventing new ones is a matter of `git config` on each machine.
+
+burnshall-ui <burnshall-ui@users.noreply.github.com> <burn.shall@googlemail.com>
+burnshall-ui <burnshall-ui@users.noreply.github.com> <burnshall-ui@github.com>
+burnshall-ui <burnshall-ui@users.noreply.github.com> <tomasz@tomaszs-air.speedport.ip>
+burnshall-ui <burnshall-ui@users.noreply.github.com> <t.sporys@t-online.de>
+burnshall-ui <burnshall-ui@users.noreply.github.com> Thomas <burnshall-ui@users.noreply.github.com>
