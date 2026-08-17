@@ -3,6 +3,10 @@ from types import SimpleNamespace
 
 from vibe_cnc.lint_engine import LintEngine
 
+# Shared so a rename in the engine breaks the positive test below loudly,
+# instead of quietly emptying the filters and turning these tests green.
+M_RULE = "M-Invariant"
+
 
 def make_cfg(**policy_overrides):
     policies = {
@@ -22,7 +26,7 @@ class LintEngineProtectedMTests(unittest.TestCase):
         findings = engine.run_all("(M8)\n; M8\nG01 X1 ; M8")
 
         self.assertEqual(
-            [finding for finding in findings if finding["rule"] == "M-Invarianz"],
+            [finding for finding in findings if finding["rule"] == M_RULE],
             [],
         )
 
@@ -32,6 +36,6 @@ class LintEngineProtectedMTests(unittest.TestCase):
         findings = engine.run_all("M8 M9")
 
         self.assertEqual(
-            [finding["message"] for finding in findings if finding["rule"] == "M-Invarianz"],
-            ["M8 nicht mit anderem M-Code überschreiben."],
+            [finding["message"] for finding in findings if finding["rule"] == M_RULE],
+            ["Do not override M8 with another M-code."],
         )
