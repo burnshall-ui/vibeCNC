@@ -11,6 +11,20 @@
 
 **A modern, Fanuc-style CNC simulator with AI-powered G-Code assistance**
 
+> ### ⚠️ Never run generated G-code on a real machine unverified
+>
+> Vibe CNC is a **simulator and an editing aid**. Its collision detection, lint
+> rules and AI review are heuristics — they find common mistakes, they do not
+> prove a program safe. An LLM will confidently produce plausible G-code that is
+> wrong about your tooling, your offsets, your chuck and your stock.
+>
+> Before any program touches a machine: read every line yourself, verify the
+> tool table and work offsets on the control, dry-run above the part with
+> generous Z clearance, and keep a hand on the feed hold. Treat the output the
+> way you would treat code from a stranger — because that is what it is.
+>
+> The authors accept no liability for crashes, scrapped parts or injury.
+
 [![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt-6-green.svg)](https://www.riverbankcomputing.com/software/pyqt/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -161,7 +175,7 @@ ai:
   offline: false            # true = no AI calls
 
   ollama:
-    base_url: "http://127.0.0.1:11111/api/chat"
+    base_url: "http://127.0.0.1:11434/api/chat"
     model: "granite3.3:8b"  # Fast and accurate
 
   anthropic:
