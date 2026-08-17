@@ -1,6 +1,6 @@
 import unittest
 
-from vibe_cnc.gcode_plotter import GCodeParser
+from vibe_cnc.gcode_parser import GCodeParser
 
 
 class GCodeParserCommentTests(unittest.TestCase):
