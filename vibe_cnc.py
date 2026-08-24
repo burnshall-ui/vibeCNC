@@ -317,7 +317,6 @@ class Main(QMainWindow):
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00DD00, stop:1 #009900);
                 color: #FFF;
                 font-weight: bold;
-                font-size: 14px;
                 border: 2px solid #00FF00;
                 border-radius: 4px;
                 padding: 10px 20px;
@@ -367,10 +366,17 @@ class Main(QMainWindow):
         set_font(self.editor, 0.95)  # Editor: smaller
         set_font(self.chat, 0.9)     # Chat: smaller
         set_font(self.input, 0.9)    # Input: smaller
-        set_font(self.table, 0.9)    # Table: smaller
-        set_font(self.macroTable, 0.9)  # Macro table: smaller
+        # The libraries are read at a glance while the machine runs, so they get
+        # the full base size rather than the 0.9 the code panes use.
+        set_font(self.table, 1.0)
+        set_font(self.macroTable, 1.0)
         for b in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen, self.btnSettings]:
             set_font(b, 0.9); b.setMinimumHeight(int(34 * scale))
+        # The four control buttons were the only widgets left at Qt's own
+        # default, which on macOS is about 10.5pt against the 8.1pt everything
+        # else had settled on — a third larger, and it showed.
+        for b in [self.btnCycleStart, self.btnFeedHold, self.btnOptStop, self.btnSingleBlock]:
+            set_font(b, 1.0)
         for l in self.findChildren(QLabel, "PanelTitle"):
             f = l.font(); f.setPointSizeF(self.base_pt * scale * 0.95); f.setBold(True); l.setFont(f)
         # Tabs (TOOLS/MACROS): normal size
