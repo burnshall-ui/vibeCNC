@@ -2,6 +2,14 @@ import re, json
 from typing import List, Dict
 
 class LintEngine:
+    # Rule labels for the codes the parser records. The UI shows this string,
+    # so it has to read like the hand-written rules above it.
+    PARSER_RULES = {
+        "ARC_R_TOO_SMALL": "Arc R",
+        "ARC_R_ZERO_CHORD": "Arc R",
+        "ARC_NO_CENTER": "Arc",
+    }
+
     def __init__(self, cfg):
         p = cfg.data.get("policies", {})
         self.required = p.get("require_header_codes", ["G18","G40","G80","G97"])
@@ -115,7 +123,34 @@ class LintEngine:
         # Open compensation at program end
         if comp_active:
             finds.append(self._f(len(lines), "G41/G42", "Set G40 before program end."))
+
+        # 7) Geometry the parser could not make sense of
+        finds.extend(self._parser_findings(code))
+
+        # One list, in program order. Sorting is stable, so findings that share
+        # a line keep the order the rules above produced them in.
+        finds.sort(key=lambda f: f["line"])
         return finds
+
+    def _parser_findings(self, code: str) -> List[Dict]:
+        """Warnings the parser records while building the toolpaths.
+
+        Impossible R geometry, arcs without a centre. The parser has always
+        known about these; until they were routed here nothing read the list,
+        so the operator saw a missing arc and no explanation for it.
+        """
+        try:
+            from .gcode_parser import GCodeParser
+            parser = GCodeParser()
+            parser.parse(code)
+        except Exception:
+            # Linting must never fail because the parser choked on something.
+            return []
+
+        return [self._f(w["line"],
+                        self.PARSER_RULES.get(w["code"], "Geometry"),
+                        w["message"])
+                for w in parser.warnings]
 
     def _first_index(self, lines, pattern):
         rx = re.compile(pattern)
