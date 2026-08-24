@@ -1,17 +1,13 @@
 # gcode_plotter.py — 2D workpiece visualization for Fanuc lathes
-import re
 import math
 import hashlib
-from typing import List, Tuple, Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 from PyQt6.QtCore import QTimer, pyqtSignal, Qt
 import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import numpy as np
 
 
 # GCodeParser lives in gcode_parser so it stays importable without a GUI stack.
@@ -540,7 +536,6 @@ class GCodePlotterWidget(QWidget):
         self.live_text = None
         self._setup_plot()
 
-        has_paths = False
 
         # Chuck zone (clamping area) - red hatching
         xlims = self.ax.get_xlim()
@@ -559,14 +554,12 @@ class GCodePlotterWidget(QWidget):
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
                 self.ax.plot([x1, x2], [z1, z2], color='#555', linestyle='--', linewidth=1, zorder=1)
-                has_paths = True
 
         # Cutting paths (G01) - green solid
         for segment in self.paths_cache['cut']:
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
                 self.ax.plot([x1, x2], [z1, z2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-                has_paths = True
 
         # Compensated cutting paths (G41/G42) - yellow dashed
         for segment in self.paths_cache.get('comp_cut', []):
@@ -574,7 +567,6 @@ class GCodePlotterWidget(QWidget):
             if self.live_max_line is None or line <= self.live_max_line:
                 self.ax.plot([x1, x2], [z1, z2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
                             linestyle='--', alpha=0.9, zorder=3)
-                has_paths = True
 
         # Compensated arcs (G41/G42) - yellow dashed
         for arc in self.paths_cache.get('comp_arc', []):
@@ -582,14 +574,12 @@ class GCodePlotterWidget(QWidget):
                 self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
                                linewidth=1.5, linestyle='--', alpha=0.9,
                                zorder=3)
-                has_paths = True
 
         # Circular arcs (G02/G03)
         for arc in self.paths_cache['arc']:
             if self.live_max_line is None or arc['line'] <= self.live_max_line:
                 self._draw_arc(arc, color=self.colors['CRT_GREEN'],
                                linewidth=2, zorder=2)
-                has_paths = True
 
         # Collisions
         for segment in self.paths_cache['collisions']:

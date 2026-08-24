@@ -41,4 +41,20 @@ jobs:
       - name: Run tests that need PyQt6
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest tests.test_tool_model tests.test_arc_rendering -v
+        run: python -m unittest tests.test_tool_model tests.test_arc_rendering tests.test_ai_worker -v
+
+  # Dead imports and unused variables grew back once already, so the gate is in
+  # CI rather than in a habit. F covers pyflakes (unused, undefined, redefined),
+  # E9 the syntax and IO errors that make a file unrunnable.
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Check for dead and broken code
+        run: ruff check --select=F,E9 .

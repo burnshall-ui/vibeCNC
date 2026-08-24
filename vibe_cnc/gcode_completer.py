@@ -1,8 +1,7 @@
 # gcode_completer.py — Context-aware Autocomplete for G-Code
-import re
-from PyQt6.QtCore import Qt, QStringListModel, QAbstractListModel, QModelIndex, QVariant, QObject, QEvent
+from PyQt6.QtCore import Qt, QAbstractListModel, QModelIndex, QVariant, QObject, QEvent
 from PyQt6.QtWidgets import QCompleter
-from PyQt6.QtGui import QTextCursor, QKeyEvent
+from PyQt6.QtGui import QTextCursor
 
 class GCodeCompleterModel(QAbstractListModel):
     """Custom Model for context-aware Autocomplete"""

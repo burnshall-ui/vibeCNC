@@ -1,15 +1,14 @@
 # vibe_cnc.py — Main program (UI + Wiring) — Vibe CNC
-import os, sys, json, re, subprocess, shutil
+import os, sys, json, re
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QSize, QRect, QTimer, QSettings, QEvent, QObject, pyqtSignal, QThread, QRunnable, QThreadPool, pyqtSlot
-from PyQt6.QtGui import QFont, QColor, QTextFormat, QAction, QKeySequence, QIcon, QCloseEvent, QTextDocument
+from PyQt6.QtCore import Qt, QSize, QTimer, QSettings, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTableView, QPlainTextEdit, QTextEdit, QLineEdit, QLabel, QPushButton,
-    QHeaderView, QFileDialog, QAbstractItemView, QFrame, QMessageBox, QStatusBar,
-    QDialog, QCheckBox, QComboBox, QSpinBox, QFormLayout, QMenu, QTabWidget,
-    QDoubleSpinBox
+    QTableView, QTextEdit, QLineEdit, QLabel, QPushButton,
+    QHeaderView, QFileDialog, QAbstractItemView, QMessageBox, QStatusBar,
+    QMenu
 )
 
 from vibe_cnc.settings_manager import SettingsManager
@@ -35,7 +34,13 @@ class AIWorker(QRunnable):
         self.args = args
         self.callback = callback
         self.signals = AIWorkerSignals()
-        self.signals.finished.connect(callback)
+        # Explicitly queued: run() executes on a QThreadPool thread, and the
+        # callback touches widgets, so it has to be delivered on the thread that
+        # owns them. AutoConnection happens to do the right thing here only
+        # because this QObject is constructed on the main thread — that is where
+        # the signals object gets its affinity from, and it is an accident of
+        # the call site rather than something this class guarantees.
+        self.signals.finished.connect(callback, Qt.ConnectionType.QueuedConnection)
 
     @pyqtSlot()
     def run(self):
@@ -917,7 +922,7 @@ class Main(QMainWindow):
             self.status.showMessage(f"✅ VM-Copy: {filename}", 5000)
             self._append_system_message(f"✅ File copied to VM: {msg}")
         else:
-            self.status.showMessage(f"❌ VM Copy Error", 5000)
+            self.status.showMessage("❌ VM Copy Error", 5000)
             QMessageBox.warning(self, "VM Copy Error", msg)
 
     # --- Lint Only (Ctrl+L) ---
@@ -1082,10 +1087,10 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
                 self.status.showMessage(f"✅ VM-Copy: {os.path.basename(msg2)}", 5000)
             else:
                 self._append_assistant_message("VibeCNC", f"{msg} — Share failed: {msg2}", is_error=True)
-                self.status.showMessage(f"❌ Sim Error", 5000)
+                self.status.showMessage("❌ Sim Error", 5000)
         else:
             self._append_system_message(f"✅ CAMotics started ({msg})")
-            self.status.showMessage(f"✅ CAMotics started", 5000)
+            self.status.showMessage("✅ CAMotics started", 5000)
 
     # --- Tool Integration Handlers ---
     def on_tool_right_click(self, position):

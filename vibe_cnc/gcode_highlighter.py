@@ -1,6 +1,6 @@
 import re
 from PyQt6.QtCore import QSize, QRect
-from PyQt6.QtGui import QColor, QTextCharFormat, QSyntaxHighlighter, QPainter, QTextCursor, QTextFormat
+from PyQt6.QtGui import QColor, QTextCharFormat, QSyntaxHighlighter, QPainter
 from PyQt6.QtWidgets import QWidget, QPlainTextEdit, QFrame, QLabel, QVBoxLayout
 
 class TitlePanel(QWidget):

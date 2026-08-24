@@ -1,6 +1,5 @@
 import os, subprocess, shutil, tempfile, re
 from typing import Tuple
-from pathlib import Path
 
 class CamoticsBridge:
     def __init__(self, cfg):
@@ -111,7 +110,7 @@ class CamoticsBridge:
             except OSError as e:
                 return (False, f"OS error starting CAMotics: {e}")
             
-            return (True, f"CAMotics started (code sanitized for LinuxCNC parser)")
+            return (True, "CAMotics started (code sanitized for LinuxCNC parser)")
             
         except Exception as e:
             return (False, f"Unexpected error: {type(e).__name__}: {str(e)}")

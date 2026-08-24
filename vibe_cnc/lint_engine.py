@@ -1,4 +1,4 @@
-import re, json
+import re
 from typing import List, Dict
 
 class LintEngine:
@@ -95,7 +95,6 @@ class LintEngine:
 
         # 6) G41/G42 – simple checks (Fanuc TNR)
         comp_active = False
-        comp_start_line = None
         current_tool = None
         tool_radius_map = {}
         tool_table_loaded = False
@@ -133,7 +132,6 @@ class LintEngine:
             # Compensation on/off
             if re.search(r'\bG0?41\b', code_ln) or re.search(r'\bG0?42\b', code_ln):
                 comp_active = True
-                comp_start_line = i+1
                 # Tool radius exists?
                 if current_tool is not None and tool_table_loaded:
                     r = tool_radius_map.get(current_tool, 0.0)
@@ -150,7 +148,6 @@ class LintEngine:
                         break
             if re.search(r'\bG0?40\b', code_ln):
                 comp_active = False
-                comp_start_line = None
 
         # Open compensation at program end
         if comp_active:
