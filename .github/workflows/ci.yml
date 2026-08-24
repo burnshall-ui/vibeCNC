@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run GUI-free tests
-        run: python -m unittest tests.test_lint_engine tests.test_gcode_parser tests.test_reference tests.test_arc_geometry tests.test_tool_data tests.test_collision -v
+        run: python -m unittest tests.test_lint_engine tests.test_gcode_parser tests.test_reference tests.test_arc_geometry tests.test_tool_data tests.test_collision tests.test_macro_data -v
 
   gui:
     name: GUI-backed tests
@@ -41,7 +41,8 @@ jobs:
       - name: Run tests that need PyQt6
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest tests.test_tool_model tests.test_arc_rendering tests.test_ai_worker tests.test_plot_orientation -v
+        run: python -m unittest tests.test_tool_model tests.test_arc_rendering tests.test_ai_worker tests.test_plot_orientation tests.test_macro_model
+          tests.test_settings_manager -v
 
   # Dead imports and unused variables grew back once already, so the gate is in
   # CI rather than in a habit. F covers pyflakes (unused, undefined, redefined),

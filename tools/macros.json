@@ -1,0 +1,46 @@
+{
+  "macro_table": [
+    {
+      "nr": 1000,
+      "name": "Nutprogramm",
+      "category": "Drehen",
+      "call_type": "M98",
+      "description": "Unterprogramm: M98 P1000"
+    },
+    {
+      "nr": 1100,
+      "name": "Gewindeprogramm",
+      "category": "Drehen",
+      "call_type": "M98",
+      "description": "Unterprogramm: M98 P1100"
+    },
+    {
+      "nr": 9001,
+      "name": "Bohrzyklus Peck",
+      "category": "Bohren",
+      "call_type": "G65",
+      "description": "Makro: G65 P9001 (Peck Drilling)"
+    },
+    {
+      "nr": 9002,
+      "name": "Ansenken 90°",
+      "category": "Bohren",
+      "call_type": "G65",
+      "description": "Makro: G65 P9002 (Countersink)"
+    },
+    {
+      "nr": 9004,
+      "name": "senk",
+      "category": "bohren",
+      "call_type": "M98",
+      "description": "g0 z5"
+    },
+    {
+      "nr": 9010,
+      "name": "Antasten Z",
+      "category": "Antasten",
+      "call_type": "G65",
+      "description": "Makro: G65 P9010 (Probe Z)"
+    }
+  ]
+}

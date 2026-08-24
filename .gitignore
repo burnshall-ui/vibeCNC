@@ -65,9 +65,12 @@ _tmp/
 nul
 
 # Project Specific
+# Written by the settings dialog; config.example.yaml is the tracked template.
+config.yaml
 programs/*.nc
 !programs/O0001_DEMO.nc
 tools/tools.db
+tools/macros.db
 tools/*.db-journal
 *.sqlite3-journal
 *.db-wal

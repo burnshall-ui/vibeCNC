@@ -1,12 +1,11 @@
 """Macro Editor Dialog"""
 
-import sqlite3
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton, QSpinBox, QComboBox, QMessageBox
 )
 
-from vibe_cnc.macro_model import DB_PATH
+from vibe_cnc.macro_data import load_macros_json, save_macros_json
 
 
 class MacroEditorDialog(QDialog):
@@ -110,35 +109,35 @@ class MacroEditorDialog(QDialog):
             QMessageBox.warning(self, "Validation", "Name must not be empty.")
             return
 
+        macro = {
+            "nr": nr,
+            "name": name,
+            "category": category,
+            "call_type": call_type,
+            "description": description,
+        }
+
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
+            payload = load_macros_json()
+            macro_table = payload.get("macro_table", [])
 
-            if self.is_new:
-                cur.execute("SELECT COUNT(1) FROM macros WHERE nr=?;", (nr,))
-                exists = cur.fetchone()[0] > 0
-                if exists:
-                    QMessageBox.warning(self, "Error", f"Macro number {nr} already exists.")
-                    conn.close()
-                    return
+            # A number that is already taken must never be written over. The
+            # old record would vanish silently. self.macro_nr is None for a new
+            # macro, so this covers both creating and renumbering.
+            if nr != self.macro_nr and any(m.get("nr") == nr for m in macro_table):
+                QMessageBox.warning(self, "Error", f"Macro number {nr} already exists.")
+                return
 
-                # INSERT
-                cur.execute(
-                    "INSERT INTO macros (nr, name, category, call_type, description) VALUES (?, ?, ?, ?, ?);",
-                    (nr, name, category, call_type, description)
-                )
+            for i, item in enumerate(macro_table):
+                if item.get("nr") == self.macro_nr:
+                    macro_table[i] = macro
+                    break
             else:
-                # UPDATE
-                cur.execute(
-                    "UPDATE macros SET nr=?, name=?, category=?, call_type=?, description=? WHERE nr=?;",
-                    (nr, name, category, call_type, description, self.macro_nr)
-                )
+                macro_table.append(macro)
 
-            conn.commit()
-            conn.close()
-
-            self.macro_model.rows = self.macro_model._load_rows()
-            self.macro_model.layoutChanged.emit()
+            payload["macro_table"] = macro_table
+            save_macros_json(payload)
+            self.macro_model.reload()
 
             self.accept()
 
@@ -159,14 +158,11 @@ class MacroEditorDialog(QDialog):
             return
 
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("DELETE FROM macros WHERE nr=?;", (self.macro_nr,))
-            conn.commit()
-            conn.close()
-
-            self.macro_model.rows = self.macro_model._load_rows()
-            self.macro_model.layoutChanged.emit()
+            payload = load_macros_json()
+            payload["macro_table"] = [m for m in payload.get("macro_table", [])
+                                      if m.get("nr") != self.macro_nr]
+            save_macros_json(payload)
+            self.macro_model.reload()
 
             self.accept()
 
