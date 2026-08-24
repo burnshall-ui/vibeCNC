@@ -7,7 +7,8 @@ O0001 (VIBECNC PARSER REFERENCE)
 (Chuck limit for this program is Z-45. The last two cutting blocks)
 (deliberately run past it and must be flagged as collisions.)
 
-N010 G21 G18 G40
+N010 G21 G18 G40 G80 G97 G99   (safe start block)
+N015 G54                       (work offset)
 N020 G50 S2500                 (speed cap, not a speed and not a move)
 N030 T0101 M06                 (tool change 1)
 N040 G96 S180 M03

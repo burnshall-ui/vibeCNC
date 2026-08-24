@@ -1,11 +1,21 @@
+import os
 import unittest
 from types import SimpleNamespace
 
 from vibe_cnc.lint_engine import LintEngine
 
-# Shared so a rename in the engine breaks the positive test below loudly,
+# Shared so a rename in the engine breaks the positive tests below loudly,
 # instead of quietly emptying the filters and turning these tests green.
 M_RULE = "M-Invariant"
+
+FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reference.nc")
+
+# What config.yaml actually asks for, so the header tests match the shop rules.
+SHOP_HEADER = {
+    "require_header_codes": ["G18", "G40", "G80", "G97"],
+    "require_units": "G21",
+    "require_origin": "G54",
+}
 
 
 def make_cfg(**policy_overrides):
@@ -19,26 +29,138 @@ def make_cfg(**policy_overrides):
     return SimpleNamespace(data={"policies": policies})
 
 
+def rules(findings, rule):
+    return [f for f in findings if f["rule"] == rule]
+
+
 class LintEngineProtectedMTests(unittest.TestCase):
-    def test_commented_protected_m_codes_are_ignored(self):
+    """VC-10: the rule is 'a protected M-code was commented out', nothing wider."""
+
+    def test_two_m_codes_on_one_line_are_not_an_override(self):
+        engine = LintEngine(make_cfg(protected_m_codes=[62]))
+
+        findings = engine.run_all("M62 M08")
+
+        self.assertEqual(rules(findings, M_RULE), [])
+
+    def test_active_protected_m_code_is_not_reported(self):
+        engine = LintEngine(make_cfg(protected_m_codes=[8]))
+
+        self.assertEqual(rules(engine.run_all("M8"), M_RULE), [])
+
+    def test_commented_out_protected_m_code_is_reported(self):
         engine = LintEngine(make_cfg(protected_m_codes=[8]))
 
         findings = engine.run_all("(M8)\n; M8\nG01 X1 ; M8")
 
-        self.assertEqual(
-            [finding for finding in findings if finding["rule"] == M_RULE],
-            [],
-        )
+        self.assertEqual([f["line"] for f in rules(findings, M_RULE)], [1, 2, 3])
+        self.assertIn("commented out", findings[0]["message"])
 
-    def test_protected_m_code_with_other_m_code_still_warns(self):
+    def test_unprotected_m_code_in_a_comment_is_ignored(self):
         engine = LintEngine(make_cfg(protected_m_codes=[8]))
 
-        findings = engine.run_all("M8 M9")
+        self.assertEqual(rules(engine.run_all("(M9)"), M_RULE), [])
 
-        self.assertEqual(
-            [finding["message"] for finding in findings if finding["rule"] == M_RULE],
-            ["Do not override M8 with another M-code."],
-        )
+    def test_no_finding_appears_twice_for_the_same_line_and_rule(self):
+        engine = LintEngine(make_cfg(protected_m_codes=[62, 63, 64, 65]))
+
+        findings = engine.run_all("(M62 M63)")
+
+        seen = [(f["line"], f["rule"], f["message"]) for f in findings]
+        self.assertEqual(len(seen), len(set(seen)))
+
+
+class LintEngineHeaderTests(unittest.TestCase):
+    """VC-10: whole words, on code, however far down the header starts."""
+
+    def test_code_inside_a_comment_does_not_satisfy_the_header(self):
+        engine = LintEngine(LintEngineHeaderTests._cfg())
+
+        findings = engine.run_all("(G18 ist hier nicht noetig)\nG21 G40 G80 G97 G54")
+
+        self.assertEqual([f["message"] for f in rules(findings, "Header")],
+                         ["G18 expected in header."])
+
+    def test_a_longer_code_does_not_satisfy_a_shorter_one(self):
+        engine = LintEngine(LintEngineHeaderTests._cfg())
+
+        findings = engine.run_all("G180 G21 G40 G80 G97 G54")
+
+        self.assertEqual([f["message"] for f in rules(findings, "Header")],
+                         ["G18 expected in header."])
+
+    def test_comment_block_does_not_push_the_header_out_of_range(self):
+        engine = LintEngine(LintEngineHeaderTests._cfg())
+
+        with open(FIXTURE, "r", encoding="utf-8") as handle:
+            findings = engine.run_all(handle.read())
+
+        self.assertEqual(rules(findings, "Header"), [])
+        self.assertEqual(rules(findings, "Units"), [])
+        self.assertEqual(rules(findings, "Origin"), [])
+
+    def test_a_genuinely_missing_header_is_still_reported(self):
+        engine = LintEngine(LintEngineHeaderTests._cfg())
+
+        findings = engine.run_all("G00 X50. Z2.\nG01 Z0. F0.2")
+
+        self.assertEqual(len(rules(findings, "Header")), 4)
+        self.assertEqual(len(rules(findings, "Units")), 1)
+        self.assertEqual(len(rules(findings, "Origin")), 1)
+
+    @staticmethod
+    def _cfg():
+        return make_cfg(**SHOP_HEADER)
+
+
+class LintEngineCycleFeedTests(unittest.TestCase):
+    """VC-10: F0.25 is a normal turning feed, not a zero feed."""
+
+    def test_ordinary_turning_feed_is_not_read_as_zero(self):
+        engine = LintEngine(make_cfg())
+
+        for feed in ("F0.25", "F0.15", "F0.08"):
+            with self.subTest(feed=feed):
+                findings = engine.run_all(f"G71 P100 Q200 U0.4 W0.1 {feed}")
+                self.assertEqual(rules(findings, "G7x"), [])
+
+    def test_zero_and_negative_feed_are_still_reported(self):
+        engine = LintEngine(make_cfg())
+
+        for feed in ("F0", "F0.0", "F0.00", "F-0.2"):
+            with self.subTest(feed=feed):
+                findings = engine.run_all(f"G71 P100 Q200 {feed}")
+                self.assertEqual(len(rules(findings, "G7x")), 1)
+
+    def test_cycle_block_without_a_feed_is_not_reported(self):
+        # G71 is two blocks: depth and retract first, P/Q/U/W/F second. F is
+        # modal besides, so its absence on one block means nothing.
+        engine = LintEngine(make_cfg())
+
+        self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "G7x"), [])
+
+
+class LintEngineRetractTests(unittest.TestCase):
+    """VC-10: G28 and the U/W words are how a Fanuc lathe retracts."""
+
+    def test_g28_counts_as_a_retract(self):
+        engine = LintEngine(make_cfg())
+
+        self.assertEqual(rules(engine.run_all("G01 X10. Z-5.\nG28 U0 W0\nM30"),
+                               "Retract"), [])
+
+    def test_incremental_retract_counts(self):
+        engine = LintEngine(make_cfg())
+
+        self.assertEqual(rules(engine.run_all("G00 W50.\nG00 U150.\nM30"),
+                               "Retract"), [])
+
+    def test_program_that_never_pulls_z_clear_is_still_reported(self):
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all("G01 X-5.\nG00 X200.\nM30")
+
+        self.assertEqual(len(rules(findings, "Retract")), 1)
 
 
 class LintEngineParserWarningTests(unittest.TestCase):
@@ -49,7 +171,7 @@ class LintEngineParserWarningTests(unittest.TestCase):
 
         findings = engine.run_all("G00 X0. Z0.\nG02 X40. Z-15. R1.")
 
-        arc = [f for f in findings if f["rule"] == "Arc R"]
+        arc = rules(findings, "Arc R")
         self.assertEqual(len(arc), 1)
         self.assertEqual(arc[0]["line"], 2)
         self.assertIn("half the chord", arc[0]["message"])
@@ -59,7 +181,7 @@ class LintEngineParserWarningTests(unittest.TestCase):
 
         findings = engine.run_all("G00 X30. Z0.\nG02 X40. Z-5.")
 
-        self.assertEqual([f["rule"] for f in findings if f["rule"] == "Arc"], ["Arc"])
+        self.assertEqual(len(rules(findings, "Arc")), 1)
 
     def test_valid_geometry_produces_no_arc_finding(self):
         engine = LintEngine(make_cfg())
@@ -74,7 +196,7 @@ class LintEngineParserWarningTests(unittest.TestCase):
         findings = engine.run_all("\n".join([
             "G00 X0. Z0.",
             "G02 X40. Z-15. R1.",   # parser: impossible radius
-            "M8 M9",                # rule: protected M-code
+            "(M8)",                 # rule: protected M-code commented out
             "G00 X30. Z0.",
             "G02 X40. Z-5.",        # parser: no centre
         ]))
@@ -94,3 +216,15 @@ class LintEngineParserWarningTests(unittest.TestCase):
             self.assertIsInstance(finding["line"], int)
             self.assertIsInstance(finding["rule"], str)
             self.assertIsInstance(finding["message"], str)
+
+
+class LintEngineCleanProgramTests(unittest.TestCase):
+    """The reference program must lint clean, or it is not a reference."""
+
+    def test_reference_program_has_no_findings_at_all(self):
+        engine = LintEngine(make_cfg(protected_m_codes=[62, 63, 64, 65], **SHOP_HEADER))
+
+        with open(FIXTURE, "r", encoding="utf-8") as handle:
+            findings = engine.run_all(handle.read())
+
+        self.assertEqual(findings, [])
