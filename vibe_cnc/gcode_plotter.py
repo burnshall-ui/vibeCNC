@@ -17,6 +17,7 @@ import numpy as np
 # GCodeParser lives in gcode_parser so it stays importable without a GUI stack.
 # Re-exported here because this module has always been its import site.
 from vibe_cnc.gcode_parser import GCodeParser
+from vibe_cnc.arc_geometry import arc_thetas
 
 
 
@@ -113,6 +114,19 @@ class GCodePlotterWidget(QWidget):
         self.pending_code = gcode
         self._do_update()
 
+    def _draw_arc(self, arc, **style):
+        """Draws one parsed G02/G03 arc onto the current axes.
+
+        The ellipse is 4*radius wide and 2*radius high because X is a diameter
+        and Z is not. At exactly that squash the parameter angle equals the
+        real angle in radius space, which is what arc_thetas returns.
+        """
+        theta1, theta2 = arc_thetas(arc)
+        radius = arc['radius']
+        self.ax.add_patch(patches.Arc(arc['center'], 4 * radius, 2 * radius,
+                                      angle=0, theta1=theta1, theta2=theta2,
+                                      **style))
+
     def _do_update(self):
         """Performs the actual plot update"""
         if not self.pending_code:
@@ -178,62 +192,17 @@ class GCodePlotterWidget(QWidget):
         # Compensated arcs (G41/G42) - yellow dashed
         for arc in self.paths_cache.get('comp_arc', []):
             if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                cx, cz = arc['center']
-                radius = arc['radius']
-                x1, z1 = arc['start']
-                x2, z2 = arc['end']
-
-                # Calculate angle (in radius space)
-                cr = cx / 2.0
-                r1 = x1 / 2.0
-                r2 = x2 / 2.0
-                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
-                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
-
-                if arc['cw']:  # G02: Clockwise
-                    if angle2 > angle1:
-                        angle2 -= 360
-                else:  # G03: Counter-clockwise
-                    if angle1 > angle2:
-                        angle1 -= 360
-
-                # Width is 4*radius (since diameter), height is 2*radius
-                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
-                                       angle=0, theta1=angle1, theta2=angle2,
-                                       color=self.colors['FANUC_YELLOW'], linewidth=1.5,
-                                       linestyle='--', alpha=0.9, zorder=3)
-                self.ax.add_patch(arc_patch)
+                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
+                               linewidth=1.5, linestyle='--', alpha=0.9,
+                               zorder=3)
                 has_paths = True
 
         # Circular arcs (G02/G03) - green arc
         for arc in self.paths_cache['arc']:
             # Live drawing: Only draw up to live_max_line
             if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                x1, z1 = arc['start']
-                x2, z2 = arc['end']
-                cx, cz = arc['center']
-                radius = arc['radius']
-
-                # Calculate angle (in radius space)
-                cr = cx / 2.0
-                r1 = x1 / 2.0
-                r2 = x2 / 2.0
-                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
-                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
-
-                # Draw arc (matplotlib Arc uses X/Y, we have X/Z)
-                if arc['cw']:  # G02: Clockwise
-                    if angle2 > angle1:
-                        angle2 -= 360
-                else:  # G03: Counter-clockwise
-                    if angle1 > angle2:
-                        angle1 -= 360
-
-                # Width is 4*radius (since diameter), height is 2*radius
-                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
-                                       angle=0, theta1=angle1, theta2=angle2,
-                                       color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-                self.ax.add_patch(arc_patch)
+                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
+                               linewidth=2, zorder=2)
                 has_paths = True
 
         # Collisions (highlighted red)
@@ -610,58 +579,16 @@ class GCodePlotterWidget(QWidget):
         # Compensated arcs (G41/G42) - yellow dashed
         for arc in self.paths_cache.get('comp_arc', []):
             if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                cx, cz = arc['center']
-                radius = arc['radius']
-                x1, z1 = arc['start']
-                x2, z2 = arc['end']
-
-                # Calculate angle (in radius space)
-                cr = cx / 2.0
-                r1 = x1 / 2.0
-                r2 = x2 / 2.0
-                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
-                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
-
-                if arc['cw']:  # G02: Clockwise
-                    if angle2 > angle1:
-                        angle2 -= 360
-                else:  # G03: Counter-clockwise
-                    if angle1 > angle2:
-                        angle1 -= 360
-
-                # Width is 4*radius (since diameter), height is 2*radius
-                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
-                                       angle=0, theta1=angle1, theta2=angle2,
-                                       color=self.colors['FANUC_YELLOW'], linewidth=1.5,
-                                       linestyle='--', alpha=0.9, zorder=3)
-                self.ax.add_patch(arc_patch)
+                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
+                               linewidth=1.5, linestyle='--', alpha=0.9,
+                               zorder=3)
                 has_paths = True
 
         # Circular arcs (G02/G03)
         for arc in self.paths_cache['arc']:
             if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                x1, z1 = arc['start']
-                x2, z2 = arc['end']
-                cx, cz = arc['center']
-                radius = arc['radius']
-                # Calculate angle (in radius space)
-                cr = cx / 2.0
-                r1 = x1 / 2.0
-                r2 = x2 / 2.0
-                angle1 = math.degrees(math.atan2(z1 - cz, r1 - cr))
-                angle2 = math.degrees(math.atan2(z2 - cz, r2 - cr))
-                if arc['cw']:
-                    if angle2 > angle1:
-                        angle2 -= 360
-                else:
-                    if angle1 > angle2:
-                        angle1 -= 360
-                
-                # Width is 4*radius (since diameter), height is 2*radius
-                arc_patch = patches.Arc((cx, cz), 4*radius, 2*radius,
-                                       angle=0, theta1=angle1, theta2=angle2,
-                                       color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-                self.ax.add_patch(arc_patch)
+                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
+                               linewidth=2, zorder=2)
                 has_paths = True
 
         # Collisions
