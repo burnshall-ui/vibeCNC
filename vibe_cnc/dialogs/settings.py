@@ -35,6 +35,18 @@ class SettingsDialog(QDialog):
         self.chuck_z_input.setDecimals(1)
         machine_layout.addRow("Chuck Z-Limit (Collision Boundary):", self.chuck_z_input)
 
+        # Zero means "not measured yet". The collision check then treats every
+        # diameter as blocked, which raises false alarms rather than hiding a
+        # crash — the safe direction for a value nobody has entered.
+        self.chuck_diameter_input = QDoubleSpinBox()
+        self.chuck_diameter_input.setRange(0, 2000)
+        self.chuck_diameter_input.setValue(
+            self.cfg.data.get('machine', {}).get('chuck_diameter') or 0.0)
+        self.chuck_diameter_input.setSuffix(" mm")
+        self.chuck_diameter_input.setDecimals(1)
+        self.chuck_diameter_input.setSpecialValueText("not set — every diameter blocked")
+        machine_layout.addRow("Chuck Diameter (over the jaws):", self.chuck_diameter_input)
+
         self.tabs.addTab(machine_tab, "Machine")
 
         # --- Tab 2: AI ---
@@ -125,6 +137,8 @@ class SettingsDialog(QDialog):
 
     def save_settings(self):
         self.cfg.data['machine']['chuck_z_limit'] = self.chuck_z_input.value()
+        diameter = self.chuck_diameter_input.value()
+        self.cfg.data['machine']['chuck_diameter'] = diameter if diameter > 0 else None
         self.cfg.data['ai']['mode'] = self.ai_mode_combo.currentText()
         self.cfg.data['ai']['offline'] = self.ai_offline_check.isChecked()
         self.cfg.data['ai']['anthropic']['model'] = self.claude_model_input.text().strip()

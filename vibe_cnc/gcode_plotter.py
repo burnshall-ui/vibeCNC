@@ -22,10 +22,11 @@ class GCodePlotterWidget(QWidget):
 
     line_clicked = pyqtSignal(int)  # Signal: Line was clicked
 
-    def __init__(self, colors: dict, chuck_z: float = -5.0, parent=None):
+    def __init__(self, colors: dict, chuck_z: float = -5.0,
+                 chuck_diameter: float = None, parent=None):
         super().__init__(parent)
         self.colors = colors
-        self.parser = GCodeParser(chuck_z=chuck_z)
+        self.parser = GCodeParser(chuck_z=chuck_z, chuck_diameter=chuck_diameter)
         self.current_line = None
         self.paths_cache = None
         self.highlight_artist = None  # Red marker for current line
@@ -110,6 +111,30 @@ class GCodePlotterWidget(QWidget):
         self.pending_code = gcode
         self._do_update()
 
+    def _draw_chuck(self):
+        """Draws the chuck zone the collision check actually uses.
+
+        Bounded by the jaw diameter when one is configured, so the picture and
+        the check agree. Without a diameter the check treats every diameter as
+        blocked, and the hatching spans the full width to say so.
+        """
+        diameter = self.parser.chuck_diameter
+        style = dict(linewidth=1, edgecolor='#AA0000', facecolor='#AA0000',
+                     alpha=0.15, hatch='//', zorder=0)
+
+        if diameter is None:
+            # Every diameter is blocked, so span the whole width. axhspan works
+            # in axes coordinates: reading get_xlim() here returned the default
+            # (0, 1) because the axes were just cleared and the paths that set
+            # the real limits are drawn after this, which left the hatching a
+            # one-millimetre sliver at the centre line.
+            self.ax.axhspan(self.parser.chuck_z - 50, self.parser.chuck_z, **style)
+        else:
+            self.ax.add_patch(patches.Rectangle(
+                (-diameter, self.parser.chuck_z - 50), 2 * diameter, 50, **style))
+        self.ax.axhline(y=self.parser.chuck_z, color='#AA0000', linestyle=':',
+                        linewidth=1, alpha=0.5, zorder=0, label='Chuck Limit')
+
     def _draw_arc(self, arc, **style):
         """Draws one parsed G02/G03 arc onto the current axes.
 
@@ -149,17 +174,7 @@ class GCodePlotterWidget(QWidget):
 
         has_paths = False
 
-        # Chuck zone (clamping area) - red hatching
-        xlims = self.ax.get_xlim()
-        chuck_rect = patches.Rectangle(
-            (xlims[0] if xlims[0] < 0 else 0, self.parser.chuck_z - 50),
-            xlims[1] - (xlims[0] if xlims[0] < 0 else 0), 50,
-            linewidth=1, edgecolor='#AA0000', facecolor='#AA0000',
-            alpha=0.15, hatch='//', zorder=0
-        )
-        self.ax.add_patch(chuck_rect)
-        self.ax.axhline(y=self.parser.chuck_z, color='#AA0000', linestyle=':', linewidth=1,
-                       alpha=0.5, zorder=0, label='Chuck Limit')
+        self._draw_chuck()
 
         # Rapid moves (G00) - gray dashed
         for segment in self.paths_cache['rapid']:
@@ -537,17 +552,7 @@ class GCodePlotterWidget(QWidget):
         self._setup_plot()
 
 
-        # Chuck zone (clamping area) - red hatching
-        xlims = self.ax.get_xlim()
-        chuck_rect = patches.Rectangle(
-            (xlims[0] if xlims[0] < 0 else 0, self.parser.chuck_z - 50),
-            xlims[1] - (xlims[0] if xlims[0] < 0 else 0), 50,
-            linewidth=1, edgecolor='#AA0000', facecolor='#AA0000',
-            alpha=0.15, hatch='//', zorder=0
-        )
-        self.ax.add_patch(chuck_rect)
-        self.ax.axhline(y=self.parser.chuck_z, color='#AA0000', linestyle=':', linewidth=1,
-                       alpha=0.5, zorder=0, label='Chuck Limit')
+        self._draw_chuck()
 
         # Rapid moves (G00) - gray dashed
         for segment in self.paths_cache['rapid']:

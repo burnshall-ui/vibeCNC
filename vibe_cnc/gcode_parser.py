@@ -6,6 +6,8 @@ import re
 import math
 from typing import List
 
+from .arc_geometry import arc_thetas
+
 # G-codes whose X/Z/U/W/R words are dwell times, offsets or cycle parameters
 # rather than a motion target. Reading them as a move draws a line that was
 # never programmed — `G04 X1.0` is the worst of them, it aims the tool at Ø1 mm
@@ -21,8 +23,16 @@ CYCLE_CODES = frozenset({70, 71, 72, 73, 74, 75, 76})
 class GCodeParser:
     """Parser for Fanuc lathe G-code (X=diameter, Z=length)"""
 
-    def __init__(self, chuck_z: float = -5.0):
-        self.chuck_z = chuck_z  # Chuck limit
+    # Points sampled along an arc for the collision check. An arc bulges away
+    # from its chord, so testing the chord alone can miss a crash.
+    ARC_COLLISION_STEPS = 24
+
+    def __init__(self, chuck_z: float = -5.0, chuck_diameter: float = None):
+        self.chuck_z = chuck_z  # Chuck face: anything behind it is inside the chuck
+        # Outside diameter of the jaws. None or <= 0 means "not configured", and
+        # then every diameter counts as blocked -- the check errs towards a false
+        # alarm rather than towards a missed crash.
+        self.chuck_diameter = chuck_diameter if (chuck_diameter or 0) > 0 else None
         # Load tool data once
         try:
             from .tool_data import load_tools_json, tools_by_number
@@ -168,8 +178,8 @@ class GCodeParser:
         if new_x != self.x or new_z != self.z:
             segment_data = [(self.x, self.z), (new_x, new_z), line_num]
 
-            # Collision check (Z < Chuck limit)
-            if new_z < self.chuck_z or self.z < self.chuck_z:
+            if self.mode not in ('G02', 'G03') and self._hits_chuck(
+                    self.x, self.z, new_x, new_z):
                 self.paths['collisions'].append(segment_data)
 
             if self.mode == 'G00':
@@ -240,6 +250,10 @@ class GCodeParser:
         }
         self.paths['arc'].append(arc_data)
 
+        if self._arc_hits_chuck(arc_data):
+            self.paths['collisions'].append(
+                [(self.x, self.z), (new_x, new_z), line_num])
+
         # Compensated arcs (G41/G42)
         if self.comp in ('G41', 'G42') and self.tnr > 0.0:
             # G41 (left): increase radius (tool outside)
@@ -295,6 +309,59 @@ class GCodeParser:
         cr = (r1 + r2) / 2.0 + side * height * nr
         cz = (z1 + z2) / 2.0 + side * height * nz
         return cr, cz, radius
+
+    def _hits_chuck(self, x1, z1, x2, z2) -> bool:
+        """Does the straight move from (x1,z1) to (x2,z2) enter the chuck?
+
+        The chuck is the region behind the chuck face that is no wider than the
+        jaws: z < chuck_z and |X| < chuck_diameter. X values are diameters and
+        the plot mirrors about the centre line, hence the absolute value.
+
+        Clipping the segment's parameter interval against the three half-planes
+        catches the case the old endpoint test could not: a move that crosses
+        the chuck while both of its endpoints sit outside.
+        """
+        lo, hi = 0.0, 1.0
+        lo, hi = self._clip_below(lo, hi, z1, z2 - z1, self.chuck_z)
+        if self.chuck_diameter is not None:
+            dx = x2 - x1
+            lo, hi = self._clip_below(lo, hi, x1, dx, self.chuck_diameter)
+            lo, hi = self._clip_above(lo, hi, x1, dx, -self.chuck_diameter)
+        # A grazing touch leaves a single point, which is the limit, not a crash.
+        return hi - lo > 1e-9
+
+    @staticmethod
+    def _clip_below(lo, hi, start, delta, bound):
+        """Narrow [lo,hi] to the part where start + t*delta < bound."""
+        if abs(delta) < 1e-12:
+            return (lo, hi) if start < bound else (1.0, 0.0)
+        t = (bound - start) / delta
+        return (lo, min(hi, t)) if delta > 0 else (max(lo, t), hi)
+
+    @staticmethod
+    def _clip_above(lo, hi, start, delta, bound):
+        """Narrow [lo,hi] to the part where start + t*delta > bound."""
+        if abs(delta) < 1e-12:
+            return (lo, hi) if start > bound else (1.0, 0.0)
+        t = (bound - start) / delta
+        return (max(lo, t), hi) if delta > 0 else (lo, min(hi, t))
+
+    def _arc_hits_chuck(self, arc) -> bool:
+        """Same test along a polyline sampled from the arc."""
+        theta1, theta2 = arc_thetas(arc)
+        sweep = (theta2 - theta1) % 360
+        cr, cz = arc['center'][0] / 2.0, arc['center'][1]
+        radius = arc['radius']
+
+        previous = None
+        for step in range(self.ARC_COLLISION_STEPS + 1):
+            angle = math.radians(theta1 + sweep * step / self.ARC_COLLISION_STEPS)
+            point = (2.0 * (cr + radius * math.cos(angle)),
+                     cz + radius * math.sin(angle))
+            if previous is not None and self._hits_chuck(*previous, *point):
+                return True
+            previous = point
+        return False
 
     def _intersect_compensated_corners(self):
         """Intersects corners of compensated paths (Lookahead Corner Handling)"""

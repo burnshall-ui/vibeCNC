@@ -163,8 +163,11 @@ class Main(QMainWindow):
         right = TitlePanel("Vibe CNC — ASSIST", rightBox, self.cfg_colors)
 
         # --- BOTTOM: 2D Plotter ---
-        chuck_z = self.cfg.data.get('machine', {}).get('chuck_z_limit', -5.0)
-        self.plotter = GCodePlotterWidget(self.cfg_colors, chuck_z=chuck_z)
+        machine = self.cfg.data.get('machine', {})
+        chuck_z = machine.get('chuck_z_limit', -5.0)
+        chuck_diameter = machine.get('chuck_diameter')
+        self.plotter = GCodePlotterWidget(self.cfg_colors, chuck_z=chuck_z,
+                                          chuck_diameter=chuck_diameter)
         bottom = TitlePanel("SIMULATION", self.plotter, self.cfg_colors)
 
         # --- SPLITTER ---
