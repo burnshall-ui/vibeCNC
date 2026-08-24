@@ -100,11 +100,11 @@ class LintEngine:
         tool_radius_map = {}
         tool_table_loaded = False
         try:
-            # load_tools_json lives in tool_model, which imports PyQt6 at module
-            # level -- so this fails on a bare interpreter. Without the flag the
-            # engine then reported every tool's radius as missing, and the same
-            # program linted differently depending on whether Qt was installed.
-            from .tool_model import load_tools_json
+            # tool_data needs no GUI stack, so this works on a bare
+            # interpreter too. The flag still matters for a missing or corrupt
+            # tools.json: without it the engine reported every tool's radius as
+            # missing rather than admitting it could not read the table.
+            from .tool_data import load_tools_json
             j = load_tools_json()
             for it in j.get("tool_table", []):
                 try:

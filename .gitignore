@@ -67,6 +67,7 @@ nul
 # Project Specific
 programs/*.nc
 !programs/O0001_DEMO.nc
+tools/tools.db
 tools/*.db-journal
 *.sqlite3-journal
 *.db-wal

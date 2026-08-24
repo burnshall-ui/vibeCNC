@@ -1,13 +1,12 @@
 """Tool Editor Dialog"""
 
 import os
-import json
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QLineEdit, QPushButton, QSpinBox, QComboBox, QMessageBox, QDoubleSpinBox
 )
 
-from vibe_cnc.tool_model import load_tools_json
+from vibe_cnc.tool_data import load_tools_json, save_tools_json
 
 # Get the base directory (parent of vibe_cnc/dialogs)
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -175,36 +174,29 @@ class ToolEditorDialog(QDialog):
 
         # Load JSON
         try:
-            tools_json_path = os.path.join(HERE, "tools", "tools.json")
             j = load_tools_json()
 
-            # Find existing tool or add new
             tool_table = j.get("tool_table", [])
-            found = False
-            for i, item in enumerate(tool_table):
-                if item.get("t") == self.tool_num if not self.is_new else item.get("t") == t:
-                    # Update existing
-                    tool_table[i] = tool_data
-                    found = True
-                    break
 
-            if not found:
-                # Check if T already exists (for new tools)
-                if self.is_new and any(item.get("t") == t for item in tool_table):
-                    QMessageBox.warning(self, "Error", f"Tool number {t} already exists.")
-                    return
-                # Add new
+            # A number that is already taken must never be written over. The
+            # old record would vanish silently, and with it the insert radius
+            # that nose compensation depends on. self.tool_num is None for a
+            # new tool, so this covers both creating and renumbering.
+            if t != self.tool_num and any(item.get("t") == t for item in tool_table):
+                QMessageBox.warning(self, "Error", f"Tool number {t} already exists.")
+                return
+
+            for i, item in enumerate(tool_table):
+                if item.get("t") == self.tool_num:
+                    tool_table[i] = tool_data
+                    break
+            else:
                 tool_table.append(tool_data)
 
             j["tool_table"] = tool_table
 
-            # Save JSON
-            with open(tools_json_path, "w", encoding="utf-8") as f:
-                json.dump(j, f, indent=2, ensure_ascii=False)
-
-            self.tool_model.rows = self.tool_model._load_tools()
-            self.tool_model.tool_data = self.tool_model._load_tool_data()
-            self.tool_model.layoutChanged.emit()
+            save_tools_json(j)
+            self.tool_model.reload()
 
             self.accept()
 
@@ -225,20 +217,14 @@ class ToolEditorDialog(QDialog):
             return
 
         try:
-            tools_json_path = os.path.join(HERE, "tools", "tools.json")
             j = load_tools_json()
 
             tool_table = j.get("tool_table", [])
             tool_table = [item for item in tool_table if item.get("t") != self.tool_num]
             j["tool_table"] = tool_table
 
-            # Save JSON
-            with open(tools_json_path, "w", encoding="utf-8") as f:
-                json.dump(j, f, indent=2, ensure_ascii=False)
-
-            self.tool_model.rows = self.tool_model._load_tools()
-            self.tool_model.tool_data = self.tool_model._load_tool_data()
-            self.tool_model.layoutChanged.emit()
+            save_tools_json(j)
+            self.tool_model.reload()
 
             self.accept()
 

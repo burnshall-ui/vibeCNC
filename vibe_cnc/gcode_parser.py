@@ -25,9 +25,8 @@ class GCodeParser:
         self.chuck_z = chuck_z  # Chuck limit
         # Load tool data once
         try:
-            from .tool_model import load_tools_json
-            j = load_tools_json()
-            self.tool_items = {int(it.get('t', 0)): it for it in j.get('tool_table', [])}
+            from .tool_data import load_tools_json, tools_by_number
+            self.tool_items = tools_by_number(load_tools_json())
         except Exception:
             self.tool_items = {}
         self.reset()
