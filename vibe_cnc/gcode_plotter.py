@@ -114,6 +114,10 @@ class GCodePlotterWidget(QWidget):
         self.pending_code = gcode
         self._do_update()
 
+    def shutdown(self):
+        """Stops the debounce timer before the widgets it fires into go away."""
+        self.update_timer.stop()
+
     def _draw_chuck(self):
         """Draws the chuck zone the collision check actually uses.
 

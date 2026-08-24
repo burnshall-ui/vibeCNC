@@ -1146,7 +1146,13 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
 
     # --- Persistence ---
     def closeEvent(self, e: QCloseEvent):
-        self._save_state(); return super().closeEvent(e)
+        self._save_state()
+        # Stop the repeating timers before the widgets they fire into are torn
+        # down. A timer that fires into a half-destroyed widget tree is the
+        # cheap half of the shutdown problem; see main() for the other half.
+        self.sim_timer.stop()
+        self.plotter.shutdown()
+        return super().closeEvent(e)
     
     def _save_state(self):
         self.settings.setValue("geometry", self.saveGeometry())
@@ -1170,13 +1176,37 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
         sb = self.settings.value("single_block", False, type=bool)
         if sb: self.btnSingleBlock.setChecked(True)
 
-if __name__ == "__main__":
+def main() -> int:
     # High-DPI Support for Windows 11
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    
+
     app = QApplication(sys.argv)
-    win = Main(); win.show()
-    sys.exit(app.exec())
+    win = Main()
+    win.show()
+    rc = app.exec()
+
+    # Tear Qt down here rather than leaving it to the interpreter.
+    #
+    # As module-level globals, app and win used to survive until _Py_Finalize,
+    # where PyQt's atexit hook walks every sip wrapper it still knows about --
+    # including ones whose C++ object Qt had already destroyed on its way out.
+    # On macOS that showed up as an intermittent bus error inside
+    # sip_api_visit_wrappers, after the program had otherwise finished its work.
+    # Deleting in a known order while the interpreter is still healthy removes
+    # the race rather than narrowing it.
+    #
+    # The wait is bounded and happens after the window is gone, so a slow AI
+    # request delays only the exit, never the closing of the window.
+    QThreadPool.globalInstance().waitForDone(5000)
+    win.deleteLater()
+    app.processEvents()
+    del win
+    del app
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 
