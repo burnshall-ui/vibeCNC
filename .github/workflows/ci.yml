@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run GUI-free tests
-        run: python -m unittest tests.test_lint_engine tests.test_gcode_parser -v
+        run: python -m unittest tests.test_lint_engine tests.test_gcode_parser tests.test_reference -v
 
   gui:
     name: GUI-backed tests
