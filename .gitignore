@@ -45,6 +45,7 @@ htmlcov/
 
 # AI Tools
 .claude/
+AGENTS.md
 
 # Environment Variables
 .env
