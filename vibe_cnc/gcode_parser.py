@@ -6,7 +6,7 @@ import re
 import math
 from typing import List
 
-from .arc_geometry import arc_thetas
+from .arc_geometry import arc_sweep, arc_thetas
 
 # G-codes whose X/Z/U/W/R words are dwell times, offsets or cycle parameters
 # rather than a motion target. Reading them as a move draws a line that was
@@ -174,6 +174,15 @@ class GCodeParser:
         self.i = float(i_match.group(1)) if i_match else 0.0
         self.k = float(k_match.group(1)) if k_match else 0.0
 
+        # A circular block with I/K but no X/Z is a full circle: start and end
+        # are the same point. Gating everything on "did the position change"
+        # dropped the whole block -- no arc, and no collision check either.
+        if (new_x == self.x and new_z == self.z
+                and self.mode in ('G02', 'G03')
+                and (i_match is not None or k_match is not None or r_match is not None)):
+            self._add_arc(new_x, new_z, i_match, k_match, r_match, line_num)
+            return
+
         # Record movement (if position changes)
         if new_x != self.x or new_z != self.z:
             segment_data = [(self.x, self.z), (new_x, new_z), line_num]
@@ -250,9 +259,9 @@ class GCodeParser:
         }
         self.paths['arc'].append(arc_data)
 
-        if self._arc_hits_chuck(arc_data):
-            self.paths['collisions'].append(
-                [(self.x, self.z), (new_x, new_z), line_num])
+        hit = self._arc_collision_span(arc_data)
+        if hit is not None:
+            self.paths['collisions'].append([hit[0], hit[1], line_num])
 
         # Compensated arcs (G41/G42)
         if self.comp in ('G41', 'G42') and self.tnr > 0.0:
@@ -346,10 +355,15 @@ class GCodeParser:
         t = (bound - start) / delta
         return (max(lo, t), hi) if delta > 0 else (lo, min(hi, t))
 
-    def _arc_hits_chuck(self, arc) -> bool:
-        """Same test along a polyline sampled from the arc."""
-        theta1, theta2 = arc_thetas(arc)
-        sweep = (theta2 - theta1) % 360
+    def _arc_collision_span(self, arc):
+        """First sampled span of the arc that enters the chuck, or None.
+
+        Returning the span rather than a flag keeps the recorded collision on
+        the part of the arc that actually offends. Start and end coincide on a
+        full circle, so the chord would have been a single point.
+        """
+        theta1, _theta2 = arc_thetas(arc)
+        sweep = arc_sweep(arc)
         cr, cz = arc['center'][0] / 2.0, arc['center'][1]
         radius = arc['radius']
 
@@ -359,9 +373,9 @@ class GCodeParser:
             point = (2.0 * (cr + radius * math.cos(angle)),
                      cz + radius * math.sin(angle))
             if previous is not None and self._hits_chuck(*previous, *point):
-                return True
+                return previous, point
             previous = point
-        return False
+        return None
 
     def _intersect_compensated_corners(self):
         """Intersects corners of compensated paths (Lookahead Corner Handling)"""

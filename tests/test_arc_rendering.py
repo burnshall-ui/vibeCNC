@@ -15,7 +15,7 @@ try:
 except ImportError:  # pragma: no cover - covered by the GUI-free suite instead
     patches = None
 
-from vibe_cnc.arc_geometry import arc_thetas
+from vibe_cnc.arc_geometry import arc_sweep, arc_thetas
 
 
 def drawn_span(theta1, theta2):
@@ -40,9 +40,21 @@ class ArcRenderingTests(unittest.TestCase):
 
         self.assertAlmostEqual(drawn_span(theta1, theta2), 270.0, delta=0.5)
 
-    def test_model_used_by_the_gui_free_suite_matches_matplotlib(self):
-        for cw in (True, False):
-            theta1, theta2 = arc_thetas(dict(self.QUARTER, cw=cw))
-            with self.subTest(cw=cw):
+    def test_a_full_circle_is_drawn_as_a_full_circle(self):
+        circle = {'start': (50.0, -10.0), 'end': (50.0, -10.0),
+                  'center': (50.0, -20.0), 'radius': 10.0, 'cw': True, 'line': 1}
+        theta1, theta2 = arc_thetas(circle)
+
+        self.assertAlmostEqual(drawn_span(theta1, theta2), 360.0, delta=0.5)
+
+    def test_arc_sweep_matches_what_matplotlib_draws(self):
+        circle = {'start': (50.0, -10.0), 'end': (50.0, -10.0),
+                  'center': (50.0, -20.0), 'radius': 10.0, 'cw': True, 'line': 1}
+
+        for name, arc in (("quarter cw", dict(self.QUARTER, cw=True)),
+                          ("quarter ccw", dict(self.QUARTER, cw=False)),
+                          ("full circle", circle)):
+            theta1, theta2 = arc_thetas(arc)
+            with self.subTest(arc=name):
                 self.assertAlmostEqual(drawn_span(theta1, theta2),
-                                       (theta2 - theta1) % 360, delta=0.5)
+                                       arc_sweep(arc), delta=0.5)

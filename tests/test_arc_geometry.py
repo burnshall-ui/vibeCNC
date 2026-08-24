@@ -1,22 +1,19 @@
 """Arc direction (VC-02).
 
-matplotlib is not installed for the GUI-free CI job, so these tests model its
-rule rather than calling it: Arc sweeps counter-clockwise from theta1 to theta2
-after normalising both modulo 360, which makes the drawn span exactly
-(theta2 - theta1) % 360. tests/test_arc_rendering.py pins that model against
-the real matplotlib.
+matplotlib is not installed for the GUI-free CI job, so arc_sweep models its
+normalisation instead of calling it. tests/test_arc_rendering.py pins that
+model against the real matplotlib.
 """
 import os
 import unittest
 
-from vibe_cnc.arc_geometry import arc_thetas
+from vibe_cnc.arc_geometry import arc_sweep, arc_thetas
 from vibe_cnc.gcode_parser import GCodeParser
 
 
 def swept(arc):
     """Degrees matplotlib will actually sweep for this arc."""
-    theta1, theta2 = arc_thetas(arc)
-    return (theta2 - theta1) % 360
+    return arc_sweep(arc)
 
 
 def quarter(cw):
@@ -72,3 +69,32 @@ class NoSecondCopyTests(unittest.TestCase):
         self.assertEqual(source.count("patches.Arc("), 1)
         self.assertNotIn("atan2", source)
         self.assertEqual(source.count("self._draw_arc(arc"), 4)
+
+
+class FullCircleTests(unittest.TestCase):
+    """VC-20: I/K with no X/Z is a full circle, not a zero-length arc."""
+
+    CIRCLE = {'start': (50.0, -10.0), 'end': (50.0, -10.0), 'center': (50.0, -20.0),
+              'radius': 10.0, 'cw': True, 'line': 1}
+
+    def test_a_full_circle_sweeps_a_whole_turn(self):
+        self.assertAlmostEqual(swept(self.CIRCLE), 360.0, places=9)
+
+    def test_direction_does_not_change_a_full_circle(self):
+        self.assertEqual(swept(dict(self.CIRCLE, cw=False)), swept(self.CIRCLE))
+
+    def test_thetas_span_a_turn_rather_than_repeating_one_angle(self):
+        theta1, theta2 = arc_thetas(self.CIRCLE)
+
+        self.assertAlmostEqual(theta2 - theta1, 360.0, places=9)
+
+    def test_an_almost_closed_arc_keeps_its_real_sweep(self):
+        # Clockwise from 90 degrees the long way round to 91: 359, not 1.
+        import math
+        cr, cz, radius = 25.0, -50.0, 10.0
+        end = (2 * (cr + radius * math.cos(math.radians(91.0))),
+               cz + radius * math.sin(math.radians(91.0)))
+        arc = {'start': (2 * cr, cz + radius), 'end': end,
+               'center': (2 * cr, cz), 'radius': radius, 'cw': True, 'line': 1}
+
+        self.assertAlmostEqual(swept(arc), 359.0, places=6)

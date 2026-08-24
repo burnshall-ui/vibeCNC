@@ -129,3 +129,31 @@ class ProgramLevelTests(unittest.TestCase):
 
         self.assertEqual(len(paths["collisions"]), 1)
         self.assertEqual(paths["collisions"][0][2], 3)
+
+
+class FullCircleCollisionTests(unittest.TestCase):
+    """VC-20: a block that is never recorded is also never checked."""
+
+    def test_full_circle_reaching_into_the_jaws_is_caught(self):
+        # Circle centred at Ø50/Z-20 with r10 reaches Z-30, behind a face at Z-25.
+        paths = GCodeParser(chuck_z=-25.0, chuck_diameter=CHUCK_DIAMETER).parse(
+            "G00 X50. Z-10.\nG02 I0. K-10.")
+
+        self.assertEqual(len(paths["arc"]), 1)
+        self.assertEqual(len(paths["collisions"]), 1)
+        self.assertEqual(paths["collisions"][0][2], 2)
+
+    def test_the_recorded_span_is_inside_the_chuck_not_a_point(self):
+        paths = GCodeParser(chuck_z=-25.0, chuck_diameter=CHUCK_DIAMETER).parse(
+            "G00 X50. Z-10.\nG02 I0. K-10.")
+        (x1, z1), (x2, z2), _line = paths["collisions"][0]
+
+        self.assertNotEqual((x1, z1), (x2, z2))
+        self.assertLess(min(z1, z2), -25.0)
+
+    def test_full_circle_clear_of_the_face_is_not_reported(self):
+        paths = GCodeParser(chuck_z=-45.0, chuck_diameter=CHUCK_DIAMETER).parse(
+            "G00 X50. Z-10.\nG02 I0. K-10.")
+
+        self.assertEqual(len(paths["arc"]), 1)
+        self.assertEqual(paths["collisions"], [])

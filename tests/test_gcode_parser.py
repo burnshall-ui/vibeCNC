@@ -195,3 +195,51 @@ class GCodeParserNonMotionTests(unittest.TestCase):
 
         self.assertEqual(parser.mode, "G01")
         self.assertEqual(len(paths["cut"]), 1)
+
+
+class GCodeParserFullCircleTests(unittest.TestCase):
+    """VC-20: a block with I/K and no X/Z is a full circle."""
+
+    def test_full_circle_produces_an_arc(self):
+        parser = GCodeParser(chuck_z=-1000.0)
+
+        paths = parser.parse("G00 X50. Z-10.\nG02 I0. K-10.")
+
+        self.assertEqual(len(paths["arc"]), 1)
+        arc = paths["arc"][0]
+        self.assertEqual(arc["start"], arc["end"])
+        self.assertAlmostEqual(arc["radius"], 10.0)
+        self.assertEqual(arc["center"], (50.0, -20.0))
+
+    def test_full_circle_leaves_the_position_alone(self):
+        parser = GCodeParser(chuck_z=-1000.0)
+
+        parser.parse("G00 X50. Z-10.\nG02 I0. K-10.")
+
+        self.assertAlmostEqual(parser.x, 50.0)
+        self.assertAlmostEqual(parser.z, -10.0)
+
+    def test_counter_clockwise_full_circle_too(self):
+        paths = GCodeParser(chuck_z=-1000.0).parse("G00 X50. Z-10.\nG03 I0. K-10.")
+
+        self.assertEqual(len(paths["arc"]), 1)
+        self.assertFalse(paths["arc"][0]["cw"])
+
+    def test_a_repeated_position_without_ik_stays_nothing(self):
+        # G01 to where the tool already is is not a move and not an arc.
+        parser = GCodeParser(chuck_z=-1000.0)
+
+        paths = parser.parse("G01 X50. Z-10. F0.2\nG01 X50. Z-10.")
+
+        self.assertEqual(len(paths["cut"]), 1)
+        self.assertEqual(paths["arc"], [])
+
+    def test_r_cannot_describe_a_full_circle_and_says_so(self):
+        # Previously unreachable: the warning sat behind a movement check that
+        # a zero-length block could never pass.
+        parser = GCodeParser(chuck_z=-1000.0)
+
+        paths = parser.parse("G00 X50. Z-10.\nG02 R5.")
+
+        self.assertEqual(paths["arc"], [])
+        self.assertEqual([w["code"] for w in parser.warnings], ["ARC_R_ZERO_CHORD"])

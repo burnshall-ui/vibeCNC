@@ -30,6 +30,27 @@ def arc_thetas(arc: dict) -> tuple:
     angle1 = math.degrees(math.atan2(z1 - cz, x1 / 2.0 - cr))
     angle2 = math.degrees(math.atan2(z2 - cz, x2 / 2.0 - cr))
 
+    if abs(x1 - x2) < 1e-9 and abs(z1 - z2) < 1e-9:
+        # Full circle: I/K with no X/Z, so the endpoints and therefore the
+        # angles coincide. Leaving it at angle1 twice makes matplotlib draw
+        # nothing at all, so hand back a whole turn. Direction does not matter
+        # here -- both ways cover the same points.
+        return angle1, angle1 + 360.0
+
     if arc['cw']:      # G02
         return angle2, angle1
     return angle1, angle2   # G03
+
+
+def arc_sweep(arc: dict) -> float:
+    """Degrees the arc covers, following matplotlib's own normalisation.
+
+    Path.arc shifts theta2 into the turn above theta1 and, when the two are
+    written differently but land on the same angle, adds a further full turn.
+    A plain (theta2 - theta1) % 360 gets the full circle wrong -- it yields 0.
+    """
+    theta1, theta2 = arc_thetas(arc)
+    eta2 = theta2 - 360.0 * math.floor((theta2 - theta1) / 360.0)
+    if theta2 != theta1 and eta2 <= theta1:
+        eta2 += 360.0
+    return eta2 - theta1
