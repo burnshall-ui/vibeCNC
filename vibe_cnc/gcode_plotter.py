@@ -80,8 +80,11 @@ class GCodePlotterWidget(QWidget):
     def _setup_plot(self):
         """Configures the plot layout (Fanuc style)"""
         self.ax.set_facecolor('#0A0A0A')
-        self.ax.set_xlabel('X (Ø mm)', color=self.colors['CRT_GREEN'], fontsize=9)
-        self.ax.set_ylabel('Z (mm)', color=self.colors['CRT_GREEN'], fontsize=9)
+        # Z along the horizontal with the chuck to the left, X up the vertical.
+        # That is how every lathe control draws it, and it matches the shape of
+        # both the part (long in Z, small in X) and this panel (wide and short).
+        self.ax.set_xlabel('Z (mm)', color=self.colors['CRT_GREEN'], fontsize=9)
+        self.ax.set_ylabel('X (Ø mm)', color=self.colors['CRT_GREEN'], fontsize=9)
         self.ax.tick_params(colors=self.colors['CRT_GREEN'], labelsize=8)
         self.ax.grid(True, color='#2A2A2A', linestyle='--', linewidth=0.5)
         self.ax.spines['bottom'].set_color('#444')
@@ -97,8 +100,8 @@ class GCodePlotterWidget(QWidget):
         self.ax.text(0.5, 0.5, 'No Toolpaths\n(G00/G01 with X/Z)',
                      ha='center', va='center', color='#555', fontsize=10,
                      transform=self.ax.transAxes)
-        self.ax.set_xlim(-10, 50)
-        self.ax.set_ylim(-50, 10)
+        self.ax.set_xlim(-50, 10)
+        self.ax.set_ylim(-10, 50)
         self.canvas.draw_idle()
 
     def update_plot(self):
@@ -123,16 +126,16 @@ class GCodePlotterWidget(QWidget):
                      alpha=0.15, hatch='//', zorder=0)
 
         if diameter is None:
-            # Every diameter is blocked, so span the whole width. axhspan works
-            # in axes coordinates: reading get_xlim() here returned the default
+            # Every diameter is blocked, so span the whole height. axvspan works
+            # in axes coordinates: reading the limits here returned the default
             # (0, 1) because the axes were just cleared and the paths that set
             # the real limits are drawn after this, which left the hatching a
             # one-millimetre sliver at the centre line.
-            self.ax.axhspan(self.parser.chuck_z - 50, self.parser.chuck_z, **style)
+            self.ax.axvspan(self.parser.chuck_z - 50, self.parser.chuck_z, **style)
         else:
             self.ax.add_patch(patches.Rectangle(
-                (-diameter, self.parser.chuck_z - 50), 2 * diameter, 50, **style))
-        self.ax.axhline(y=self.parser.chuck_z, color='#AA0000', linestyle=':',
+                (self.parser.chuck_z - 50, -diameter), 50, 2 * diameter, **style))
+        self.ax.axvline(x=self.parser.chuck_z, color='#AA0000', linestyle=':',
                         linewidth=1, alpha=0.5, zorder=0, label='Chuck Limit')
 
     def _draw_arc(self, arc, **style):
@@ -144,9 +147,14 @@ class GCodePlotterWidget(QWidget):
         """
         theta1, theta2 = arc_thetas(arc)
         radius = arc['radius']
-        self.ax.add_patch(patches.Arc(arc['center'], 4 * radius, 2 * radius,
-                                      angle=0, theta1=theta1, theta2=theta2,
-                                      **style))
+        cx, cz = arc['center']
+        # Transposing the axes reflects the plane, which reverses the sense of
+        # rotation: a point at angle t in (radius, Z) sits at 90 - t in (Z,
+        # diameter). Hence the swapped, mirrored pair -- matplotlib always
+        # sweeps counter-clockwise from the first angle to the second.
+        self.ax.add_patch(patches.Arc((cz, cx), 2 * radius, 4 * radius,
+                                      angle=0, theta1=90.0 - theta2,
+                                      theta2=90.0 - theta1, **style))
 
     def _do_update(self):
         """Performs the actual plot update"""
@@ -181,7 +189,7 @@ class GCodePlotterWidget(QWidget):
             (x1, z1), (x2, z2), line = segment
             # Live drawing: Only draw up to live_max_line
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color='#555', linestyle='--', linewidth=1, zorder=1)
+                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
                 has_paths = True
 
         # Cutting paths (G01) - green solid
@@ -189,14 +197,14 @@ class GCodePlotterWidget(QWidget):
             (x1, z1), (x2, z2), line = segment
             # Live drawing: Only draw up to live_max_line
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
                 has_paths = True
 
         # Compensated cutting paths (G41/G42) - yellow dashed
         for segment in self.paths_cache.get('comp_cut', []):
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
                             linestyle='--', alpha=0.9, zorder=3)
                 has_paths = True
 
@@ -221,16 +229,16 @@ class GCodePlotterWidget(QWidget):
             (x1, z1), (x2, z2), line = segment
             # Live drawing: Only draw up to live_max_line
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color='#FF0000', linewidth=3,
+                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
                             alpha=0.7, zorder=5, label='Collision!')
 
         # Tool changes - yellow markers
         for tc in self.paths_cache['tool_changes']:
             # Live drawing: Only draw up to live_max_line
             if self.live_max_line is None or tc['line'] <= self.live_max_line:
-                self.ax.plot(tc['x'], tc['z'], marker='o', color=self.colors['FANUC_YELLOW'],
+                self.ax.plot(tc['z'], tc['x'], marker='o', color=self.colors['FANUC_YELLOW'],
                             markersize=6, zorder=3)
-                self.ax.text(tc['x'], tc['z'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
+                self.ax.text(tc['z'], tc['x'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
                             fontsize=8, va='center')
 
         if not has_paths:
@@ -251,11 +259,12 @@ class GCodePlotterWidget(QWidget):
             z_min, z_max = min(all_z), max(all_z)
             x_pad = max(5, (x_max - x_min) * 0.1)
             z_pad = max(5, (z_max - z_min) * 0.1)
-            # Include chuck zone
-            z_min = min(z_min, self.parser.chuck_z - 2)
 
-            new_xlim = (x_min - x_pad, x_max + x_pad)
-            new_ylim = (z_min - z_pad, z_max + z_pad)
+            # Fit the toolpath. The chuck used to be forced into view, which on
+            # a short part with a distant chuck limit squeezed the whole path
+            # into a corner; the chuck stays reachable by zooming out.
+            new_xlim = (z_min - z_pad, z_max + z_pad)
+            new_ylim = (x_min - x_pad, x_max + x_pad)
 
             # Zoom stabilization: Only adjust for significant changes (>20%)
             # BUT: Only if the user has not zoomed manually
@@ -333,13 +342,13 @@ class GCodePlotterWidget(QWidget):
             # Create marker or update position
             if self.highlight_artist is None:
                 # Create marker for the first time
-                self.highlight_artist = self.ax.plot(target_pos[0], target_pos[1],
+                self.highlight_artist = self.ax.plot(target_pos[1], target_pos[0],
                                                      marker='o', color='#FF3333',
                                                      markersize=10, markeredgewidth=2,
                                                      markerfacecolor='none', zorder=10)[0]
             else:
                 # Only update position (much faster!)
-                self.highlight_artist.set_data([target_pos[0]], [target_pos[1]])
+                self.highlight_artist.set_data([target_pos[1]], [target_pos[0]])
                 self.highlight_artist.set_visible(True)
         else:
             # No position found - hide marker
@@ -437,7 +446,7 @@ class GCodePlotterWidget(QWidget):
 
         # If no panning occurred -> jump to line
         if not self._is_panning and event.inaxes == self.ax and self._click_start:
-            closest_line = self._find_closest_line(event.xdata, event.ydata)
+            closest_line = self._find_closest_line(event.ydata, event.xdata)
             if closest_line is not None:
                 self.line_clicked.emit(closest_line)
 
@@ -558,19 +567,19 @@ class GCodePlotterWidget(QWidget):
         for segment in self.paths_cache['rapid']:
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color='#555', linestyle='--', linewidth=1, zorder=1)
+                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
 
         # Cutting paths (G01) - green solid
         for segment in self.paths_cache['cut']:
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
 
         # Compensated cutting paths (G41/G42) - yellow dashed
         for segment in self.paths_cache.get('comp_cut', []):
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
                             linestyle='--', alpha=0.9, zorder=3)
 
         # Compensated arcs (G41/G42) - yellow dashed
@@ -590,15 +599,15 @@ class GCodePlotterWidget(QWidget):
         for segment in self.paths_cache['collisions']:
             (x1, z1), (x2, z2), line = segment
             if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([x1, x2], [z1, z2], color='#FF0000', linewidth=3,
+                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
                             alpha=0.7, zorder=5, label='Collision!')
 
         # Tool changes
         for tc in self.paths_cache['tool_changes']:
             if self.live_max_line is None or tc['line'] <= self.live_max_line:
-                self.ax.plot(tc['x'], tc['z'], marker='o', color=self.colors['FANUC_YELLOW'],
+                self.ax.plot(tc['z'], tc['x'], marker='o', color=self.colors['FANUC_YELLOW'],
                             markersize=6, zorder=3)
-                self.ax.text(tc['x'], tc['z'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
+                self.ax.text(tc['z'], tc['x'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
                             fontsize=8, va='center')
 
         # Zero point marker

@@ -146,7 +146,7 @@ class GCodeCompleter(QCompleter):
                 background: #1A1A1A;
                 color: #FFC800;
                 border: 2px solid #FFC800;
-                font-family: Consolas, 'Fira Code', monospace;
+                font-family: Consolas, Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Fira Code', monospace;
                 font-size: 11pt;
                 padding: 4px;
             }

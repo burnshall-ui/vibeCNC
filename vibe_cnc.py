@@ -23,6 +23,13 @@ from vibe_cnc.gcode_completer import install_completer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# Consolas stays first — it is the right face on the Windows machines this runs
+# on. It simply does not exist on macOS or on a bare Linux box, where Qt then
+# spends a few hundred milliseconds hunting for a substitute at every startup.
+# Naming the local equivalents ends that search and keeps the look.
+MONO_FAMILIES = ["Consolas", "Menlo", "SF Mono", "DejaVu Sans Mono", "Fira Code"]
+MONO_CSS = "Consolas, Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Fira Code', monospace"
+
 class AIWorkerSignals(QObject):
     """Signals for AIWorker (QRunnable can't have signals directly)"""
     finished = pyqtSignal(bool, str)
@@ -291,7 +298,7 @@ class Main(QMainWindow):
     def _apply_styles(self):
         c = self.cfg_colors
         self.setStyleSheet(f"""
-            QWidget {{ background:{c['BG_DARK']}; color:{c['WHITE']}; font-family:Consolas, 'Fira Code', monospace; }}
+            QWidget {{ background:{c['BG_DARK']}; color:{c['WHITE']}; font-family:{MONO_CSS}; }}
             QPlainTextEdit, QTextEdit {{ background:{c['BG_BLACK']}; color:{c['WHITE']}; border:1px solid #2A2A2A; }}
             QLineEdit {{ background:{c['BG_BLACK']}; color:{c['WHITE']}; border:1px solid #2A2A2A; padding:6px; }}
             QTableView {{ background:#111; gridline-color:#333; }}
@@ -352,7 +359,11 @@ class Main(QMainWindow):
         w = max(self.width(), 1100)
         scale = max(0.9, min(1.6, w / 1600))
         def set_font(widget, mul=1.0):
-            f = QFont("Consolas"); f.setPointSizeF(self.base_pt * scale * mul); widget.setFont(f)
+            f = QFont()
+            f.setFamilies(MONO_FAMILIES)
+            f.setStyleHint(QFont.StyleHint.Monospace)
+            f.setPointSizeF(self.base_pt * scale * mul)
+            widget.setFont(f)
         set_font(self.editor, 0.95)  # Editor: smaller
         set_font(self.chat, 0.9)     # Chat: smaller
         set_font(self.input, 0.9)    # Input: smaller
