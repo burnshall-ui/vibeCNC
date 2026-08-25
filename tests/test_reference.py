@@ -14,11 +14,24 @@ from vibe_cnc.gcode_parser import GCodeParser
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reference.nc")
 CHUCK_Z = -45.0
 
+# The G71 block that carries P and Q. Everything the cycle generates is filed
+# under it, so it is also how the cycle's paths are told from the rest.
+CYCLE_LINE = 22
+
 
 def segment_length(segment):
     """Travel of one segment in the radius plane (X is a diameter)."""
     (x1, z1), (x2, z2), _line = segment
     return math.hypot((x2 - x1) / 2.0, z2 - z1)
+
+
+def outside_the_cycle(segments):
+    """The moves the program makes itself, without the ones G71 generates."""
+    return [s for s in segments if s[2] != CYCLE_LINE]
+
+
+def inside_the_cycle(segments):
+    return [s for s in segments if s[2] == CYCLE_LINE]
 
 
 class ReferenceProgramTests(unittest.TestCase):
@@ -34,26 +47,59 @@ class ReferenceProgramTests(unittest.TestCase):
         self.paths = self.parser.parse(self.source)
 
     def test_segment_counts(self):
-        self.assertEqual(len(self.paths["rapid"]), 2)
-        self.assertEqual(len(self.paths["cut"]), 7)
+        # Counted without the cycle: three rapids of its own, four cuts, three
+        # arcs. What G71 generates is checked on its own further down.
+        self.assertEqual(len(outside_the_cycle(self.paths["rapid"])), 3)
+        self.assertEqual(len(outside_the_cycle(self.paths["cut"])), 4)
         self.assertEqual(len(self.paths["arc"]), 3)
         self.assertEqual(len(self.paths["tool_changes"]), 1)
 
     def test_cut_path_length(self):
-        # 2.0 + 16.0 + 10.0 + hypot(5,5) + 15.0 + 8.0 + hypot(7,17)
-        expected = 2.0 + 16.0 + 10.0 + math.hypot(5.0, 5.0) + 15.0 + 8.0 + math.hypot(7.0, 17.0)
-        self.assertAlmostEqual(expected, 76.455844122, places=6)
+        # 2.0 down to Z0, 15.0 along Ø50, 8.0 on the W-8., then hypot(7,17).
+        expected = 2.0 + 15.0 + 8.0 + math.hypot(7.0, 17.0)
+        self.assertAlmostEqual(expected, 43.384776311, places=6)
 
-        total = sum(segment_length(s) for s in self.paths["cut"])
+        total = sum(segment_length(s) for s in outside_the_cycle(self.paths["cut"]))
         self.assertAlmostEqual(total, expected, places=9)
 
     def test_rapid_path_length(self):
-        # hypot(26,2) for the approach, hypot(2,5) for the U4./W5. reposition
-        expected = math.hypot(26.0, 2.0) + math.hypot(2.0, 5.0)
-        self.assertAlmostEqual(expected, 31.461974428, places=6)
+        # hypot(26,2) for the approach, hypot(11,15) onto the end of the
+        # contour, hypot(2,5) for the U4./W5. reposition.
+        expected = math.hypot(26.0, 2.0) + math.hypot(11.0, 15.0) + math.hypot(2.0, 5.0)
+        self.assertAlmostEqual(expected, 50.063049666, places=6)
 
-        total = sum(segment_length(s) for s in self.paths["rapid"])
+        total = sum(segment_length(s) for s in outside_the_cycle(self.paths["rapid"]))
         self.assertAlmostEqual(total, expected, places=9)
+
+    def test_the_roughing_cycle_cuts_the_layers_it_should(self):
+        # Ø52 down to the Ø20.4 the allowance leaves, 3.0 a pass: ten layers,
+        # and then one run along the roughed contour.
+        cuts = inside_the_cycle(self.paths["cut"])
+
+        # The layers come first, then the two segments of the contour run --
+        # which is also parallel to the axis for its first half, so it has to
+        # be told apart by position rather than by shape.
+        self.assertEqual([s[0][0] for s in cuts[:-2]],
+                         [49.0, 46.0, 43.0, 40.0, 37.0,
+                          34.0, 31.0, 28.0, 25.0, 22.0])
+        self.assertEqual(cuts[-2:], [
+            [(20.4, 0.1), (20.4, -9.9), CYCLE_LINE],
+            [(20.4, -9.9), (30.4, -14.9), CYCLE_LINE],
+        ])
+
+    def test_no_pass_touches_the_finished_contour(self):
+        # U0.4 and W0.1 are what the finishing cut is there for.
+        for segment in inside_the_cycle(self.paths["cut"]):
+            for (x, z) in segment[:2]:
+                self.assertGreaterEqual(x, 20.4 - 1e-9)
+                self.assertLessEqual(z, 0.1 + 1e-9)
+
+    def test_the_cycle_hands_the_tool_back_where_it_took_it(self):
+        # The block after the cycle is a G00 to the end of the contour, and it
+        # is measured from Ø52/Z0 in test_rapid_path_length above.
+        cycle_rapids = inside_the_cycle(self.paths["rapid"])
+
+        self.assertEqual(cycle_rapids[-1][1], (52.0, 0.0))
 
     def test_every_arc_is_r5_and_closes_on_its_endpoints(self):
         self.assertEqual([round(a["radius"], 9) for a in self.paths["arc"]], [5.0, 5.0, 5.0])

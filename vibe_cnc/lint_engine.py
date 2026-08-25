@@ -9,6 +9,10 @@ class LintEngine:
         "ARC_R_ZERO_CHORD": "Arc R",
         "ARC_NO_CENTER": "Arc",
         "ARC_COMP_TOO_TIGHT": "G41/G42",
+        "CYCLE_NO_PASS": "Cycle",
+        "CYCLE_NO_DEPTH": "Cycle",
+        "CYCLE_NO_CONTOUR": "Cycle",
+        "CYCLE_BLOCKS_MISSING": "Cycle",
     }
 
     # How many code-bearing lines count as "the header". Comments and the

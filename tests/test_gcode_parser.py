@@ -46,15 +46,17 @@ class GCodeParserCycleTests(unittest.TestCase):
         "N200 Z-30.",
     ])
 
-    def test_contour_between_p_and_q_is_drawn(self):
+    def test_contour_between_p_and_q_reaches_the_paths(self):
         parser = GCodeParser(chuck_z=-100.0)
 
         paths = parser.parse(self.ROUGHING)
 
-        # One approach cut plus the four contour blocks. Counting matters: a
-        # sticky G71 leaves the approach cut in place and drops only the four.
-        self.assertEqual(len(paths["cut"]), 5)
-        self.assertEqual(paths["cut"][-1][1], (50.0, -30.0))
+        # VC-01 asked only that the contour stop vanishing, and counted the
+        # four blocks as moves. VC-13 expands the cycle instead, so they are a
+        # shape now -- what has to arrive is the run along the roughed contour
+        # at the end of it, U0.3 and W0.1 clear of the finished shape.
+        self.assertTrue(paths["cut"])
+        self.assertEqual(paths["cut"][-1][1], (50.3, -29.9))
 
     def test_mode_never_becomes_a_cycle(self):
         parser = GCodeParser(chuck_z=-100.0)
@@ -433,3 +435,242 @@ class GCodeParserCompensationTests(unittest.TestCase):
 
         self.assertEqual(paths["comp_arc"], [])
         self.assertEqual(paths["comp_cut"], [])
+
+
+class GCodeParserThreadCycleTests(unittest.TestCase):
+    """VC-15: G92 really cuts, so it has to draw -- one pass per block."""
+
+    THREAD = "\n".join([
+        "G00 X22. Z2.",
+        "G92 X19.4 Z-20. F1.5",
+        "X19.1",
+        "X18.9",
+    ])
+
+    def _parse(self, source=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        return parser, parser.parse(self.THREAD if source is None else source)
+
+    def test_every_block_cuts_one_pass_at_its_own_diameter(self):
+        _parser, paths = self._parse()
+
+        self.assertEqual([segment[0][0] for segment in paths["cut"]],
+                         [19.4, 19.1, 18.9])
+
+    def test_the_end_of_the_thread_stays_modal_across_repeats(self):
+        # The repeat blocks carry no Z. Reading it off the current position
+        # instead of off the opening block made every repeat zero-length.
+        _parser, paths = self._parse()
+
+        for segment in paths["cut"]:
+            self.assertEqual((segment[0][1], segment[1][1]), (2.0, -20.0))
+
+    def test_the_tool_ends_each_pass_where_it_started(self):
+        parser, _paths = self._parse()
+
+        self.assertAlmostEqual(parser.x, 22.0)
+        self.assertAlmostEqual(parser.z, 2.0)
+
+    def test_infeed_retract_and_return_are_rapids(self):
+        _parser, paths = self._parse()
+
+        # The approach, plus three moves around each of the three passes.
+        self.assertEqual(len(paths["rapid"]), 1 + 3 * 3)
+
+    def test_a_motion_code_cancels_the_cycle(self):
+        parser, paths = self._parse(self.THREAD + "\nG01 X30. Z-5. F0.2")
+
+        self.assertEqual(parser.mode, "G01")
+        self.assertEqual(paths["cut"][-1], [(22.0, 2.0), (30.0, -5.0), 5])
+
+    def test_a_block_without_an_axis_word_does_not_repeat_it(self):
+        _parser, paths = self._parse("G00 X22. Z2.\nG92 X19.4 Z-20. F1.5\nF1.2")
+
+        self.assertEqual(len(paths["cut"]), 1)
+
+    def test_incremental_words_reach_the_cycle_too(self):
+        _parser, paths = self._parse("G00 X22. Z2.\nG92 U-2.6 W-22. F1.5")
+
+        self.assertEqual(paths["cut"], [[(19.4, 2.0), (19.4, -20.0), 2]])
+
+    def test_a_taper_moves_the_entry_diameter_not_the_target(self):
+        # R is the difference in radius over the taper, so it widens the entry
+        # by twice itself in diameter and leaves the programmed end alone.
+        _parser, paths = self._parse("G00 X22. Z2.\nG92 X19.4 Z-20. R-1. F1.5")
+
+        self.assertEqual(paths["cut"], [[(17.4, 2.0), (19.4, -20.0), 2]])
+
+    def test_the_taper_stays_modal_as_well(self):
+        _parser, paths = self._parse(
+            "G00 X22. Z2.\nG92 X19.4 Z-20. R-1. F1.5\nX19.1")
+
+        self.assertEqual([segment[0][0] for segment in paths["cut"]], [17.4, 17.1])
+
+    def test_a_thread_that_runs_into_the_chuck_is_flagged(self):
+        # The whole point of drawing the cycle: every leg is a real move and
+        # gets checked like one. Drawing nothing checked nothing.
+        #
+        # Three per pass, not one: the thread ends at Z-20, so the retract in X
+        # and the return in Z both happen behind the face at Z-15 as well.
+        _parser, paths = self._parse(chuck_z=-15.0)
+
+        self.assertEqual(len(paths["collisions"]), 9)
+        for segment in paths["cut"]:
+            self.assertIn(segment, paths["collisions"])
+
+    def test_a_cycle_with_nowhere_to_go_is_reported(self):
+        parser, paths = self._parse("G00 X22. Z2.\nG92 X22. Z2. F1.5")
+
+        self.assertEqual(paths["cut"], [])
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+
+
+class GCodeParserRoughingExpansionTests(unittest.TestCase):
+    """VC-13: G71/G72 expand into the passes they really cut."""
+
+    # Ø52 stock, contour Ø20 to Z-10, a taper out to Ø30 and on to Z-30.
+    ROUGHING = "\n".join([
+        "G00 X52. Z2.",
+        "G71 U1.5 R0.5",
+        "G71 P100 Q200 U0.4 W0.1 F0.25",
+        "N100 G01 X20. F0.15",
+        "N110 Z-10.",
+        "N120 X30. Z-15.",
+        "N200 Z-30.",
+    ])
+    CYCLE_LINE = 3          # the block carrying P and Q
+
+    def _parse(self, source=None):
+        parser = GCodeParser(chuck_z=-100.0)
+        return parser, parser.parse(self.ROUGHING if source is None else source)
+
+    def _layers(self, paths):
+        """Diameter of each roughing pass, in the order they are cut."""
+        return [segment[0][0] for segment in paths["cut"]
+                if segment[0][0] == segment[1][0]]
+
+    def test_layers_step_down_by_twice_the_programmed_depth(self):
+        # U1.5 on the first block is a depth in radius, so the diameter drops
+        # by 3.0 a pass, starting one step below the Ø52 the tool sits at.
+        _parser, paths = self._parse()
+
+        self.assertEqual(self._layers(paths)[:4], [49.0, 46.0, 43.0, 40.0])
+
+    def test_no_pass_cuts_into_the_finishing_allowance(self):
+        _parser, paths = self._parse()
+
+        for segment in paths["cut"]:
+            for (x, _z) in segment[:2]:
+                self.assertGreaterEqual(x, 20.4 - 1e-9)
+
+    def test_a_pass_clear_of_the_contour_runs_its_whole_length(self):
+        # Ø49 is wider than anything the contour reaches, so nothing stops it
+        # before the far end -- Z-30 plus the W0.1 allowance.
+        _parser, paths = self._parse()
+
+        first = paths["cut"][0]
+        self.assertEqual(first[0], (49.0, 2.0))
+        self.assertAlmostEqual(first[1][1], -29.9, places=9)
+
+    def test_a_pass_inside_the_contour_stops_on_it(self):
+        # Ø28 meets the taper between (Ø20.4, Z-9.9) and (Ø30.4, Z-14.9):
+        # 7.6 of the 10 mm rise, so 3.8 of the 5 mm run.
+        _parser, paths = self._parse()
+
+        stopped = [s for s in paths["cut"] if s[0][0] == 28.0][0]
+        self.assertAlmostEqual(stopped[1][1], -13.7, places=9)
+
+    def test_the_contour_blocks_stop_being_moves_of_their_own(self):
+        # Between P and Q they describe a shape. Fanuc jumps past them once the
+        # cycle is done, so every segment here belongs to the cycle block.
+        _parser, paths = self._parse()
+
+        lines = {segment[2] for segment in paths["cut"]}
+        self.assertEqual(lines, {self.CYCLE_LINE})
+
+    def test_the_cycle_ends_where_it_started(self):
+        parser, _paths = self._parse()
+
+        self.assertAlmostEqual(parser.x, 52.0)
+        self.assertAlmostEqual(parser.z, 2.0)
+
+    def test_the_cycle_finishes_along_the_roughed_contour(self):
+        # Last three cuts: down the Ø20.4 face, out along the taper, then on
+        # to the far end -- the finished shape with the allowance still on it.
+        _parser, paths = self._parse()
+
+        self.assertEqual(paths["cut"][-3:], [
+            [(20.4, 2.1), (20.4, -9.9), self.CYCLE_LINE],
+            [(20.4, -9.9), (30.4, -14.9), self.CYCLE_LINE],
+            [(30.4, -14.9), (30.4, -29.9), self.CYCLE_LINE],
+        ])
+
+    def test_without_an_allowance_the_cycle_runs_onto_the_contour(self):
+        _parser, paths = self._parse(
+            self.ROUGHING.replace("U0.4 W0.1", "U0. W0."))
+
+        self.assertEqual(paths["cut"][-1], [(30.0, -15.0), (30.0, -30.0),
+                                            self.CYCLE_LINE])
+
+    def test_an_arc_in_the_contour_stops_the_pass_on_the_curve(self):
+        # Quarter circle from (Ø20, Z-10) to (Ø30, Z-15), centre (Ø20, Z-15).
+        # At Ø28 the arc is sqrt(5^2 - 4^2) = 3 short of the centre in Z, so
+        # the pass stops at Z-12, not at the Z-13 of the chord.
+        source = "\n".join([
+            "G00 X52. Z2.",
+            "G71 U1.5 R0.5",
+            "G71 P100 Q200 U0. W0. F0.25",
+            "N100 G01 X20. F0.15",
+            "N110 Z-10.",
+            "N200 G03 X30. Z-15. R5.",
+        ])
+        _parser, paths = self._parse(source)
+
+        stopped = [s for s in paths["cut"] if s[0][0] == 28.0][0]
+        self.assertAlmostEqual(stopped[1][1], -12.0, places=2)
+
+    def test_g72_steps_along_z_and_cuts_along_x(self):
+        # Facing cycle: W1.0 is the depth, so the layers are 1 mm apart in Z
+        # and each pass runs in X.
+        # Like G71, the contour is written in the direction the cycle cuts --
+        # for facing that is outside in, so the first block feeds to depth in Z
+        # and the next one runs to the smallest diameter.
+        source = "\n".join([
+            "G00 X52. Z2.",
+            "G72 W1.0 R0.5",
+            "G72 P100 Q200 U0. W0. F0.25",
+            "N100 G01 Z-4. F0.15",
+            "N200 X20.",
+        ])
+        _parser, paths = self._parse(source)
+
+        levels = [s[0][1] for s in paths["cut"] if s[0][1] == s[1][1]]
+        self.assertEqual(levels[:3], [1.0, 0.0, -1.0])
+        for segment in paths["cut"][:3]:
+            self.assertEqual(segment[0][0], 52.0)      # each pass runs in X
+            self.assertEqual(segment[1][0], 20.0)
+
+    def test_a_cycle_without_a_depth_of_cut_is_reported(self):
+        parser, paths = self._parse(
+            self.ROUGHING.replace("G71 U1.5 R0.5\n", ""))
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        # ...and the contour is still drawn, rather than vanishing with it.
+        self.assertEqual(len(paths["cut"]), 4)
+
+    def test_block_numbers_that_name_nothing_are_reported(self):
+        parser, paths = self._parse(
+            self.ROUGHING.replace("P100 Q200", "P900 Q950"))
+
+        self.assertEqual([w["code"] for w in parser.warnings],
+                         ["CYCLE_BLOCKS_MISSING"])
+        self.assertEqual(len(paths["cut"]), 4)
+
+    def test_the_cycle_is_checked_against_the_chuck(self):
+        parser = GCodeParser(chuck_z=-20.0)
+
+        paths = parser.parse(self.ROUGHING)
+
+        self.assertTrue(paths["collisions"])
+        for segment in paths["collisions"]:
+            self.assertLess(min(segment[0][1], segment[1][1]), -20.0)

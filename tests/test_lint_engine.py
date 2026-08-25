@@ -278,3 +278,49 @@ class LintEngineNoseDirectionTests(unittest.TestCase):
 
         self.assertEqual(len(findings), 1)
         self.assertIn("insert_radius_mm", findings[0]["message"])
+
+
+class LintEngineCycleTests(unittest.TestCase):
+    """VC-13/VC-15: a cycle that cannot be expanded says why."""
+
+    def _cycle_findings(self, code):
+        return rules(LintEngine(make_cfg()).run_all(code), "Cycle")
+
+    def test_a_roughing_cycle_without_a_depth_is_reported(self):
+        findings = self._cycle_findings("\n".join([
+            "G00 X52. Z2.",
+            "G71 P100 Q200 U0.4 W0.1 F0.25",
+            "N100 G01 X20. F0.15",
+            "N200 Z-10.",
+        ]))
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("depth of cut", findings[0]["message"])
+
+    def test_block_numbers_that_name_nothing_are_reported(self):
+        findings = self._cycle_findings("\n".join([
+            "G00 X52. Z2.",
+            "G71 U1.5 R0.5",
+            "G71 P900 Q950 U0.4 W0.1 F0.25",
+            "N100 G01 X20. F0.15",
+        ]))
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("P900/Q950", findings[0]["message"])
+
+    def test_a_thread_block_with_nowhere_to_go_is_reported(self):
+        findings = self._cycle_findings("G00 X22. Z2.\nG92 X22. Z2. F1.5")
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("nothing to cut", findings[0]["message"])
+
+    def test_a_cycle_that_expands_says_nothing(self):
+        findings = self._cycle_findings("\n".join([
+            "G00 X52. Z2.",
+            "G71 U1.5 R0.5",
+            "G71 P100 Q200 U0.4 W0.1 F0.25",
+            "N100 G01 X20. F0.15",
+            "N200 Z-10.",
+        ]))
+
+        self.assertEqual(findings, [])

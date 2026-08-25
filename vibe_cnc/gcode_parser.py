@@ -14,19 +14,28 @@ from .tool_data import nose_direction_of, nose_offset
 # never programmed — `G04 X1.0` is the worst of them, it aims the tool at Ø1 mm
 # straight through the part. The canned cycles G70-G76 are in the same set:
 # their U/W are stock allowances and their R is a retract, not an increment.
-NON_MOTION_CODES = frozenset({4, 10, 28, 30, 50, 65, 70, 71, 72, 73, 74, 75, 76, 92})
+#
+# G92 used to sit here too. Its words are cycle parameters, so reading them as
+# one straight move was wrong -- but so is drawing nothing, because the cycle
+# really does cut. It is a modal motion mode now, see _expand_thread_cycle.
+NON_MOTION_CODES = frozenset({4, 10, 28, 30, 50, 65, 70, 71, 72, 73, 74, 75, 76})
 
 # Cycles recorded in self.cycle rather than self.mode. They are one-shot calls,
 # not motion modes — leaving them modal made every following block invisible.
 CYCLE_CODES = frozenset({70, 71, 72, 73, 74, 75, 76})
 
+# The two roughing cycles this parser expands into real passes. G71 feeds in X
+# and cuts along Z, G72 the other way round.
+ROUGHING_CODES = frozenset({71, 72})
+
 
 class GCodeParser:
     """Parser for Fanuc lathe G-code (X=diameter, Z=length)"""
 
-    # Points sampled along an arc for the collision check. An arc bulges away
-    # from its chord, so testing the chord alone can miss a crash.
-    ARC_COLLISION_STEPS = 24
+    # Points an arc is sampled at. The collision check needs them because an
+    # arc bulges away from its chord, and the roughing cycle needs them to know
+    # where the contour actually runs.
+    ARC_SAMPLE_STEPS = 24
 
     def __init__(self, chuck_z: float = -5.0, chuck_diameter: float = None):
         self.chuck_z = chuck_z  # Chuck face: anything behind it is inside the chuck
@@ -51,6 +60,17 @@ class GCodeParser:
         self.f = 0.0  # Feed rate
         self.mode = 'G00'  # G00=rapid, G01=cut, G02=CW-arc, G03=CCW-arc
         self.cycle = None  # Last canned cycle seen (G70-G76), informational
+        # Modal parameters of the threading cycle. A repeat block carries only
+        # the new X; Z and the taper come from the block that opened it.
+        self.cycle_z = None
+        self.cycle_taper = 0.0
+        # Roughing cycle: depth of cut and retract come from the first G71/G72
+        # block, the contour and the allowances from the second.
+        self.cycle_depth = 0.0
+        self.cycle_retract = 0.0
+        self._lines = []
+        self._blocks = {}
+        self._skip = set()
         self.i = 0.0  # Arc parameter (X-offset center)
         self.k = 0.0  # Arc parameter (Z-offset center)
         # Tool Nose Radius Compensation (G40/G41/G42)
@@ -73,13 +93,29 @@ class GCodeParser:
         self.reset()
 
         lines = gcode.split('\n')
+        # The roughing cycle needs to reach the contour blocks by their N
+        # number, and then keep the main loop from running them a second time:
+        # between P and Q they describe a shape, they are not moves of their
+        # own. Fanuc jumps straight past them once the cycle is done.
+        self._lines = lines
+        self._blocks = self._index_blocks(lines)
+        self._skip = set()
+
         for line_num, line in enumerate(lines, 1):
+            if line_num in self._skip:
+                continue
             self._parse_line(line, line_num)
 
         # Post-processing: intersect corners (Lookahead Corner Handling)
         self._intersect_compensated_corners()
 
         return self.paths
+
+    @staticmethod
+    def _word(line: str, letter: str):
+        """The value of one address word, or None when the block has none."""
+        match = re.search(rf'{letter}([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+        return float(match.group(1)) if match else None
 
     def _warn(self, line_num: int, code: str, message: str):
         """Records a geometry problem instead of silently drawing nothing."""
@@ -105,6 +141,11 @@ class GCodeParser:
                 self.mode = 'G02'
             elif g == 3:
                 self.mode = 'G03'
+            elif g == 92:
+                # A modal cycle, group 01 like G00-G03: the next block that
+                # carries only an X repeats it, and the next G00/G01/G02/G03
+                # cancels it. Keeping it in self.mode gets both for free.
+                self.mode = 'G92'
             elif g == 40:
                 self.comp = 'G40'
             elif g == 41:
@@ -115,6 +156,8 @@ class GCodeParser:
                 # A cycle call, not a motion mode: the previously active G00/G01
                 # stays in force for the blocks that follow (Fanuc behaviour).
                 self.cycle = f'G{g:02d}'
+                if g in ROUGHING_CODES:
+                    self._read_roughing_cycle(line, g, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -177,6 +220,17 @@ class GCodeParser:
         self.i = float(i_match.group(1)) if i_match else 0.0
         self.k = float(k_match.group(1)) if k_match else 0.0
 
+        if self.mode == 'G92':
+            # The cycle returns to where it started, so it has to be handled
+            # ahead of the gate below -- which asks whether the position
+            # changed, and for a thread pass it never does. A block with no
+            # axis word at all (a bare F, say) does not repeat the cycle.
+            if any(m is not None for m in (x_match, u_match, z_match, w_match)):
+                self._expand_thread_cycle(new_x, new_z,
+                                          z_match is not None or w_match is not None,
+                                          r_match, line_num)
+            return
+
         # A circular block with I/K but no X/Z is a full circle: start and end
         # are the same point. Gating everything on "did the position change"
         # dropped the whole block -- no arc, and no collision check either.
@@ -188,16 +242,11 @@ class GCodeParser:
 
         # Record movement (if position changes)
         if new_x != self.x or new_z != self.z:
-            segment_data = [(self.x, self.z), (new_x, new_z), line_num]
-
-            if self.mode not in ('G02', 'G03') and self._hits_chuck(
-                    self.x, self.z, new_x, new_z):
-                self.paths['collisions'].append(segment_data)
-
             if self.mode == 'G00':
-                self.paths['rapid'].append(segment_data)
+                self._record_move('rapid', (self.x, self.z), (new_x, new_z), line_num)
             elif self.mode == 'G01':
-                self.paths['cut'].append(segment_data)
+                segment_data = self._record_move('cut', (self.x, self.z),
+                                                 (new_x, new_z), line_num)
                 if self._compensating():
                     self._add_compensated_segment(segment_data)
             elif self.mode in ['G02', 'G03']:
@@ -205,6 +254,23 @@ class GCodeParser:
 
             self.x = new_x
             self.z = new_z
+
+    def _record_move(self, kind, start, end, line_num):
+        """Files one straight move under `kind` and checks it against the chuck.
+
+        Returns the segment so callers can hang more off it. Arcs go through
+        _add_arc instead: their collision check has to sample the curve.
+        """
+        segment = [start, end, line_num]
+        if start == end:
+            # A cycle that starts where it retracts to produces these; drawing
+            # them would put a dot on the plot and a zero-length leg in any
+            # length the paths are later summed for.
+            return segment
+        if self._hits_chuck(*start, *end):
+            self.paths['collisions'].append(segment)
+        self.paths[kind].append(segment)
+        return segment
 
     def _add_arc(self, new_x, new_z, i_match, k_match, r_match, line_num):
         """Appends one G02/G03 arc, from I/K or from an R word."""
@@ -247,6 +313,250 @@ class GCodeParser:
 
         if self._compensating():
             self._add_compensated_arc(arc_data, cr, cz, radius, clockwise, line_num)
+
+    # --- Canned cycles ----------------------------------------------------
+
+    @staticmethod
+    def _index_blocks(lines) -> dict:
+        """N number -> line number, for the P and Q words of a cycle.
+
+        Read as integers so N100 and N0100 are the same block, the way the
+        control reads them.
+        """
+        blocks = {}
+        for line_num, line in enumerate(lines, 1):
+            match = re.match(r'\s*N(\d+)', line, re.IGNORECASE)
+            if match:
+                blocks.setdefault(int(match.group(1)), line_num)
+        return blocks
+
+    def _read_roughing_cycle(self, line, code, line_num):
+        """G71/G72. The first block carries the parameters, the second cuts.
+
+        Fanuc splits the call in two: `G71 U1.5 R0.5` sets depth of cut and
+        retract, `G71 P.. Q.. U.. W..` names the contour and the allowances and
+        runs it. The U of the first block is a depth, the U of the second an
+        allowance -- same letter, different meaning, told apart by whether P
+        and Q are present.
+        """
+        first_block = self._word(line, 'P')
+        last_block = self._word(line, 'Q')
+
+        if first_block is None or last_block is None:
+            depth = self._word(line, 'U' if code == 71 else 'W')
+            if depth is not None:
+                self.cycle_depth = abs(depth)
+            retract = self._word(line, 'R')
+            if retract is not None:
+                self.cycle_retract = abs(retract)
+            return
+
+        self._expand_roughing_cycle(code, int(first_block), int(last_block),
+                                    self._word(line, 'U') or 0.0,
+                                    self._word(line, 'W') or 0.0,
+                                    line_num)
+
+    def _expand_roughing_cycle(self, code, first_block, last_block,
+                               allowance_x, allowance_z, line_num):
+        """Turns one G71/G72 call into the passes it actually cuts."""
+        found = self._contour_points(first_block, last_block, line_num)
+        if found is None:
+            return
+        contour, contour_lines = found
+        if self.cycle_depth <= 0.0:
+            self._warn(line_num, 'CYCLE_NO_DEPTH',
+                       f'G{code} without a depth of cut — '
+                       'the contour is drawn, but no passes')
+            return
+
+        # The allowance is what is left standing for the finishing cut. Fanuc
+        # shifts the contour along the axes by it rather than normal to it, so
+        # a plain addition is the whole of it -- allowance_x is a diameter.
+        rough = [(x + allowance_x, z + allowance_z) for (x, z) in contour]
+
+        # G71 steps in X and cuts along Z; G72 the other way round. Everything
+        # below works in (level, travel) so both fit through the same code.
+        level, travel = (0, 1) if code == 71 else (1, 0)
+        start = (self.x, self.z)
+
+        # Which way the passes march, and which way they cut, is read off the
+        # contour rather than off the sign of the allowance: turning outside
+        # goes down in diameter, boring goes up, and the contour says which.
+        levels = [point[level] for point in rough]
+        far = min(levels) if min(levels) < start[level] else max(levels)
+        # U of the first block is a depth in radius, so a G71 layer is twice
+        # that in diameter. G72 steps along Z, where the word means itself.
+        step = self.cycle_depth * (2.0 if level == 0 else 1.0)
+        step = abs(step) if far > start[level] else -abs(step)
+
+        passes = []
+        position = start[level] + step
+        while (position - far) * (1.0 if step > 0 else -1.0) < 0.0:
+            passes.append(position)
+            position += step
+        # No pass on the contour itself: what the last layer leaves standing is
+        # exactly what the contour run at the end of the cycle takes off.
+
+        # The contour runs the way the passes cut -- towards the chuck for
+        # G71, towards the centre line for G72. Reading the direction off it
+        # beats comparing against the start position, which says nothing when
+        # the contour begins level with it.
+        forward = 1.0 if rough[-1][travel] > rough[0][travel] else -1.0
+
+        for value in passes:
+            self._one_roughing_pass(value, level, travel, start, rough,
+                                    forward, line_num)
+
+        # The last thing the cycle does is follow the roughed contour once.
+        self._follow_contour(rough, line_num)
+
+        # Back to where the cycle started, and past the contour blocks: they
+        # describe the shape, they are not moves of their own. Skipping them is
+        # the last thing done, so a cycle that could not be expanded leaves
+        # them to the main loop and the contour is still drawn.
+        self._record_move('rapid', (self.x, self.z), start, line_num)
+        self.x, self.z = start
+        self._skip.update(contour_lines)
+
+    def _one_roughing_pass(self, value, level, travel, start, rough, forward,
+                           line_num):
+        """One layer: feed in, cut until the contour stops it, retract, return."""
+        limit = self._contour_limit(rough, level, travel, value, forward)
+        if limit is None:
+            return
+
+        def point(level_value, travel_value):
+            return ((level_value, travel_value) if level == 0
+                    else (travel_value, level_value))
+
+        entry = point(value, start[travel])
+        end = point(value, limit)
+        self._record_move('rapid', (self.x, self.z), entry, line_num)
+        self._record_move('cut', entry, end, line_num)
+
+        # Retract at 45 degrees, away from the wall that stopped the pass.
+        away = self.cycle_retract * (1.0 if start[level] > value else -1.0)
+        back = -self.cycle_retract * forward
+        corner = point(value + away * (2.0 if level == 0 else 1.0), limit + back)
+        self._record_move('rapid', end, corner, line_num)
+        self._record_move('rapid', corner, point(corner[level], start[travel]),
+                          line_num)
+        self.x, self.z = point(corner[level], start[travel])
+
+    def _follow_contour(self, rough, line_num):
+        """Runs the roughed contour once, which is how the cycle finishes."""
+        self._record_move('rapid', (self.x, self.z), rough[0], line_num)
+        previous = rough[0]
+        for current in rough[1:]:
+            self._record_move('cut', previous, current, line_num)
+            previous = current
+        self.x, self.z = previous
+
+    @staticmethod
+    def _contour_limit(rough, level, travel, value, forward):
+        """How far a pass at `value` gets before the contour is in the way.
+
+        The pass stops at the first material it meets, which is the crossing
+        that comes first along the direction of travel. With no crossing at all
+        the layer clears the whole contour and runs to its far end. This is the
+        type I reading of the cycle: material behind a pocket is left for a
+        later layer rather than undercut.
+        """
+        crossings = []
+        for first, second in zip(rough, rough[1:]):
+            low, high = sorted((first[level], second[level]))
+            if low - 1e-9 <= value <= high + 1e-9:
+                span = second[level] - first[level]
+                if abs(span) < 1e-12:
+                    crossings.extend((first[travel], second[travel]))
+                else:
+                    ratio = (value - first[level]) / span
+                    crossings.append(first[travel]
+                                     + ratio * (second[travel] - first[travel]))
+
+        if not crossings:
+            # Nothing at this level: the layer runs past the whole contour.
+            beyond = [point[travel] for point in rough]
+            return max(beyond) if forward > 0 else min(beyond)
+
+        return min(crossings) if forward > 0 else max(crossings)
+
+    def _contour_points(self, first_block, last_block, line_num):
+        """Contour between two N numbers plus its line range, arcs sampled."""
+        start_line = self._blocks.get(first_block)
+        end_line = self._blocks.get(last_block)
+        if start_line is None or end_line is None or end_line < start_line:
+            self._warn(line_num, 'CYCLE_BLOCKS_MISSING',
+                       f'P{first_block}/Q{last_block} do not name a block range '
+                       'in this program — the cycle cannot be expanded')
+            return None
+
+        # Walked with a parser of its own so the contour blocks cannot leave
+        # anything behind in the real paths -- they are a shape, not moves.
+        reader = GCodeParser(chuck_z=self.chuck_z,
+                             chuck_diameter=self.chuck_diameter)
+        reader.tool_items = self.tool_items
+        reader.x, reader.z = self.x, self.z
+        reader.mode = self.mode
+        reader.comp = 'G40'          # the cycle is not the place for compensation
+
+        # The first block only brings the tool from the cycle start onto the
+        # contour, so the shape begins where that block ends. Counting the
+        # approach as contour laid a wall right across the stock, and every
+        # pass stopped against it after a tenth of a millimetre.
+        points = []
+        for offset in range(start_line, end_line + 1):
+            seen = len(reader.paths['arc'])
+            reader._parse_line(self._lines[offset - 1], offset)
+            for arc in reader.paths['arc'][seen:]:
+                points.extend(reader._sample_arc(arc)[1:])
+            if not points or (reader.x, reader.z) != points[-1]:
+                points.append((reader.x, reader.z))
+
+        if len(points) < 2:
+            self._warn(line_num, 'CYCLE_NO_CONTOUR',
+                       'The blocks between P and Q describe no contour')
+            return None
+        return points, range(start_line, end_line + 1)
+
+    def _expand_thread_cycle(self, target_x, target_z, has_z, r_match, line_num):
+        """G92: one threading pass, drawn as the four moves it really makes.
+
+        A Fanuc lathe cuts *one* pass per G92 block -- the depth schedule is
+        the sequence of blocks that follows, each with a smaller X, not
+        something hidden inside a single block. So one block is: feed in to
+        the diameter, cut the thread to Z, retract in X, return in Z. Only the
+        second of those removes material; the other three are rapids.
+
+        The tool ends the block where it began, which is what lets the next
+        block carry nothing but an X. Position therefore stays untouched.
+        """
+        start_x, start_z = self.x, self.z
+
+        # Z and the taper are modal within the cycle: a repeat block carries
+        # only the next X, and the end of the thread stays where the opening
+        # block put it. Reading Z off the current position instead turned every
+        # repeat into a zero-length pass.
+        if has_z:
+            self.cycle_z = target_z
+        elif self.cycle_z is not None:
+            target_z = self.cycle_z
+
+        # R is the taper: the difference in *radius* between the start of the
+        # thread and its end, so the entry diameter is that much wider.
+        if r_match is not None:
+            self.cycle_taper = float(r_match.group(1))
+        entry_x = target_x + 2.0 * self.cycle_taper
+
+        if target_z == start_z and entry_x == start_x and target_x == start_x:
+            self._warn(line_num, 'CYCLE_NO_PASS',
+                       'G92 without a target — nothing to cut')
+            return
+
+        self._record_move('rapid', (start_x, start_z), (entry_x, start_z), line_num)
+        self._record_move('cut', (entry_x, start_z), (target_x, target_z), line_num)
+        self._record_move('rapid', (target_x, target_z), (start_x, target_z), line_num)
+        self._record_move('rapid', (start_x, target_z), (start_x, start_z), line_num)
 
     # --- Tool nose radius compensation ----------------------------------
     #
@@ -437,20 +747,35 @@ class GCodeParser:
         the part of the arc that actually offends. Start and end coincide on a
         full circle, so the chord would have been a single point.
         """
+        previous = None
+        for point in self._sample_arc(arc):
+            if previous is not None and self._hits_chuck(*previous, *point):
+                return previous, point
+            previous = point
+        return None
+
+    def _sample_arc(self, arc):
+        """The arc as a list of points, both ends included, in travel order.
+
+        arc_thetas hands back the pair matplotlib wants, which for a
+        counter-clockwise arc means the end angle first -- fine for a static
+        patch, and fine for the collision check, which only looks at
+        neighbouring pairs. A contour has to come out the way the tool runs it,
+        so that case is turned back round here.
+        """
         theta1, _theta2 = arc_thetas(arc)
         sweep = arc_sweep(arc)
         cr, cz = arc['center'][0] / 2.0, arc['center'][1]
         radius = arc['radius']
 
-        previous = None
-        for step in range(self.ARC_COLLISION_STEPS + 1):
-            angle = math.radians(theta1 + sweep * step / self.ARC_COLLISION_STEPS)
-            point = (2.0 * (cr + radius * math.cos(angle)),
-                     cz + radius * math.sin(angle))
-            if previous is not None and self._hits_chuck(*previous, *point):
-                return previous, point
-            previous = point
-        return None
+        points = []
+        for step in range(self.ARC_SAMPLE_STEPS + 1):
+            angle = math.radians(theta1 + sweep * step / self.ARC_SAMPLE_STEPS)
+            points.append((2.0 * (cr + radius * math.cos(angle)),
+                           cz + radius * math.sin(angle)))
+        if not arc['cw']:
+            points.reverse()
+        return points
 
     def _intersect_compensated_corners(self):
         """Intersects corners of compensated paths (Lookahead Corner Handling)"""
