@@ -182,3 +182,72 @@ class ToolEditorIntegrationTests(unittest.TestCase):
 
         self.assertEqual([row[0] for row in self.model.rows], [1, 6, 7])
         self.assertEqual(self.model.get_tool_info(5), {})
+
+
+class ToolEditorNoseDirectionTests(unittest.TestCase):
+    """VC-08 acceptance: the tip number is editable and stays unset until set."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._patch = patch.object(tool_data, "TOOLS_JSON",
+                                   os.path.join(self._tmp.name, "tools.json"))
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        tool_data.save_tools_json(PAYLOAD)
+        self.model = tool_model.ToolModel()
+
+    def _dialog(self, tool_num=None):
+        from vibe_cnc.dialogs.tool_editor import ToolEditorDialog
+        dialog = ToolEditorDialog(self.model, tool_num)
+        self.addCleanup(dialog.deleteLater)
+        return dialog
+
+    def test_the_field_offers_every_tip_number(self):
+        dialog = self._dialog()
+
+        offered = [dialog.nose_dir_combo.itemData(i)
+                   for i in range(dialog.nose_dir_combo.count())]
+        self.assertEqual(offered, [None] + list(range(10)))
+
+    def test_a_chosen_tip_number_is_written_to_the_library(self):
+        dialog = self._dialog(tool_num=1)
+        dialog.nose_dir_combo.setCurrentIndex(dialog.nose_dir_combo.findData(3))
+
+        dialog.save_tool()
+
+        self.assertEqual(self.model.get_tool_info(1)["nose_direction"], 3)
+
+    def test_leaving_it_unset_writes_no_field_at_all(self):
+        # Not the same as writing 0: an absent field is what the lint engine
+        # asks about, and guessing one for the operator would silence it.
+        dialog = self._dialog(tool_num=1)
+        dialog.name_input.setText("CNMG Außen")
+
+        dialog.save_tool()
+
+        self.assertNotIn("nose_direction", self.model.get_tool_info(1))
+
+    def test_an_existing_tip_number_comes_back_into_the_field(self):
+        payload = tool_data.load_tools_json()
+        payload["tool_table"][1]["nose_direction"] = 2
+        tool_data.save_tools_json(payload)
+        self.model.reload()
+
+        dialog = self._dialog(tool_num=1)
+
+        self.assertEqual(dialog.nose_dir_combo.currentData(), 2)
+
+    def test_an_unusable_stored_value_shows_as_unset(self):
+        payload = tool_data.load_tools_json()
+        payload["tool_table"][1]["nose_direction"] = 12
+        tool_data.save_tools_json(payload)
+        self.model.reload()
+
+        dialog = self._dialog(tool_num=1)
+
+        self.assertIsNone(dialog.nose_dir_combo.currentData())

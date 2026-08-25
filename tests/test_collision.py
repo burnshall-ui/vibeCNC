@@ -81,29 +81,31 @@ class ArcCollisionTests(unittest.TestCase):
 
     def test_arc_bulging_behind_the_face_is_caught(self):
         # Half circle, centre Ø50/Z-40, r10: both ends sit at Z-40, in front of
-        # the face at Z-45, but the arc reaches Z-50.
-        paths = parser().parse("G00 X30. Z-40.\nG03 X70. Z-40. I10. K0.")
+        # the face at Z-45, but the arc reaches Z-50. Clockwise is the half
+        # that goes that way -- G03 over the same two points swings forward to
+        # Z-30 instead, which is the test below.
+        paths = parser().parse("G00 X30. Z-40.\nG02 X70. Z-40. I10. K0.")
 
         self.assertEqual(len(paths["arc"]), 1)
         self.assertEqual(len(paths["collisions"]), 1)
         self.assertEqual(paths["collisions"][0][2], 2)   # the arc's line
 
     def test_endpoints_alone_would_not_have_seen_it(self):
-        paths = parser().parse("G00 X30. Z-40.\nG03 X70. Z-40. I10. K0.")
+        paths = parser().parse("G00 X30. Z-40.\nG02 X70. Z-40. I10. K0.")
         arc = paths["arc"][0]
 
         for (_x, z) in (arc["start"], arc["end"]):
             self.assertGreater(z, CHUCK_Z)
 
     def test_arc_bulging_the_other_way_is_clear(self):
-        paths = parser().parse("G00 X30. Z-40.\nG02 X70. Z-40. I10. K0.")
+        paths = parser().parse("G00 X30. Z-40.\nG03 X70. Z-40. I10. K0.")
 
         self.assertEqual(len(paths["arc"]), 1)
         self.assertEqual(paths["collisions"], [])
 
     def test_arc_clear_of_the_jaw_diameter_is_not_reported(self):
         # Same shape, moved out to Ø600 where the jaws cannot reach.
-        paths = parser().parse("G00 X580. Z-40.\nG03 X620. Z-40. I10. K0.")
+        paths = parser().parse("G00 X580. Z-40.\nG02 X620. Z-40. I10. K0.")
 
         self.assertEqual(len(paths["arc"]), 1)
         self.assertEqual(paths["collisions"], [])

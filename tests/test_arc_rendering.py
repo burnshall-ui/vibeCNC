@@ -30,13 +30,15 @@ class ArcRenderingTests(unittest.TestCase):
     QUARTER = {'start': (30.0, 0.0), 'end': (40.0, -5.0), 'center': (30.0, -5.0),
                'radius': 5.0, 'line': 1}
 
-    def test_g02_quarter_circle_is_drawn_as_a_quarter_circle(self):
-        theta1, theta2 = arc_thetas(dict(self.QUARTER, cw=True))
+    def test_g03_quarter_circle_is_drawn_as_a_quarter_circle(self):
+        # Start due right of the centre, end due above it: a quarter turn
+        # counter-clockwise in the picture the control draws.
+        theta1, theta2 = arc_thetas(dict(self.QUARTER, cw=False))
 
         self.assertAlmostEqual(drawn_span(theta1, theta2), 90.0, delta=0.5)
 
-    def test_g03_over_the_same_endpoints_is_drawn_as_the_rest_of_the_circle(self):
-        theta1, theta2 = arc_thetas(dict(self.QUARTER, cw=False))
+    def test_g02_over_the_same_endpoints_is_drawn_as_the_rest_of_the_circle(self):
+        theta1, theta2 = arc_thetas(dict(self.QUARTER, cw=True))
 
         self.assertAlmostEqual(drawn_span(theta1, theta2), 270.0, delta=0.5)
 

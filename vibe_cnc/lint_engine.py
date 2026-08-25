@@ -8,6 +8,7 @@ class LintEngine:
         "ARC_R_TOO_SMALL": "Arc R",
         "ARC_R_ZERO_CHORD": "Arc R",
         "ARC_NO_CENTER": "Arc",
+        "ARC_COMP_TOO_TIGHT": "G41/G42",
     }
 
     # How many code-bearing lines count as "the header". Comments and the
@@ -96,25 +97,25 @@ class LintEngine:
         # 6) G41/G42 – simple checks (Fanuc TNR)
         comp_active = False
         current_tool = None
-        tool_radius_map = {}
+        tool_map = {}
+        nose_numbers = set()
         tool_table_loaded = False
         try:
             # tool_data needs no GUI stack, so this works on a bare
             # interpreter too. The flag still matters for a missing or corrupt
             # tools.json: without it the engine reported every tool's radius as
             # missing rather than admitting it could not read the table.
-            from .tool_data import load_tools_json
+            from .tool_data import NOSE_OFFSETS, load_tools_json
+            nose_numbers = set(NOSE_OFFSETS)
             j = load_tools_json()
             for it in j.get("tool_table", []):
                 try:
-                    t = int(it.get("t", 0))
-                    r = float(it.get("insert_radius_mm", 0.0) or 0.0)
-                    tool_radius_map[t] = r
+                    tool_map[int(it.get("t", 0))] = it
                 except Exception:
                     pass
             tool_table_loaded = True
         except Exception:
-            tool_radius_map = {}
+            tool_map = {}
 
         for i, ln in enumerate(lines):
             # Skip comments for simple search
@@ -134,9 +135,17 @@ class LintEngine:
                 comp_active = True
                 # Tool radius exists?
                 if current_tool is not None and tool_table_loaded:
-                    r = tool_radius_map.get(current_tool, 0.0)
+                    tool = tool_map.get(current_tool, {})
+                    r = self._insert_radius(tool)
                     if r <= 0.0:
                         finds.append(self._f(i+1, "G41/G42", f"Tool T{current_tool:02d}: insert_radius_mm missing (tools.json)."))
+                    elif tool.get("nose_direction") not in nose_numbers:
+                        # Only worth saying once there is a radius to
+                        # compensate with -- without one nothing is offset and
+                        # the tip number makes no difference either way.
+                        finds.append(self._f(i+1, "G41/G42",
+                                             f"Tool T{current_tool:02d}: nose_direction missing (tools.json) "
+                                             "— compensation assumes 0 (nose point = centre)."))
                 # Check lead-in for next move (next line with movement)
                 for j in range(i+1, min(i+6, len(lines))):
                     nxt = re.sub(r'\(.*?\)', '', lines[j])
@@ -183,6 +192,14 @@ class LintEngine:
     @staticmethod
     def _has_word(haystack: str, token: str) -> bool:
         return re.search(rf'\b{re.escape(token)}\b', haystack, re.IGNORECASE) is not None
+
+    @staticmethod
+    def _insert_radius(tool: dict) -> float:
+        """The nose radius of one tool record, 0.0 when unusable."""
+        try:
+            return float(tool.get("insert_radius_mm", 0.0) or 0.0)
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _feed_value(line: str):

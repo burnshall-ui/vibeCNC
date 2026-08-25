@@ -7,6 +7,7 @@ import math
 from typing import List
 
 from .arc_geometry import arc_sweep, arc_thetas
+from .tool_data import nose_direction_of, nose_offset
 
 # G-codes whose X/Z/U/W/R words are dwell times, offsets or cycle parameters
 # rather than a motion target. Reading them as a move draws a line that was
@@ -55,6 +56,7 @@ class GCodeParser:
         # Tool Nose Radius Compensation (G40/G41/G42)
         self.comp = 'G40'   # current: G40=off, G41=left, G42=right (relative to movement direction)
         self.tnr = 0.0      # Corner radius (mm)
+        self.nose_direction = 0  # Imaginary tool nose position, Fanuc tip number 0-9
         self.warnings: List[dict] = []  # Geometry the parser could not make sense of
         self.paths = {
             'rapid': [],       # G00 (gray dashed)
@@ -127,6 +129,7 @@ class GCodeParser:
             # Load corner radius from cached tools
             tool_info = self.tool_items.get(self.tool, {})
             self.tnr = float(tool_info.get('insert_radius_mm', 0.0) or 0.0)
+            self.nose_direction = nose_direction_of(tool_info)
 
         # Feed is meaningful on every block, cycle definitions included.
         f_match = re.search(r'F([-+]?\d*\.?\d+)', line, re.IGNORECASE)
@@ -195,29 +198,8 @@ class GCodeParser:
                 self.paths['rapid'].append(segment_data)
             elif self.mode == 'G01':
                 self.paths['cut'].append(segment_data)
-                # Compensated path (simplified TNR compensation only for linear moves)
-                if self.comp in ('G41', 'G42') and self.tnr > 0.0:
-                    (x1, z1), (x2, z2), _ = segment_data
-                    # Conversion to radius for geometric calculations
-                    r1 = x1 / 2.0
-                    r2 = x2 / 2.0
-                    dr = r2 - r1
-                    dz = z2 - z1
-                    seg_len = math.hypot(dr, dz)
-                    if seg_len > 1e-6:
-                        # Left normal/right normal relative to movement direction
-                        nr_left = -dz / seg_len
-                        nz_left = dr / seg_len
-                        if self.comp == 'G41':
-                            offr, offz = nr_left * self.tnr, nz_left * self.tnr
-                        else:  # G42
-                            offr, offz = -nr_left * self.tnr, -nz_left * self.tnr
-                        cr1, cz1 = r1 + offr, z1 + offz
-                        cr2, cz2 = r2 + offr, z2 + offz
-                        # Back to diameter
-                        cx1 = cr1 * 2.0
-                        cx2 = cr2 * 2.0
-                        self.paths['comp_cut'].append([(cx1, cz1), (cx2, cz2), line_num])
+                if self._compensating():
+                    self._add_compensated_segment(segment_data)
             elif self.mode in ['G02', 'G03']:
                 self._add_arc(new_x, new_z, i_match, k_match, r_match, line_num)
 
@@ -263,25 +245,111 @@ class GCodeParser:
         if hit is not None:
             self.paths['collisions'].append([hit[0], hit[1], line_num])
 
-        # Compensated arcs (G41/G42)
-        if self.comp in ('G41', 'G42') and self.tnr > 0.0:
-            # G41 (left): increase radius (tool outside)
-            # G42 (right): decrease radius (tool inside)
-            if self.comp == 'G41':
-                comp_radius = radius + self.tnr
-            else:  # G42
-                comp_radius = radius - self.tnr
+        if self._compensating():
+            self._add_compensated_arc(arc_data, cr, cz, radius, clockwise, line_num)
 
-            # Prevent negative radii (would cause errors)
-            if comp_radius > 0.0:
-                self.paths['comp_arc'].append({
-                    'start': (self.x, self.z),
-                    'end': (new_x, new_z),
-                    'center': (cr * 2.0, cz),
-                    'radius': comp_radius,
-                    'cw': clockwise,
-                    'line': line_num
-                })
+    # --- Tool nose radius compensation ----------------------------------
+    #
+    # Two vectors decide where a compensated path runs. The control keeps the
+    # *centre* of the nose radius one radius off the contour, on the side
+    # G41/G42 selects. The programmed point is not that centre but the
+    # imaginary tool nose, and the tip number says where the one sits relative
+    # to the other. What the axes move -- and what the position display shows
+    # -- is the imaginary nose:
+    #
+    #     centre = contour + radius * normal
+    #     path   = centre - nose vector
+    #
+    # With tip 0 the two points coincide, the second term drops out and the
+    # result is what every program produced before the field existed.
+
+    def _compensating(self) -> bool:
+        return self.comp in ('G41', 'G42') and self.tnr > 0.0
+
+    def _comp_side(self) -> float:
+        """+1 with the tool left of the path (G41), -1 right of it (G42)."""
+        return 1.0 if self.comp == 'G41' else -1.0
+
+    def _nose_vector(self) -> tuple:
+        """Imaginary tool nose -> centre of the nose radius, in radius space."""
+        return nose_offset(self.nose_direction, self.tnr)
+
+    @staticmethod
+    def _left_normal(dr, dz, length) -> tuple:
+        """Unit normal to the left of the direction of travel, as (X, Z).
+
+        Compensation happens in the G18 plane, and ISO reads left from +Y.
+        Drawn the way a lathe control draws it -- Z to the right, X upwards --
+        +Y points at the reader, so left is the plain counter-clockwise quarter
+        turn of that picture: (Z, X) -> (-X, Z), which in the (X, Z) ordering
+        used here is (dr, dz) -> (dz, -dr). Turning in the (X, Z) plane instead
+        mirrors the picture and swaps G41 with G42. That is what this code did
+        before, and it put OD turning on a rear tool post -- G42 on this
+        machine -- on the wrong side of the contour.
+        """
+        return dz / length, -dr / length
+
+    def _add_compensated_segment(self, segment_data):
+        """Compensated path for one linear move, in diameter coordinates."""
+        (x1, z1), (x2, z2), line_num = segment_data
+        r1, r2 = x1 / 2.0, x2 / 2.0
+        dr, dz = r2 - r1, z2 - z1
+        length = math.hypot(dr, dz)
+        if length <= 1e-6:
+            return
+
+        nr, nz = self._left_normal(dr, dz, length)
+        nose_r, nose_z = self._nose_vector()
+        side = self._comp_side()
+        offr = side * nr * self.tnr - nose_r
+        offz = side * nz * self.tnr - nose_z
+
+        self.paths['comp_cut'].append([((r1 + offr) * 2.0, z1 + offz),
+                                       ((r2 + offr) * 2.0, z2 + offz),
+                                       line_num])
+
+    def _add_compensated_arc(self, arc_data, cr, cz, radius, clockwise, line_num):
+        """Compensated path for one arc, concentric with the programmed one.
+
+        Whether the compensated radius grows or shrinks follows from the
+        geometry, not from the G-code alone -- reading G41 as "always larger"
+        got every second arc backwards. The tangent at any point of an arc is
+        the radius vector turned a quarter turn, counter-clockwise for G03 and
+        clockwise for G02. Turning it once more to reach the left normal
+        therefore lands on minus the radius vector for G03 and on plus it for
+        G02: the offset runs along the radius, and which way is decided by
+        direction of travel and compensation side together.
+
+        The endpoints move with it. They used to be copied from the programmed
+        arc while the radius changed underneath them, leaving a centre, a
+        radius and two endpoints that no single arc could satisfy.
+        """
+        outward = self._comp_side() * (1.0 if clockwise else -1.0)
+        comp_radius = radius + outward * self.tnr
+        if comp_radius <= 1e-9:
+            self._warn(line_num, 'ARC_COMP_TOO_TIGHT',
+                       f'Nose radius {self.tnr:g} mm does not fit into the '
+                       f'R{radius:g} arc — no compensated path exists')
+            return
+
+        nose_r, nose_z = self._nose_vector()
+        moved = []
+        for (x, z) in (arc_data['start'], arc_data['end']):
+            ur, uz = x / 2.0 - cr, z - cz
+            distance = math.hypot(ur, uz)
+            if distance < 1e-9:
+                return
+            moved.append(((cr + ur / distance * comp_radius - nose_r) * 2.0,
+                          cz + uz / distance * comp_radius - nose_z))
+
+        self.paths['comp_arc'].append({
+            'start': moved[0],
+            'end': moved[1],
+            'center': ((cr - nose_r) * 2.0, cz - nose_z),
+            'radius': comp_radius,
+            'cw': clockwise,
+            'line': line_num
+        })
 
     def _center_from_r(self, r1, z1, r2, z2, r_word, clockwise, line_num):
         """Arc centre from an R word, in radius space.
@@ -309,10 +377,17 @@ class GCodeParser:
 
         # Distance from chord midpoint to centre.
         height = math.sqrt(max(radius * radius - half_chord * half_chord, 0.0))
-        # Unit normal, 90 degrees counter-clockwise from the chord direction.
-        nr, nz = -dz / chord, dr / chord
-        # Which of the two candidate centres: the minor arc sits on the normal
-        # side for G03 and the opposite side for G02; a negative R flips it.
+        # Which of the two candidate centres. The centre of curvature lies to
+        # the left of the direction of travel for a counter-clockwise arc and
+        # to the right for a clockwise one; a negative R picks the other one,
+        # which is the same circle traversed the long way round.
+        #
+        # Left is the left of the picture the control draws -- see
+        # _left_normal. Taking the normal in the (X, Z) plane instead mirrors
+        # it, and mirroring puts every R arc on the wrong side of its chord:
+        # a hemisphere on the face came out as a hollow, and the I/K form of
+        # the same arc disagreed with the R form.
+        nr, nz = self._left_normal(dr, dz, chord)
         side = (-1.0 if clockwise else 1.0) * (-1.0 if r_word < 0 else 1.0)
 
         cr = (r1 + r2) / 2.0 + side * height * nr

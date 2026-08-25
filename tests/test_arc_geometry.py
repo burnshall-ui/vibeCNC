@@ -17,22 +17,29 @@ def swept(arc):
 
 
 def quarter(cw):
-    """Quarter circle, centre Ø30/Z-5, from (Ø30, Z0) to (Ø40, Z-5)."""
+    """Quarter circle, centre Ø30/Z-5, from (Ø30, Z0) to (Ø40, Z-5).
+
+    Drawn the way a control draws it — Z across, X up — the start sits due
+    right of the centre and the end due above it, so travelling from one to
+    the other in a quarter turn is counter-clockwise: G03.
+    """
     return {'start': (30.0, 0.0), 'end': (40.0, -5.0), 'center': (30.0, -5.0),
             'radius': 5.0, 'cw': cw, 'line': 1}
 
 
 class ArcDirectionTests(unittest.TestCase):
-    def test_g02_quarter_circle_stays_a_quarter_circle(self):
-        self.assertAlmostEqual(swept(quarter(cw=True)), 90.0, places=9)
-
-    def test_g03_over_the_same_endpoints_is_the_three_quarter_arc(self):
-        # Same two points, opposite direction — the rest of the circle.
-        self.assertAlmostEqual(swept(quarter(cw=False)), 270.0, places=9)
-
     def test_g03_quarter_circle_stays_a_quarter_circle(self):
+        self.assertAlmostEqual(swept(quarter(cw=False)), 90.0, places=9)
+
+    def test_g02_over_the_same_endpoints_is_the_three_quarter_arc(self):
+        # Same two points, opposite direction — the rest of the circle.
+        self.assertAlmostEqual(swept(quarter(cw=True)), 270.0, places=9)
+
+    def test_g02_quarter_circle_stays_a_quarter_circle(self):
+        # The same quarter walked backwards: from above the centre round to
+        # its right is clockwise.
         arc = {'start': (40.0, -5.0), 'end': (30.0, 0.0), 'center': (30.0, -5.0),
-               'radius': 5.0, 'cw': False, 'line': 1}
+               'radius': 5.0, 'cw': True, 'line': 1}
         self.assertAlmostEqual(swept(arc), 90.0, places=9)
 
     def test_direction_only_swaps_the_endpoints(self):
@@ -47,8 +54,8 @@ class ArcDirectionFromProgramTests(unittest.TestCase):
     def test_programmed_quarter_circles_come_out_as_quarter_circles(self):
         paths = GCodeParser().parse("\n".join([
             "G00 X30. Z0.",
-            "G02 X40. Z-5. R5.",   # outside corner radius, clockwise
-            "G03 X50. Z-10. R5.",  # inside corner radius, counter-clockwise
+            "G02 X40. Z-5. R5.",   # fillet at the foot of a shoulder, concave
+            "G03 X50. Z-10. R5.",  # rounded corner on the way out, convex
         ]))
 
         self.assertEqual(len(paths["arc"]), 2)
@@ -89,12 +96,15 @@ class FullCircleTests(unittest.TestCase):
         self.assertAlmostEqual(theta2 - theta1, 360.0, places=9)
 
     def test_an_almost_closed_arc_keeps_its_real_sweep(self):
-        # Clockwise from 90 degrees the long way round to 91: 359, not 1.
+        # One degree apart, travelled the long way round: 359, not 1. Angles
+        # here are the ones arc_thetas works in — measured in (radius, Z) with
+        # the radius as the abscissa — where G03 is the direction that walks
+        # them backwards, hence cw=False for the long way.
         import math
         cr, cz, radius = 25.0, -50.0, 10.0
         end = (2 * (cr + radius * math.cos(math.radians(91.0))),
                cz + radius * math.sin(math.radians(91.0)))
         arc = {'start': (2 * cr, cz + radius), 'end': end,
-               'center': (2 * cr, cz), 'radius': radius, 'cw': True, 'line': 1}
+               'center': (2 * cr, cz), 'radius': radius, 'cw': False, 'line': 1}
 
         self.assertAlmostEqual(swept(arc), 359.0, places=6)

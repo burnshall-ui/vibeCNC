@@ -11,10 +11,10 @@ def arc_thetas(arc: dict) -> tuple:
     """Returns (theta1, theta2) for matplotlib from one parsed G02/G03 arc.
 
     matplotlib's Arc always sweeps counter-clockwise from theta1 to theta2, and
-    normalises both angles modulo 360 before drawing. A clockwise arc is
-    therefore drawn by handing over the two endpoints the other way round --
-    the same set of points, traversed the other way, which for a static patch
-    looks identical.
+    normalises both angles modulo 360 before drawing. An arc that runs the
+    other way is therefore drawn by handing over the two endpoints the other
+    way round -- the same set of points, traversed the other way, which for a
+    static patch looks identical.
 
     Subtracting 360 from theta2 does not work: the normalisation undoes it and
     the complementary arc comes out. Note the asymmetry -- the same subtraction
@@ -37,9 +37,17 @@ def arc_thetas(arc: dict) -> tuple:
         # here -- both ways cover the same points.
         return angle1, angle1 + 360.0
 
+    # Which way round is decided in the plane these angles live in, not in the
+    # one the operator sees. atan2 was taken over (radius, Z) with the radius
+    # as the abscissa, and that is the transpose of the picture a lathe control
+    # draws -- Z across, X up. Transposing reflects the plane, so a G02 that is
+    # clockwise on screen runs counter-clockwise here, and matplotlib, which
+    # only ever sweeps counter-clockwise, wants its endpoints in that order.
+    # Handing them over the other way round drew the complement: the quarter
+    # circle of a shoulder fillet came out as the remaining three quarters.
     if arc['cw']:      # G02
-        return angle2, angle1
-    return angle1, angle2   # G03
+        return angle1, angle2
+    return angle2, angle1   # G03
 
 
 def arc_sweep(arc: dict) -> float:

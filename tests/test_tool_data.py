@@ -87,6 +87,42 @@ class ToolRoundTripTests(unittest.TestCase):
                 json.load(handle)
 
 
+class NoseDirectionTests(unittest.TestCase):
+    """VC-08: the tip number, and what it means as a vector."""
+
+    def test_the_two_everyday_tips_point_where_the_tool_sits(self):
+        # 3 is the right-hand OD tool: its centre is outboard of the turned
+        # diameter (+X) and behind the face it is cutting (+Z). 2 is the boring
+        # bar, cutting the other side of the material, so its centre is inboard.
+        self.assertEqual(tool_data.nose_offset(3, 0.8), (0.8, 0.8))
+        self.assertEqual(tool_data.nose_offset(2, 0.8), (-0.8, 0.8))
+
+    def test_a_tip_on_an_axis_offsets_in_one_direction_only(self):
+        self.assertEqual(tool_data.nose_offset(7, 0.4), (0.4, 0.0))
+        self.assertEqual(tool_data.nose_offset(8, 0.4), (0.0, -0.4))
+
+    def test_zero_and_nine_put_the_nose_point_on_the_centre(self):
+        for direction in (0, 9):
+            self.assertEqual(tool_data.nose_offset(direction, 0.8), (0.0, 0.0))
+
+    def test_opposite_tips_cancel(self):
+        for pair in ((1, 3), (2, 4), (5, 7), (6, 8)):
+            with self.subTest(pair=pair):
+                first = tool_data.nose_offset(pair[0], 0.8)
+                second = tool_data.nose_offset(pair[1], 0.8)
+
+                self.assertEqual((first[0] + second[0], first[1] + second[1]), (0.0, 0.0))
+
+    def test_anything_unusable_reads_as_tip_zero(self):
+        for record in ({}, {"nose_direction": None}, {"nose_direction": 12},
+                       {"nose_direction": -1}, {"nose_direction": "drei"}):
+            with self.subTest(record=record):
+                self.assertEqual(tool_data.nose_direction_of(record), 0)
+
+    def test_a_tip_number_written_as_a_string_still_counts(self):
+        self.assertEqual(tool_data.nose_direction_of({"nose_direction": "3"}), 3)
+
+
 class ParserReadsToolDataWithoutQtTests(unittest.TestCase):
     """VC-17: the nose radius has to arrive even with no GUI stack installed."""
 
@@ -100,3 +136,25 @@ class ParserReadsToolDataWithoutQtTests(unittest.TestCase):
 
         self.assertAlmostEqual(parser.tnr, 0.8)
         self.assertEqual(len(paths["comp_cut"]), 1)
+
+    def test_the_tip_number_arrives_with_it(self):
+        payload = {"tool_table": [{"t": 1, "name": "CNMG Außen",
+                                   "insert_radius_mm": 0.8, "nose_direction": 3}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tools.json")
+            with patch.object(tool_data, "TOOLS_JSON", path):
+                tool_data.save_tools_json(payload)
+                parser = GCodeParser(chuck_z=-100.0)
+                parser.parse("T0101\nG42\nG01 X20. Z-5. F0.2")
+
+        self.assertEqual(parser.nose_direction, 3)
+
+    def test_a_tool_without_the_field_leaves_the_parser_at_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tools.json")
+            with patch.object(tool_data, "TOOLS_JSON", path):
+                tool_data.save_tools_json(PAYLOAD)
+                parser = GCodeParser(chuck_z=-100.0)
+                parser.parse("T0101\nG42\nG01 X20. Z-5. F0.2")
+
+        self.assertEqual(parser.nose_direction, 0)

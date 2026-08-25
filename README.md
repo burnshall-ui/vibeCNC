@@ -203,18 +203,38 @@ policies:
 **Manual Edit:** Edit `tools/tools.json`:
 ```json
 {
-  "1": {
-    "name": "CNMG1204P-SM",
-    "type": "Drehmeissel",
-    "insert_radius_mm": 8.2,
-    "limits": {
-      "vc_max": 320,
-      "f_max": 0.4,
-      "ap_max": 5.0
+  "units": "metric",
+  "tool_table": [
+    {
+      "t": 1,
+      "name": "CNMG1204P-S Außen",
+      "type": "turn_rough",
+      "insert_radius_mm": 0.8,
+      "nose_direction": 3,
+      "holder": "PCLNR2525",
+      "limits": {
+        "vc_max": 180,
+        "ap_max": 2.0,
+        "f_max": 0.35
+      }
     }
-  }
+  ]
 }
 ```
+
+**Nose radius compensation** (G41/G42) reads two of those fields.
+`insert_radius_mm` is the corner radius of the insert; `nose_direction` is the
+Fanuc tip number 0-9, saying where the programmed point — the imaginary tool
+nose — sits relative to the centre of that radius:
+
+| Tip | Nose sits | Typical tool |
+|-----|-----------|--------------|
+| 1 / 2 / 3 / 4 | +X+Z / +X-Z / -X-Z / -X+Z | 3 = OD turning, 2 = boring |
+| 5 / 6 / 7 / 8 | +X / -Z / -X / +Z | facing and grooving tools |
+| 0 / 9 | on the centre | probe, or a radius you do not want compensated |
+
+Leave it out and the simulation assumes 0 and says so in the lint pane, rather
+than guessing a tip for you.
 
 ---
 

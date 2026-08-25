@@ -6,7 +6,11 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QSpinBox, QComboBox, QMessageBox, QDoubleSpinBox
 )
 
-from vibe_cnc.tool_data import load_tools_json, save_tools_json
+from vibe_cnc.tool_data import (
+    NOSE_DIRECTION_LABELS,
+    load_tools_json,
+    save_tools_json,
+)
 
 # Get the base directory (parent of vibe_cnc/dialogs)
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,6 +63,16 @@ class ToolEditorDialog(QDialog):
         self.insert_radius_input.setSuffix(" mm")
         self.insert_radius_input.setSpecialValueText("(empty)")
         form.addRow("Insert Radius:", self.insert_radius_input)
+
+        # Where the imaginary tool nose sits relative to the centre of the
+        # nose radius. "Not set" stays a choice of its own: the tip number
+        # moves the compensated path, so picking one for the operator would be
+        # worse than the lint hint that asks them to.
+        self.nose_dir_combo = QComboBox()
+        self.nose_dir_combo.addItem("(not set)", None)
+        for number in sorted(NOSE_DIRECTION_LABELS):
+            self.nose_dir_combo.addItem(NOSE_DIRECTION_LABELS[number], number)
+        form.addRow("Nose Direction:", self.nose_dir_combo)
 
         self.holder_input = QLineEdit()
         self.holder_input.setPlaceholderText("e.g. PCLNR2525")
@@ -139,6 +153,11 @@ class ToolEditorDialog(QDialog):
         self.insert_radius_input.setValue(tool_data.get('insert_radius_mm', 0))
         self.holder_input.setText(tool_data.get('holder', ''))
 
+        # findData returns -1 for a missing or out-of-range tip number, and
+        # index 0 is "(not set)" -- so both land on the same honest answer.
+        nose = tool_data.get('nose_direction')
+        self.nose_dir_combo.setCurrentIndex(max(self.nose_dir_combo.findData(nose), 0))
+
         limits = tool_data.get('limits', {})
         self.vc_max_input.setValue(limits.get('vc_max', 150))
         self.ap_max_input.setValue(limits.get('ap_max', 2.0))
@@ -171,6 +190,8 @@ class ToolEditorDialog(QDialog):
             tool_data["insert_radius_mm"] = self.insert_radius_input.value()
         if self.holder_input.text().strip():
             tool_data["holder"] = self.holder_input.text().strip()
+        if self.nose_dir_combo.currentData() is not None:
+            tool_data["nose_direction"] = self.nose_dir_combo.currentData()
 
         # Load JSON
         try:

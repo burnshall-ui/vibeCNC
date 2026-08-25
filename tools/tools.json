@@ -12,7 +12,8 @@
         "vc_max": 180,
         "ap_max": 2.0,
         "f_max": 0.35
-      }
+      },
+      "nose_direction": 3
     },
     {
       "t": 7,
@@ -45,7 +46,8 @@
         "vc_max": 220,
         "ap_max": 0.8,
         "f_max": 0.25
-      }
+      },
+      "nose_direction": 2
     },
     {
       "t": 30,

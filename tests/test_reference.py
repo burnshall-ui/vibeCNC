@@ -76,6 +76,18 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertEqual(len(self.paths["comp_cut"]), 1)
         self.assertEqual(len(self.paths["comp_arc"]), 1)
 
+    def test_the_compensated_arc_is_an_arc_a_circle_could_make(self):
+        # N200 is a clockwise R5 arc under G42, so the insert centre runs on
+        # the inside of it: 5.0 - 0.8. Centre, radius and endpoints have to
+        # agree afterwards -- they did not while only the radius was offset.
+        arc = self.paths["comp_arc"][0]
+        self.assertAlmostEqual(arc["radius"], 4.2, places=9)
+
+        cr, cz = arc["center"][0] / 2.0, arc["center"][1]
+        for (x, z) in (arc["start"], arc["end"]):
+            self.assertAlmostEqual(math.hypot(x / 2.0 - cr, z - cz),
+                                   arc["radius"], places=9)
+
     def test_modal_state_survives_cycles_dwell_and_reference_run(self):
         self.assertEqual(self.parser.mode, "G02")   # G28 must not clobber it
         self.assertEqual(self.parser.cycle, "G71")

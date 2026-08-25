@@ -1,7 +1,10 @@
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from vibe_cnc import tool_data
 from vibe_cnc.lint_engine import LintEngine
 
 # Shared so a rename in the engine breaks the positive tests below loudly,
@@ -228,3 +231,50 @@ class LintEngineCleanProgramTests(unittest.TestCase):
             findings = engine.run_all(handle.read())
 
         self.assertEqual(findings, [])
+
+
+class LintEngineNoseDirectionTests(unittest.TestCase):
+    """VC-08: an unset tip number is said out loud, not silently assumed."""
+
+    PROGRAM = "T0101\nG42\nG01 X20. Z-5. F0.2\nG40\n"
+
+    def _compensation_findings(self, tool):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tools.json")
+            with patch.object(tool_data, "TOOLS_JSON", path):
+                tool_data.save_tools_json({"tool_table": [tool]})
+                findings = LintEngine(make_cfg()).run_all(self.PROGRAM)
+        return rules(findings, "G41/G42")
+
+    def test_a_tool_without_a_tip_number_is_reported(self):
+        findings = self._compensation_findings({"t": 1, "insert_radius_mm": 0.8})
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("nose_direction", findings[0]["message"])
+        self.assertEqual(findings[0]["line"], 2)   # the G42 block
+
+    def test_a_tool_with_a_tip_number_is_not(self):
+        self.assertEqual(
+            self._compensation_findings({"t": 1, "insert_radius_mm": 0.8,
+                                         "nose_direction": 3}), [])
+
+    def test_an_explicit_zero_counts_as_answered(self):
+        # 0 means "nose point is the centre", which is a choice like any other.
+        self.assertEqual(
+            self._compensation_findings({"t": 1, "insert_radius_mm": 0.8,
+                                         "nose_direction": 0}), [])
+
+    def test_a_tip_number_outside_the_table_is_reported(self):
+        findings = self._compensation_findings({"t": 1, "insert_radius_mm": 0.8,
+                                                "nose_direction": 12})
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("nose_direction", findings[0]["message"])
+
+    def test_a_missing_radius_is_reported_instead_not_as_well(self):
+        # Without a radius nothing is offset at all, so the tip number makes no
+        # difference and saying both would just be noise.
+        findings = self._compensation_findings({"t": 1, "name": "no radius"})
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("insert_radius_mm", findings[0]["message"])
