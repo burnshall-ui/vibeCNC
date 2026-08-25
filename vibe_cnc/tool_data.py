@@ -76,18 +76,24 @@ def tools_by_number(payload: dict) -> dict:
 # degree corner both components are a full radius, not r/sqrt(2) -- the nose
 # point is the intersection of the tangents, not a point on the circle.
 #
-# 3 is the ordinary right-hand OD turning tool (centre sits outboard of the
-# turned surface and behind the face), 2 the ordinary boring bar. 0 and 9 mean
+# 2 is the ordinary right-hand OD turning tool (centre sits outboard of the
+# turned surface and behind the face), 3 the ordinary boring bar. 0 and 9 mean
 # the nose point *is* the centre, which is what an unset field falls back to.
+#
+# Fanuc prints two of these figures, one per tool post position, and they are
+# mirrored in X against each other. This is the one that matches the machine
+# the shop runs -- checked against how its tools are actually set. Get it the
+# wrong way round and every tip lands on the far side of the insert, so verify
+# against a tool on the machine rather than against a catalogue.
 NOSE_OFFSETS = {
     0: (0.0, 0.0),
-    1: (-1.0, -1.0),   # nose towards +X/+Z
-    2: (-1.0, 1.0),    # nose towards +X/-Z  -- boring
-    3: (1.0, 1.0),     # nose towards -X/-Z  -- OD turning
-    4: (1.0, -1.0),    # nose towards -X/+Z
-    5: (-1.0, 0.0),    # nose towards +X
+    1: (1.0, -1.0),    # nose towards -X/+Z
+    2: (1.0, 1.0),     # nose towards -X/-Z  -- OD turning
+    3: (-1.0, 1.0),    # nose towards +X/-Z  -- boring
+    4: (-1.0, -1.0),   # nose towards +X/+Z
+    5: (1.0, 0.0),     # nose towards -X
     6: (0.0, 1.0),     # nose towards -Z
-    7: (1.0, 0.0),     # nose towards -X
+    7: (-1.0, 0.0),    # nose towards +X
     8: (0.0, -1.0),    # nose towards +Z
     9: (0.0, 0.0),
 }
@@ -95,13 +101,13 @@ NOSE_OFFSETS = {
 # What the tool editor offers, in the order it offers it.
 NOSE_DIRECTION_LABELS = {
     0: "0 - nose point = centre",
-    1: "1 - nose towards +X/+Z",
-    2: "2 - nose towards +X/-Z (boring)",
-    3: "3 - nose towards -X/-Z (OD turning)",
-    4: "4 - nose towards -X/+Z",
-    5: "5 - nose towards +X",
+    1: "1 - nose towards -X/+Z",
+    2: "2 - nose towards -X/-Z (OD turning)",
+    3: "3 - nose towards +X/-Z (boring)",
+    4: "4 - nose towards +X/+Z",
+    5: "5 - nose towards -X",
     6: "6 - nose towards -Z",
-    7: "7 - nose towards -X",
+    7: "7 - nose towards +X",
     8: "8 - nose towards +Z",
     9: "9 - nose point = centre",
 }

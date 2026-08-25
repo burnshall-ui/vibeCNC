@@ -229,12 +229,17 @@ nose — sits relative to the centre of that radius:
 
 | Tip | Nose sits | Typical tool |
 |-----|-----------|--------------|
-| 1 / 2 / 3 / 4 | +X+Z / +X-Z / -X-Z / -X+Z | 3 = OD turning, 2 = boring |
-| 5 / 6 / 7 / 8 | +X / -Z / -X / +Z | facing and grooving tools |
+| 1 / 2 / 3 / 4 | -X+Z / -X-Z / +X-Z / +X+Z | 2 = OD turning, 3 = boring |
+| 5 / 6 / 7 / 8 | -X / -Z / +X / +Z | facing and grooving tools |
 | 0 / 9 | on the centre | probe, or a radius you do not want compensated |
 
-Leave it out and the simulation assumes 0 and says so in the lint pane, rather
-than guessing a tip for you.
+Fanuc prints two of these figures, one per tool post position, mirrored in X
+against each other. The table above is the one that matches this shop's
+machine; if your tools are set the other way round, mirror `NOSE_OFFSETS` in
+`vibe_cnc/tool_data.py` rather than renumbering the tools.
+
+Leave the field out and the simulation assumes 0 and says so in the lint pane,
+rather than guessing a tip for you.
 
 ---
 

@@ -13,7 +13,7 @@
         "ap_max": 2.0,
         "f_max": 0.35
       },
-      "nose_direction": 3
+      "nose_direction": 2
     },
     {
       "t": 7,
@@ -47,7 +47,7 @@
         "ap_max": 0.8,
         "f_max": 0.25
       },
-      "nose_direction": 2
+      "nose_direction": 3
     },
     {
       "t": 30,

@@ -342,7 +342,7 @@ class GCodeParserCompensationTests(unittest.TestCase):
         # underneath them, leaving an arc that could not pass through them.
         for contour in (self.CORNER, self.FILLET):
             for comp in ("G41", "G42"):
-                for nose_direction in (None, 3):
+                for nose_direction in (None, 2):
                     with self.subTest(comp=comp, nose=nose_direction):
                         _parser, paths = self._parse(contour.format(comp=comp),
                                                      nose_direction=nose_direction)
@@ -381,24 +381,24 @@ class GCodeParserCompensationTests(unittest.TestCase):
 
         self.assertAlmostEqual(paths["comp_cut"][-1][0][0], 38.4, delta=1e-9)
 
-    def test_tip_three_shifts_the_path_by_a_radius_in_both_axes(self):
-        # Tip 3 is the ordinary OD turning tool: the programmed point sits one
-        # radius below and one radius in front of the centre of the insert.
+    def test_the_od_tip_shifts_the_path_by_a_radius_in_both_axes(self):
+        # Tip 2 is the ordinary OD turning tool here: the programmed point sits
+        # one radius below and one radius in front of the centre of the insert.
         # Along a diameter that puts the axis back on the programmed X -- which
         # is why cylindrical turning works without compensation at all -- and
         # moves Z by the nose radius.
         _parser, plain = self._parse("G01 X40. Z0. F0.2\nG42\nG01 Z-10.")
         _parser, tipped = self._parse("G01 X40. Z0. F0.2\nG42\nG01 Z-10.",
-                                      nose_direction=3)
+                                      nose_direction=2)
 
         (px, pz), _end, _line = plain["comp_cut"][-1]
         (tx, tz), _end, _line = tipped["comp_cut"][-1]
         self.assertAlmostEqual(tx, px - 2 * self.NOSE, delta=1e-9)   # diameter
         self.assertAlmostEqual(tz, pz - self.NOSE, delta=1e-9)
 
-    def test_tip_three_moves_the_compensated_arc_with_its_centre(self):
+    def test_the_od_tip_moves_the_compensated_arc_with_its_centre(self):
         _parser, plain = self._parse(self.CORNER.format(comp="G42"))
-        _parser, tipped = self._parse(self.CORNER.format(comp="G42"), nose_direction=3)
+        _parser, tipped = self._parse(self.CORNER.format(comp="G42"), nose_direction=2)
 
         self.assertAlmostEqual(tipped["comp_arc"][0]["radius"],
                                plain["comp_arc"][0]["radius"], delta=1e-9)

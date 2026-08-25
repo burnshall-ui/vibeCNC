@@ -216,11 +216,11 @@ class ToolEditorNoseDirectionTests(unittest.TestCase):
 
     def test_a_chosen_tip_number_is_written_to_the_library(self):
         dialog = self._dialog(tool_num=1)
-        dialog.nose_dir_combo.setCurrentIndex(dialog.nose_dir_combo.findData(3))
+        dialog.nose_dir_combo.setCurrentIndex(dialog.nose_dir_combo.findData(2))
 
         dialog.save_tool()
 
-        self.assertEqual(self.model.get_tool_info(1)["nose_direction"], 3)
+        self.assertEqual(self.model.get_tool_info(1)["nose_direction"], 2)
 
     def test_leaving_it_unset_writes_no_field_at_all(self):
         # Not the same as writing 0: an absent field is what the lint engine

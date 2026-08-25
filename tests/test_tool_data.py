@@ -91,14 +91,14 @@ class NoseDirectionTests(unittest.TestCase):
     """VC-08: the tip number, and what it means as a vector."""
 
     def test_the_two_everyday_tips_point_where_the_tool_sits(self):
-        # 3 is the right-hand OD tool: its centre is outboard of the turned
-        # diameter (+X) and behind the face it is cutting (+Z). 2 is the boring
+        # 2 is the right-hand OD tool: its centre is outboard of the turned
+        # diameter (+X) and behind the face it is cutting (+Z). 3 is the boring
         # bar, cutting the other side of the material, so its centre is inboard.
-        self.assertEqual(tool_data.nose_offset(3, 0.8), (0.8, 0.8))
-        self.assertEqual(tool_data.nose_offset(2, 0.8), (-0.8, 0.8))
+        self.assertEqual(tool_data.nose_offset(2, 0.8), (0.8, 0.8))
+        self.assertEqual(tool_data.nose_offset(3, 0.8), (-0.8, 0.8))
 
     def test_a_tip_on_an_axis_offsets_in_one_direction_only(self):
-        self.assertEqual(tool_data.nose_offset(7, 0.4), (0.4, 0.0))
+        self.assertEqual(tool_data.nose_offset(5, 0.4), (0.4, 0.0))
         self.assertEqual(tool_data.nose_offset(8, 0.4), (0.0, -0.4))
 
     def test_zero_and_nine_put_the_nose_point_on_the_centre(self):
