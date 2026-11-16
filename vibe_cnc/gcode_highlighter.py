@@ -1,7 +1,9 @@
 import re
-from PyQt6.QtCore import QSize, QRect
-from PyQt6.QtGui import QColor, QTextCharFormat, QSyntaxHighlighter, QPainter
+from PyQt6.QtCore import QSize, QRect, QTimer, Qt
+from PyQt6.QtGui import QColor, QTextCharFormat, QSyntaxHighlighter, QPainter, QTextCursor
 from PyQt6.QtWidgets import QWidget, QPlainTextEdit, QFrame, QLabel, QVBoxLayout
+
+from vibe_cnc.gcode_text import uppercase_code
 
 class TitlePanel(QWidget):
     def __init__(self, title: str, content: QWidget, colors: dict):
@@ -68,7 +70,6 @@ class GCodeEditor(QPlainTextEdit):
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
 
         self._lineArea = LineNumberArea(self)
-        from PyQt6.QtCore import QTimer
         self.blockBlink = True
         self._blinkTimer = QTimer(self)
         self._blinkTimer.timeout.connect(self._toggleBlock)
@@ -80,6 +81,9 @@ class GCodeEditor(QPlainTextEdit):
         
         # Connect textChanged for auto-uppercase
         self.textChanged.connect(self._auto_uppercase)
+        self._fixTimer = QTimer(self)
+        self._fixTimer.setSingleShot(True)
+        self._fixTimer.timeout.connect(self._apply_uppercase)
 
     def lineNumberAreaWidth(self):
         digits = max(3, len(str(self.blockCount())))
@@ -123,8 +127,12 @@ class GCodeEditor(QPlainTextEdit):
                 else:
                     painter.setPen(QColor("#7f7f7f"))
                 fm = self.fontMetrics()
+                # The line number, as any editor shows it. It used to read "N5"
+                # for what is line 5 -- easy to take for the block's own N word,
+                # which is a different number -- and the extra character did
+                # not fit the width worked out for the digits alone.
                 painter.drawText(0, top, self._lineArea.width()-6, fm.height(),
-                                 0x0082, "N" + number)  # AlignRight | AlignVCenter
+                                 0x0082, number)  # AlignRight | AlignVCenter
             block = block.next()
             top = bottom
             bottom = top + int(self.blockBoundingRect(block).height())
@@ -165,43 +173,110 @@ class GCodeEditor(QPlainTextEdit):
         self._highlightCurrentLine()
     
     def _auto_uppercase(self):
-        """Auto-uppercase all text"""
+        """Notices code that is not in capitals and schedules the fix.
+
+        Typing is capitalised before it reaches the document -- see
+        keyPressEvent. This is for everything else: a loaded file, a paste, the
+        replace dialog. It does not edit here, because a change made from
+        inside textChanged leaves Qt's undo unable to undo anything at all.
+        """
+        block = self.document().begin()
+        while block.isValid():
+            text = block.text()
+            if uppercase_code(text) != text:
+                self._fixTimer.start(0)
+                return
+            block = block.next()
+
+    def _apply_uppercase(self):
+        """Upper-cases the code, never a comment, replacing only what changes.
+
+        The earlier version swapped in the whole text with setPlainText, which
+        uppercased comments too, threw the undo history away and sent the
+        scroll position back to the top.
+        """
+        # Consecutive changed letters are merged into one run, so a lowercase
+        # program is a handful of edits rather than one per letter.
+        runs = []  # (position in the document, replacement)
+        block = self.document().begin()
+        while block.isValid():
+            text = block.text()
+            fixed = uppercase_code(text)
+            if fixed != text:
+                start = None
+                for index, (old, new) in enumerate(zip(text, fixed)):
+                    if old != new and start is None:
+                        start = index
+                    elif old == new and start is not None:
+                        runs.append((block.position() + start, fixed[start:index]))
+                        start = None
+                if start is not None:
+                    runs.append((block.position() + start, fixed[start:]))
+            block = block.next()
+        if not runs:
+            return
+
+        # The replacements are as long as what they replace, so a position
+        # worked out before the first edit is still right for the last.
+        caret = self.textCursor()
+        anchor, position_now = caret.anchor(), caret.position()
+        edit = QTextCursor(self.document())
+        edit.beginEditBlock()
+        for position, letters in runs:
+            edit.setPosition(position)
+            edit.setPosition(position + len(letters), QTextCursor.MoveMode.KeepAnchor)
+            edit.insertText(letters)
+        edit.endEditBlock()
+
+        # A caret standing exactly where a run begins is pushed past it by the
+        # insert, although nothing was typed. Put it back.
+        caret = self.textCursor()
+        caret.setPosition(anchor)
+        caret.setPosition(position_now, QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(caret)
+
+    def _typed_in_capitals(self, event) -> bool:
+        """Types the key as a capital when the code wants one; True if it did.
+
+        Done before the letter enters the document, so it is one edit and undo
+        takes it back in one step. Inside a comment, or with a shortcut held,
+        the key is left to behave as usual.
+        """
+        shortcut = (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+                    | Qt.KeyboardModifier.AltModifier)
+        typed = event.text()
+        if (not typed or not typed.isprintable() or event.modifiers() & shortcut
+                or self.overwriteMode()):
+            return False
+
         cursor = self.textCursor()
-        position = cursor.position()
-        
-        # Get current text
-        text = self.toPlainText()
-        
-        # Convert to uppercase
-        text_upper = text.upper()
-        
-        # Only update if text changed
-        if text != text_upper:
-            self.blockSignals(True)  # Prevent recursion
-            self.setPlainText(text_upper)
-            self.blockSignals(False)
-            
-            # Restore cursor position
-            cursor.setPosition(min(position, len(text_upper)))
-            self.setTextCursor(cursor)
-    
+        start = cursor.selectionStart()
+        block = self.document().findBlock(start)
+        # The text before the caret says whether it is inside a comment.
+        before = block.text()[:start - block.position()]
+        cased = uppercase_code(before + typed)[len(before):]
+        if cased == typed:
+            return False
+        cursor.insertText(cased)  # replaces a selection, as typing does
+        self.setTextCursor(cursor)
+        return True
+
     def keyPressEvent(self, event):
-        """Handle Enter key to add semicolon"""
-        from PyQt6.QtCore import Qt
-        
+        """Handle Enter key to add semicolon; type code in capitals"""
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             # Get current line
             cursor = self.textCursor()
             current_line = cursor.block().text()
-            
+
             # Check if line doesn't already end with semicolon or is empty
             if current_line.strip() and not current_line.strip().endswith(';'):
                 # Add semicolon before pressing Enter
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
                 cursor.insertText(' ;')
-            
+
             # Process Enter normally
             super().keyPressEvent(event)
+        elif self._typed_in_capitals(event):
+            return
         else:
             super().keyPressEvent(event)
-
