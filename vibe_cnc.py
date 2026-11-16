@@ -229,7 +229,7 @@ class Main(QMainWindow):
 
         # Qt reads "Ctrl" as Cmd on a Mac, so one sequence is right everywhere.
         generate_key = QKeySequence("Ctrl+Return").toString(QKeySequence.SequenceFormat.NativeText)
-        self.input.setToolTip(f"Enter: check the program (as AI ANALYZE)\n"
+        self.input.setToolTip(f"Enter: check the program (as AI ANALYZE); the text stays in the box\n"
                               f"{generate_key}: generate G-code from this text (as AI GENERATE)")
         for widget, tip in {
             self.btnCycleStart: "Start the program, or carry on after a hold (Space)",
@@ -1095,12 +1095,11 @@ class Main(QMainWindow):
     # --- Lint & AI ---
     def action_analyze(self):
         """AI: ANALYZE Button + Enter in Input"""
-        # Show user input and clear (if present)
-        user_text = self.input.text().strip()
-        if user_text:
-            self._append_user_message(user_text)
-            self.input.clear()
-
+        # What is typed in the assist box is no part of an analysis -- the
+        # program and the policies are. It used to be echoed into the chat and
+        # cleared, so pressing Enter on "Write G71 ..." lost the text and
+        # showed it as if it had been sent. It stays where it is, for AI
+        # GENERATE.
         code = self.editor.toPlainText()
         findings = self.linter.run_all(code)
         

@@ -249,6 +249,37 @@ class AssistBoxKeyTests(PanelCase):
         self.assertIn("Lint", text)
         self.assertNotIn("G00 X36", text)
 
+    def test_enter_leaves_the_text_in_the_box(self):
+        # The text is for AI GENERATE. Checking the program must not eat it
+        # or show it in the chat as if it had been sent.
+        win = self.assist()
+        win.input.setText("Write G71 for T2, depth 5.0")
+
+        QTest.keyClick(win.input, Qt.Key.Key_Return)
+
+        self.assertEqual(win.input.text(), "Write G71 for T2, depth 5.0")
+        self.assertNotIn("Write G71", win.chat.toPlainText())
+        self.assertIn("Lint", win.chat.toPlainText())
+
+    def test_the_analyze_button_leaves_the_text_in_the_box_too(self):
+        win = self.assist()
+        win.input.setText("Write G71 for T2, depth 5.0")
+
+        win.btnAna.click()
+
+        self.assertEqual(win.input.text(), "Write G71 for T2, depth 5.0")
+        self.assertIn("Lint", win.chat.toPlainText())
+
+    def test_generating_still_takes_the_text_and_shows_it(self):
+        win = self.assist()
+        win.input.setText("Write G71 for T2, depth 5.0")
+
+        QTest.keyClick(win.input, Qt.Key.Key_Return, self.CTRL)
+
+        self.assertEqual(win.input.text(), "")
+        self.assertIn("Write G71 for T2, depth 5.0", win.chat.toPlainText())
+        self.assertIn("G00 X36", win.chat.toPlainText())
+
     def test_ctrl_enter_does_nothing_from_the_editor(self):
         # From there it would run a prompt the user never looked at.
         win = self.assist()
