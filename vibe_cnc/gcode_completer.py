@@ -3,6 +3,8 @@ from PyQt6.QtCore import Qt, QAbstractListModel, QModelIndex, QVariant, QObject,
 from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtGui import QTextCursor
 
+from vibe_cnc.fonts import mono_css
+
 class GCodeCompleterModel(QAbstractListModel):
     """Custom Model for context-aware Autocomplete"""
     
@@ -146,7 +148,7 @@ class GCodeCompleter(QCompleter):
                 background: #1A1A1A;
                 color: #FFC800;
                 border: 2px solid #FFC800;
-                font-family: Consolas, Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Fira Code', monospace;
+                font-family: __MONO__;
                 font-size: 11pt;
                 padding: 4px;
             }
@@ -162,7 +164,7 @@ class GCodeCompleter(QCompleter):
             QListView::item:hover {
                 background: rgba(255, 200, 0, 0.3);
             }
-        """)
+        """.replace("__MONO__", mono_css()))
     
     def get_context_suggestions(self, text_before_cursor):
         """Generate context-based suggestions"""

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTableView, QTextEdit, QLineEdit, QLabel, QPushButton,
     QHeaderView, QFileDialog, QAbstractItemView, QMessageBox, QStatusBar,
-    QMenu
+    QMenu, QGridLayout
 )
 
 from vibe_cnc.settings_manager import SettingsManager
@@ -20,15 +20,9 @@ from vibe_cnc.claude_client import AIClient
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
 from vibe_cnc.gcode_completer import install_completer
+from vibe_cnc.fonts import mono_families, mono_css
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-# Consolas stays first — it is the right face on the Windows machines this runs
-# on. It simply does not exist on macOS or on a bare Linux box, where Qt then
-# spends a few hundred milliseconds hunting for a substitute at every startup.
-# Naming the local equivalents ends that search and keeps the look.
-MONO_FAMILIES = ["Consolas", "Menlo", "SF Mono", "DejaVu Sans Mono", "Fira Code"]
-MONO_CSS = "Consolas, Menlo, 'SF Mono', 'DejaVu Sans Mono', 'Fira Code', monospace"
 
 class AIWorkerSignals(QObject):
     """Signals for AIWorker (QRunnable can't have signals directly)"""
@@ -73,6 +67,7 @@ class Main(QMainWindow):
         self.sim_state = "STOPPED"  # STOPPED, RUNNING, PAUSED
         self.sim_current_line = 0
         self.sim_move = 0  # Moves of the current line already played; a cycle makes many
+        self.sim_shown_line = 0  # Last line the run state display was told about
         self.sim_lines = []
         self.sim_timer = QTimer()
         self.sim_timer.timeout.connect(self._sim_step)
@@ -183,35 +178,71 @@ class Main(QMainWindow):
         self.split.addWidget(left); self.split.addWidget(self.title_center); self.split.addWidget(right)
         self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 2); self.split.setStretchFactor(2, 1)
 
-        # --- Control Buttons (Fanuc-Style) ---
-        ctrl = QWidget(); ch = QHBoxLayout(ctrl); ch.setContentsMargins(0,8,0,4); ch.setSpacing(8)
-        self.btnCycleStart = QPushButton("▶ CYCLE START"); self.btnCycleStart.setObjectName("CycleStart")
-        self.btnFeedHold = QPushButton("⏸ FEED HOLD"); self.btnFeedHold.setObjectName("FeedHold")
-        self.btnOptStop = QPushButton("⊙ OPT STOP"); self.btnOptStop.setObjectName("ControlToggle")
+        # --- Operator panel: machine keys on top, program softkeys below ---
+        # One grid, so both rows share the same six columns and line up. The
+        # machine row is five keys and the run-state display; the program row
+        # is six softkeys. No emoji on the keys: some drew as colour emoji and
+        # some as text, and a toggle showed the same glyph on and off.
+        self.btnCycleStart = QPushButton("CYCLE START"); self.btnCycleStart.setObjectName("CycleStart")
+        self.btnFeedHold = QPushButton("FEED HOLD"); self.btnFeedHold.setObjectName("FeedHold")
+        self.btnReset = QPushButton("RESET"); self.btnReset.setObjectName("ControlReset")
+        self.btnOptStop = QPushButton("○ OPT STOP"); self.btnOptStop.setObjectName("ControlToggle")
         self.btnOptStop.setCheckable(True)
-        self.btnSingleBlock = QPushButton("⊙ SINGLE BLOCK"); self.btnSingleBlock.setObjectName("ControlToggle")
+        self.btnSingleBlock = QPushButton("○ SINGLE BLOCK"); self.btnSingleBlock.setObjectName("ControlToggle")
         self.btnSingleBlock.setCheckable(True)
-        ch.addWidget(self.btnCycleStart)
-        ch.addWidget(self.btnFeedHold)
-        ch.addWidget(self.btnOptStop)
-        ch.addWidget(self.btnSingleBlock)
-        ch.addStretch()
+        self.lblRunState = QLabel(); self.lblRunState.setObjectName("RunState")
+        self.lblRunState.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # --- Softkeys ---
-        soft = QWidget(); sh = QHBoxLayout(soft); sh.setContentsMargins(0,4,0,8); sh.setSpacing(8)
-        self.btnOpen = QPushButton("OPEN ▼"); self.btnOpen.setObjectName("Softkey")
+        # "OPEN ▾": the menu lists recent files. Qt also draws an arrow of its
+        # own for a button with a menu, which made it a double one; the style
+        # sheet hides that one so the label says it once.
+        self.btnOpen = QPushButton("OPEN ▾"); self.btnOpen.setObjectName("Softkey")
         self.btnSave = QPushButton("SAVE"); self.btnSave.setObjectName("Softkey")
-
-        # Recent Files Menu for OPEN Button
         self.recent_files_menu = QMenu(self)
         self.btnOpen.setMenu(self.recent_files_menu)
         self._update_recent_files_menu()
-        self.btnSim  = QPushButton("SEND 2 SIM"); self.btnSim.setObjectName("Softkey")
-        self.btnAna  = QPushButton("AI: ANALYZE"); self.btnAna.setObjectName("Softkey")
-        self.btnGen  = QPushButton("AI: GEN-CODE"); self.btnGen.setObjectName("Softkey")
-        self.btnSettings = QPushButton("⚙️ SETTINGS"); self.btnSettings.setObjectName("Softkey")
-        for w in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen, self.btnSettings]:
-            sh.addWidget(w)
+        # What it does is send the program to CAMotics, the 3D simulation --
+        # not to the simulation panel in this window, which "SIM" suggested.
+        self.btnSim = QPushButton("CAMOTICS 3D"); self.btnSim.setObjectName("Softkey")
+        self.btnAna = QPushButton("AI ANALYZE"); self.btnAna.setObjectName("Softkey")
+        self.btnGen = QPushButton("AI GENERATE"); self.btnGen.setObjectName("Softkey")
+        self.btnSettings = QPushButton("SETTINGS"); self.btnSettings.setObjectName("Softkey")
+
+        machine_row = [self.btnCycleStart, self.btnFeedHold, self.btnReset,
+                       self.btnOptStop, self.btnSingleBlock, self.lblRunState]
+        program_row = [self.btnOpen, self.btnSave, self.btnSim,
+                       self.btnAna, self.btnGen, self.btnSettings]
+        self._panel_buttons = [w for w in machine_row + program_row
+                               if isinstance(w, QPushButton)]
+
+        panel = QWidget(); grid = QGridLayout(panel)
+        grid.setContentsMargins(0, 8, 0, 8); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(8)
+        for row, (caption, widgets) in enumerate((("MACHINE", machine_row),
+                                                  ("PROGRAM", program_row))):
+            label = QLabel(caption); label.setObjectName("RowLabel")
+            grid.addWidget(label, row, 0)
+            for column, widget in enumerate(widgets, start=1):
+                grid.addWidget(widget, row, column)
+        for column in range(1, 7):
+            grid.setColumnStretch(column, 1)
+        self._update_run_state()
+
+        for widget, tip in {
+            self.btnCycleStart: "Start the program, or carry on after a hold (Space)",
+            self.btnFeedHold: "Pause the program (F)",
+            self.btnReset: "Stop and go back to the start of the program (Esc)",
+            self.btnOptStop: "On: the program stops at every M01",
+            self.btnSingleBlock: "On: the program runs one block at a time",
+            self.lblRunState: "STOP = not running, RUN = running, HOLD = paused",
+            self.btnOpen: "Open a program (Ctrl+O), or pick one of the recent ones",
+            self.btnSave: "Save the program (Ctrl+S)",
+            self.btnSim: "Show the program in CAMotics (3D). If CAMotics cannot start, "
+                         "it is copied to the VM share instead. F5 does the same with a lint check first.",
+            self.btnAna: "Check the program against the policies and ask the AI to review it (Ctrl+L: lint only)",
+            self.btnGen: "Generate G-code from the text in the assist box",
+            self.btnSettings: "Machine, AI, paths and font size",
+        }.items():
+            widget.setToolTip(tip)
 
         # --- Status Bar ---
         self.status = QStatusBar()
@@ -229,8 +260,7 @@ class Main(QMainWindow):
         root = QWidget(); v = QVBoxLayout(root)
         v.setContentsMargins(10,10,10,10); v.setSpacing(0)
         v.addWidget(self.vsplit, stretch=1)
-        v.addWidget(ctrl, stretch=0)  # Control buttons top
-        v.addWidget(soft, stretch=0)  # Softkeys bottom
+        v.addWidget(panel, stretch=0)  # machine keys on top, program softkeys below
         v.setContentsMargins(10,10,10,10)
         self.setCentralWidget(root)
 
@@ -253,6 +283,7 @@ class Main(QMainWindow):
         self.btnFeedHold.clicked.connect(self.action_feed_hold)
         self.btnOptStop.toggled.connect(self.action_opt_stop_toggled)
         self.btnSingleBlock.toggled.connect(self.action_single_block_toggled)
+        self.btnReset.clicked.connect(self.action_reset)
 
         # --- Plotter Live-Update ---
         self.editor.textChanged.connect(self._on_editor_changed)
@@ -290,7 +321,7 @@ class Main(QMainWindow):
         # --- Control Shortcuts ---
         self.addAction(QAction(self, shortcut=Qt.Key.Key_Space, triggered=self.action_cycle_start))
         self.addAction(QAction(self, shortcut=Qt.Key.Key_F, triggered=self.action_feed_hold))
-        self.addAction(QAction(self, shortcut=Qt.Key.Key_Escape, triggered=self._sim_stop))
+        self.addAction(QAction(self, shortcut=Qt.Key.Key_Escape, triggered=self.action_reset))
 
         # UI state
         self._restore_state()
@@ -299,15 +330,20 @@ class Main(QMainWindow):
     def _apply_styles(self):
         c = self.cfg_colors
         self.setStyleSheet(f"""
-            QWidget {{ background:{c['BG_DARK']}; color:{c['WHITE']}; font-family:{MONO_CSS}; }}
+            QWidget {{ background:{c['BG_DARK']}; color:{c['WHITE']}; font-family:{mono_css()}; }}
             QPlainTextEdit, QTextEdit {{ background:{c['BG_BLACK']}; color:{c['WHITE']}; border:1px solid #2A2A2A; }}
             QLineEdit {{ background:{c['BG_BLACK']}; color:{c['WHITE']}; border:1px solid #2A2A2A; padding:6px; }}
             QTableView {{ background:#111; gridline-color:#333; }}
             QHeaderView::section {{ background:#222; color:{c['WHITE']}; border:0; padding:6px; }}
             QTableView::item:selected {{ background: rgba(58,255,122,0.25); color:{c['WHITE']}; }}
             QLabel#PanelTitle {{ background:{c['FANUC_YELLOW']}; color:#000; font-weight:600; padding:6px 10px; }}
-            QPushButton#Softkey {{ background:#2A2A2A; border:1px solid #444; padding:8px 12px; }}
-            QPushButton#Softkey:pressed {{ background:#333; }}
+            QPushButton#Softkey {{ background:#2A2A2A; color:{c['WHITE']}; border:2px solid #444; border-radius:4px; padding:8px 10px; font-weight:bold; }}
+            QPushButton#Softkey:hover {{ background:#333; border-color:#666; }}
+            QPushButton#Softkey:pressed {{ background:#3A3A3A; }}
+            QPushButton#Softkey::menu-indicator {{ image:none; width:0px; }}
+            QPushButton:disabled {{ color:#666; background:#1E1E1E; border-color:#333; }}
+            QLabel#RowLabel {{ color:#777; font-weight:bold; padding-right:8px; }}
+            QLabel#RunState {{ background:#111; border:2px solid #333; border-radius:4px; font-weight:bold; padding:0px 8px; }}
             QStatusBar {{ background:#1A1A1A; color:{c['CRT_GREEN']}; border-top:1px solid #333; }}
             QPushButton#PanelTab {{ background:{c['FANUC_YELLOW']}; color:#000; font-weight:600; padding:6px 10px; border:0; }}
             QPushButton#PanelTab:checked {{ background:{c['FANUC_YELLOW']}; }}
@@ -320,7 +356,7 @@ class Main(QMainWindow):
                 font-weight: bold;
                 border: 2px solid #00FF00;
                 border-radius: 4px;
-                padding: 10px 20px;
+                padding: 8px 10px;
             }}
             QPushButton#CycleStart:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00FF00, stop:1 #00BB00); }}
             QPushButton#CycleStart:pressed {{ background: #006600; border-color: #00AA00; }}
@@ -331,17 +367,28 @@ class Main(QMainWindow):
                 font-weight: bold;
                 border: 2px solid #FF8800;
                 border-radius: 4px;
-                padding: 10px 20px;
+                padding: 8px 10px;
             }}
             QPushButton#FeedHold:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFAA00, stop:1 #DD7700); }}
             QPushButton#FeedHold:pressed {{ background: #AA5500; }}
+
+            QPushButton#ControlReset {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #CC2222, stop:1 #881111);
+                color: #FFF;
+                font-weight: bold;
+                border: 2px solid #FF3333;
+                border-radius: 4px;
+                padding: 8px 10px;
+            }}
+            QPushButton#ControlReset:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #EE3333, stop:1 #AA1515); }}
+            QPushButton#ControlReset:pressed {{ background: #660C0C; border-color: #CC2222; }}
 
             QPushButton#ControlToggle {{
                 background: #333;
                 color: #AAA;
                 border: 2px solid #555;
                 border-radius: 4px;
-                padding: 10px 16px;
+                padding: 8px 10px;
                 font-weight: bold;
             }}
             QPushButton#ControlToggle:hover {{ background: #444; border-color: #666; }}
@@ -360,7 +407,7 @@ class Main(QMainWindow):
         scale = max(0.9, min(1.6, w / 1600))
         def set_font(widget, mul=1.0):
             f = QFont()
-            f.setFamilies(MONO_FAMILIES)
+            f.setFamilies(list(mono_families()))
             f.setStyleHint(QFont.StyleHint.Monospace)
             f.setPointSizeF(self.base_pt * scale * mul)
             widget.setFont(f)
@@ -371,13 +418,14 @@ class Main(QMainWindow):
         # the full base size rather than the 0.9 the code panes use.
         set_font(self.table, 1.0)
         set_font(self.macroTable, 1.0)
-        for b in [self.btnOpen, self.btnSave, self.btnSim, self.btnAna, self.btnGen, self.btnSettings]:
-            set_font(b, 0.9); b.setMinimumHeight(int(34 * scale))
-        # The four control buttons were the only widgets left at Qt's own
-        # default, which on macOS is about 10.5pt against the 8.1pt everything
-        # else had settled on — a third larger, and it showed.
-        for b in [self.btnCycleStart, self.btnFeedHold, self.btnOptStop, self.btnSingleBlock]:
-            set_font(b, 1.0)
+        # Every key of the operator panel in one size, so the two rows line up.
+        # (The control buttons used to be left at Qt's own default, a third
+        # larger than the rest, and the softkeys at 0.9 -- neither matched.)
+        for b in self._panel_buttons:
+            set_font(b, 0.95); b.setMinimumHeight(int(38 * scale))
+        set_font(self.lblRunState, 0.95); self.lblRunState.setMinimumHeight(int(38 * scale))
+        for l in self.findChildren(QLabel, "RowLabel"):
+            set_font(l, 0.85)
         for l in self.findChildren(QLabel, "PanelTitle"):
             f = l.font(); f.setPointSizeF(self.base_pt * scale * 0.95); f.setBold(True); l.setFont(f)
         # Tabs (TOOLS/MACROS): normal size
@@ -478,7 +526,7 @@ class Main(QMainWindow):
     def _append_system_message(self, text: str):
         """Shows system message in chat (CNC/Simulation, neutral gray)"""
         self.chat.append(f"<div style='background:#0A0A0A; padding:6px; border-left:2px solid #555; margin:2px 0;'>"
-                        f"<span style='color:#888; font-size:0.9em;'>⚙️ CNC:</span> <span style='color:#AAA;'>{text}</span></div>")
+                        f"<span style='color:#888; font-size:0.9em;'>CNC:</span> <span style='color:#AAA;'>{text}</span></div>")
 
     def _handle_analyze_response(self, ok: bool, resp: str, role: str):
         if ok:
@@ -532,29 +580,50 @@ class Main(QMainWindow):
             mode_info.append("OPT STOP")
 
         mode_str = f" ({', '.join(mode_info)})" if mode_info else ""
-        self._append_system_message(f"▶ CYCLE START{mode_str}")
+        self._append_system_message(f"CYCLE START{mode_str}")
 
         # Start 2D simulation
         self._sim_start()
 
     def action_feed_hold(self):
         """FEED HOLD Button → Pauses simulation"""
-        self._append_system_message("⏸ FEED HOLD pressed")
+        self._append_system_message("FEED HOLD")
         self._sim_pause()
+
+    def action_reset(self):
+        """RESET Button / Esc → Stops the simulation and goes back to the start"""
+        if self.sim_state == "STOPPED":
+            return
+        self._append_system_message("RESET")
+        self._sim_stop()
 
     def action_opt_stop_toggled(self, checked: bool):
         """OPTIONAL STOP Toggle → M01 active/inactive"""
         state = "ON" if checked else "OFF"
-        icon = "⊙" if checked else "○"
-        self.status.showMessage(f"{icon} OPTIONAL STOP: {state}", 2000)
-        self._append_system_message(f"⊙ OPTIONAL STOP → {state}")
+        self.btnOptStop.setText(("● " if checked else "○ ") + "OPT STOP")
+        self.status.showMessage(f"Optional stop: {state}", 2000)
+        self._append_system_message(f"Optional stop → {state}")
 
     def action_single_block_toggled(self, checked: bool):
         """SINGLE BLOCK Toggle → Single block mode"""
         state = "ON" if checked else "OFF"
-        icon = "⊙" if checked else "○"
-        self.status.showMessage(f"{icon} SINGLE BLOCK: {state}", 2000)
-        self._append_system_message(f"⊙ SINGLE BLOCK → {state}")
+        self.btnSingleBlock.setText(("● " if checked else "○ ") + "SINGLE BLOCK")
+        self.status.showMessage(f"Single block: {state}", 2000)
+        self._append_system_message(f"Single block → {state}")
+
+    # State word and colour for the run-state display, by simulation state.
+    RUN_STATES = {"STOPPED": ("STOP", "#888888"),
+                  "RUNNING": ("RUN", "#4AFF4A"),
+                  "PAUSED": ("HOLD", "#FF9900")}
+
+    def _update_run_state(self):
+        """Shows STOP / RUN / HOLD, and the line it is at while the program is not stopped"""
+        word, colour = self.RUN_STATES[self.sim_state]
+        text = f"● {word}"
+        if self.sim_state != "STOPPED" and self.sim_shown_line:
+            text += f"  line {self.sim_shown_line}"
+        self.lblRunState.setText(text)
+        self.lblRunState.setStyleSheet(f"color:{colour};")
 
     # --- Simulation Engine ---
     def _sim_start(self):
@@ -579,18 +648,21 @@ class Main(QMainWindow):
 
             self.sim_timer.start(self._sim_interval())
 
-            self.status.showMessage("▶ Simulation running", 0)
-            self._append_system_message("🎬 Simulation started")
+            self.status.showMessage("Simulation running", 0)
+            self._append_system_message("Simulation started")
 
             # Show yellow marker
             self.editor.set_sim_line(1)
+            self.sim_shown_line = 0
+            self._update_run_state()
 
         elif self.sim_state == "PAUSED":
             # Resume simulation
             self.sim_state = "RUNNING"
             self.sim_timer.start(self._sim_interval())
-            self.status.showMessage("▶ Simulation resumed", 0)
-            self._append_system_message("▶ Simulation resumed")
+            self.status.showMessage("Simulation resumed", 0)
+            self._append_system_message("Simulation resumed")
+            self._update_run_state()
 
     # A cycle plays back quicker than a line: a roughing cycle is dozens of
     # moves and should not take a minute. Redrawing the plot costs about 100 ms,
@@ -618,12 +690,14 @@ class Main(QMainWindow):
         # Check if simulation is finished
         if self.sim_current_line >= len(self.sim_lines):
             self._sim_stop()
-            self._append_system_message("✅ Program finished (M30)")
+            self._append_system_message("Program finished (M30)")
             return
 
         # Get current line
         line = self.sim_lines[self.sim_current_line]
         line_num = self.sim_current_line + 1  # 1-based
+        self.sim_shown_line = line_num
+        self._update_run_state()
 
         # Highlight line in editor + set yellow marker
         self.editor.set_sim_line(line_num)
@@ -636,7 +710,7 @@ class Main(QMainWindow):
             self.editor.centerCursor()
 
         # Update status
-        self.status.showMessage(f"▶ SIM line {line_num}: {line[:30]}{'...' if len(line) > 30 else ''}", 0)
+        self.status.showMessage(f"SIM line {line_num}: {line[:30]}{'...' if len(line) > 30 else ''}", 0)
 
         # Parse current line for live position
         self._update_sim_position(line)
@@ -665,8 +739,8 @@ class Main(QMainWindow):
         if 'M01' in line.upper() and self.btnOptStop.isChecked():
             # Optional Stop
             self._sim_pause()
-            self._append_system_message(f"⏸ M01 - OPTIONAL STOP (line {line_num})")
-            self.status.showMessage(f"⏸ M01 - OPTIONAL STOP (line {line_num})", 0)
+            self._append_system_message(f"M01 - OPTIONAL STOP (line {line_num})")
+            self.status.showMessage(f"M01 - OPTIONAL STOP (line {line_num})", 0)
             self.sim_current_line += 1  # Line is processed
             return
 
@@ -674,7 +748,7 @@ class Main(QMainWindow):
             # Program end
             self.sim_current_line += 1
             self._sim_stop()
-            self._append_system_message("✅ Program finished (M30/M02)")
+            self._append_system_message("Program finished (M30/M02)")
             return
 
         # Next line
@@ -689,7 +763,8 @@ class Main(QMainWindow):
         if self.sim_state == "RUNNING":
             self.sim_state = "PAUSED"
             self.sim_timer.stop()
-            self.status.showMessage("⏸ Simulation paused", 0)
+            self.status.showMessage("Simulation paused", 0)
+            self._update_run_state()
 
     def _sim_stop(self):
         """Stops the simulation completely"""
@@ -698,7 +773,9 @@ class Main(QMainWindow):
         self.sim_current_line = 0
         self.sim_move = 0
         self.sim_lines = []
-        self.status.showMessage("⏹ Simulation stopped", 3000)
+        self.status.showMessage("Simulation stopped", 3000)
+        self.sim_shown_line = 0
+        self._update_run_state()
 
         # Remove yellow marker
         self.editor.clear_sim_line()
@@ -825,7 +902,7 @@ class Main(QMainWindow):
         """Update the Recent Files dropdown menu"""
         self.recent_files_menu.clear()
 
-        open_action = self.recent_files_menu.addAction("📂 Open File...")
+        open_action = self.recent_files_menu.addAction("Open File...")
         open_action.triggered.connect(self._open_file_dialog)
 
         recent = self._get_recent_files()
@@ -840,7 +917,7 @@ class Main(QMainWindow):
                     continue
 
                 filename = os.path.basename(filepath)
-                action = self.recent_files_menu.addAction(f"📄 {filename}")
+                action = self.recent_files_menu.addAction(filename)
                 # Lambda with default argument to capture filepath
                 action.triggered.connect(lambda checked=False, p=filepath: self._open_recent_file(p))
 
@@ -1110,7 +1187,7 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
 
     # --- Settings ---
     def action_settings(self):
-        """⚙️ SETTINGS Button → Open Settings Dialog"""
+        """SETTINGS Button → Open Settings Dialog"""
         dialog = SettingsDialog(self.cfg, parent=self)
         dialog.exec()
 
