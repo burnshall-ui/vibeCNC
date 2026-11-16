@@ -373,6 +373,55 @@ class PlotPlaybackTests(unittest.TestCase):
         widget.set_live_step(call, 8)
         self.assertEqual(len(widget.ax.lines), before + 8)
 
+    # Every pass of a thread is a straight line along Z, which in the colour of
+    # a cut reads as turning, so the passes have a colour of their own.
+    G76_THREAD = "G00 X24. Z2.\nG76 P010060 Q100 R0.\nG76 X17.4 Z-30. P1300 Q1300 F2."
+    G92_THREAD = "G00 X22. Z2.\nG92 X19.4 Z-20. F1.5\nX19.1"
+
+    @staticmethod
+    def lines_in(widget, colour):
+        """The two-point lines of one colour; markers and crosses are single points."""
+        return [ln for ln in widget.ax.lines
+                if ln.get_color() == colour and len(ln.get_xdata()) == 2]
+
+    def test_g76_passes_are_drawn_in_their_own_colour_and_not_as_cuts(self):
+        widget = self.plotter(code=self.G76_THREAD)
+
+        # One roughing and one finishing pass: two cutting legs.
+        self.assertEqual(len(self.lines_in(widget, COLORS['FANUC_YELLOW'])), 2)
+        self.assertEqual(self.lines_in(widget, COLORS['CRT_GREEN']), [])
+
+    def test_g92_passes_get_the_same_colour(self):
+        widget = self.plotter(code=self.G92_THREAD)
+
+        self.assertEqual(len(self.lines_in(widget, COLORS['FANUC_YELLOW'])), 2)
+        self.assertEqual(self.lines_in(widget, COLORS['CRT_GREEN']), [])
+
+    def test_a_thread_pass_appears_with_its_cut_and_not_with_its_feed_in(self):
+        widget = self.plotter(code=self.G76_THREAD)
+        call = 3
+        widget.set_live_max_line(call - 1)
+
+        def passes():
+            return len(self.lines_in(widget, COLORS['FANUC_YELLOW']))
+
+        widget.set_live_step(call, 1)      # feed in: a rapid
+        self.assertEqual(passes(), 0)
+        widget.set_live_step(call, 2)      # the cut of the first pass
+        self.assertEqual(passes(), 1)
+        widget.set_live_step(call, 5)      # the second pass's feed in
+        self.assertEqual(passes(), 1)
+        widget.set_live_step(call, 6)      # its cut
+        self.assertEqual(passes(), 2)
+
+    def test_a_thread_pass_is_drawn_above_an_ordinary_cut_and_below_a_finishing_run(self):
+        widget = self.plotter(code=self.G76_THREAD)
+
+        thread = self.lines_in(widget, COLORS['FANUC_YELLOW'])[0].get_zorder()
+
+        self.assertGreater(thread, 2)       # a cut
+        self.assertLess(thread, 2.5)        # a finishing run
+
     def test_the_finishing_cycle_adds_no_lines_to_skip(self):
         # The contour blocks were stepped past by the G71 above it, and only
         # by that.

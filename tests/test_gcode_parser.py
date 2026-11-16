@@ -455,7 +455,7 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
     def test_every_block_cuts_one_pass_at_its_own_diameter(self):
         _parser, paths = self._parse()
 
-        self.assertEqual([segment[0][0] for segment in paths["cut"]],
+        self.assertEqual([segment[0][0] for segment in paths["thread"]],
                          [19.4, 19.1, 18.9])
 
     def test_the_end_of_the_thread_stays_modal_across_repeats(self):
@@ -463,7 +463,7 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
         # instead of off the opening block made every repeat zero-length.
         _parser, paths = self._parse()
 
-        for segment in paths["cut"]:
+        for segment in paths["thread"]:
             self.assertEqual((segment[0][1], segment[1][1]), (2.0, -20.0))
 
     def test_the_tool_ends_each_pass_where_it_started(self):
@@ -478,6 +478,14 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
         # The approach, plus three moves around each of the three passes.
         self.assertEqual(len(paths["rapid"]), 1 + 3 * 3)
 
+    def test_the_passes_are_thread_passes_and_not_ordinary_cuts(self):
+        # Each pass is a straight line along Z, which in the colour of a cut
+        # reads as turning. They are their own kind, as a G70's run is.
+        _parser, paths = self._parse()
+
+        self.assertEqual(len(paths["thread"]), 3)
+        self.assertEqual(paths["cut"], [])
+
     def test_a_motion_code_cancels_the_cycle(self):
         parser, paths = self._parse(self.THREAD + "\nG01 X30. Z-5. F0.2")
 
@@ -487,25 +495,25 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
     def test_a_block_without_an_axis_word_does_not_repeat_it(self):
         _parser, paths = self._parse("G00 X22. Z2.\nG92 X19.4 Z-20. F1.5\nF1.2")
 
-        self.assertEqual(len(paths["cut"]), 1)
+        self.assertEqual(len(paths["thread"]), 1)
 
     def test_incremental_words_reach_the_cycle_too(self):
         _parser, paths = self._parse("G00 X22. Z2.\nG92 U-2.6 W-22. F1.5")
 
-        self.assertEqual(paths["cut"], [[(19.4, 2.0), (19.4, -20.0), 2]])
+        self.assertEqual(paths["thread"], [[(19.4, 2.0), (19.4, -20.0), 2]])
 
     def test_a_taper_moves_the_entry_diameter_not_the_target(self):
         # R is the difference in radius over the taper, so it widens the entry
         # by twice itself in diameter and leaves the programmed end alone.
         _parser, paths = self._parse("G00 X22. Z2.\nG92 X19.4 Z-20. R-1. F1.5")
 
-        self.assertEqual(paths["cut"], [[(17.4, 2.0), (19.4, -20.0), 2]])
+        self.assertEqual(paths["thread"], [[(17.4, 2.0), (19.4, -20.0), 2]])
 
     def test_the_taper_stays_modal_as_well(self):
         _parser, paths = self._parse(
             "G00 X22. Z2.\nG92 X19.4 Z-20. R-1. F1.5\nX19.1")
 
-        self.assertEqual([segment[0][0] for segment in paths["cut"]], [17.4, 17.1])
+        self.assertEqual([segment[0][0] for segment in paths["thread"]], [17.4, 17.1])
 
     def test_a_thread_that_runs_into_the_chuck_is_flagged(self):
         # The whole point of drawing the cycle: every leg is a real move and
@@ -516,13 +524,13 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
         _parser, paths = self._parse(chuck_z=-15.0)
 
         self.assertEqual(len(paths["collisions"]), 9)
-        for segment in paths["cut"]:
+        for segment in paths["thread"]:
             self.assertIn(segment, paths["collisions"])
 
     def test_a_cycle_with_nowhere_to_go_is_reported(self):
         parser, paths = self._parse("G00 X22. Z2.\nG92 X22. Z2. F1.5")
 
-        self.assertEqual(paths["cut"], [])
+        self.assertEqual(paths["thread"], [])
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
 
 
@@ -933,7 +941,7 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
     @staticmethod
     def passes(paths, line=3):
         """The cut of every pass, in order."""
-        return [s for s in paths["cut"] if s[2] == line]
+        return [s for s in paths["thread"] if s[2] == line]
 
     @staticmethod
     def depth_of(cut, crest=20.0):
@@ -987,10 +995,18 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         # X = 20 - 2*1.3 = 17.4.
         self.assertEqual(first_pass, [
             ("rapid", (24.0, 2.0), (17.4, 2.0)),       # feed in
-            ("cut", (17.4, 2.0), (17.4, -30.0)),       # the thread
+            ("thread", (17.4, 2.0), (17.4, -30.0)),       # the thread
             ("rapid", (17.4, -30.0), (24.0, -30.0)),   # retract
             ("rapid", (24.0, -30.0), (24.0, 2.0)),     # back to the start
         ])
+
+    def test_the_passes_are_thread_passes_and_not_ordinary_cuts(self):
+        # Every pass is a straight line along Z, which in the colour of a cut
+        # reads as turning. They are their own kind, as a G70's run is.
+        _parser, paths = self.parse()
+
+        self.assertEqual(len(paths["thread"]), 10)
+        self.assertEqual(paths["cut"], [])
 
     def test_the_tool_ends_where_the_cycle_began(self):
         parser, _paths = self.parse()
@@ -1008,7 +1024,7 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
 
         kinds = [kind for kind, _i, line in paths["order"] if line == self.SECOND_BLOCK]
 
-        self.assertEqual(kinds, ["rapid", "cut", "rapid", "rapid"] * 10)
+        self.assertEqual(kinds, ["rapid", "thread", "rapid", "rapid"] * 10)
 
     def test_a_value_without_a_decimal_point_is_in_thousandths_of_a_millimetre(self):
         # Q350 is 0.35 mm and P1226 is 1.226 mm; with a point they are millimetres.
@@ -1046,7 +1062,7 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         _parser, paths = self.parse("G00 X24. Z2.\nG76 P011060 Q100 R0.\n"
                                     "G76 X17.4 Z-30. P1300 Q1300 F2.")
 
-        first_pass = [paths["cut"][0], paths["cut"][1]]
+        first_pass = [paths["thread"][0], paths["thread"][1]]
 
         self.assertEqual(first_pass[0][:2], [(17.4, 2.0), (17.4, -28.0)])
         self.assertEqual(first_pass[1][:2], [(17.4, -28.0), (21.4, -30.0)])
@@ -1057,7 +1073,7 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         _parser, paths = self.parse("G00 X24. Z2.\nG76 P019960 Q100 R0.\n"
                                     "G76 X17.4 Z-30. P1300 Q1300 F5.")
 
-        for cut in paths["cut"]:
+        for cut in paths["thread"]:
             self.assertLessEqual(max(cut[0][0], cut[1][0]), 24.0 + 1e-9)
 
     def test_an_internal_thread_feeds_outwards(self):
@@ -1084,7 +1100,7 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         _parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.\n"
                                     "G76 X17.4 Z-30. R1.5 P1300 Q1300 F2.")
 
-        start, end = paths["cut"][0][0], paths["cut"][0][1]
+        start, end = paths["thread"][0][0], paths["thread"][0][1]
 
         self.assertAlmostEqual(start[0], 17.4 + 2 * 1.5, places=9)
         self.assertEqual(start[1], 2.0)
@@ -1107,26 +1123,26 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         parser, paths = self.parse(self.SETUP + "G76 X17.4 Z-30. Q400 F2.")
 
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
-        self.assertEqual(paths["cut"], [])
+        self.assertEqual(paths["thread"], [])
 
     def test_without_a_first_depth_nothing_is_cut(self):
         parser, paths = self.parse(self.SETUP + "G76 X17.4 Z-30. P1300 F2.")
 
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
-        self.assertEqual(paths["cut"], [])
+        self.assertEqual(paths["thread"], [])
 
     def test_a_thread_that_ends_where_it_starts_is_a_warning(self):
         parser, paths = self.parse(self.SETUP + "G76 X24. Z-30. P1300 Q400 F2.")
 
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
-        self.assertEqual(paths["cut"], [])
+        self.assertEqual(paths["thread"], [])
 
     def test_a_first_cut_of_one_micron_stops_at_the_limit_and_says_so(self):
         parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q0 R0.\n"
                                    "G76 X17.4 Z-30. P1300 Q1 F2.")
 
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_TOO_MANY_PASSES"])
-        self.assertEqual(len(paths["cut"]), 200)
+        self.assertEqual(len(paths["thread"]), 200)
 
     def test_a_minimum_cut_keeps_the_pass_count_down(self):
         # The same one-micron first cut as above, but the first block sets 0.1

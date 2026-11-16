@@ -103,6 +103,11 @@ class GCodeParser:
             # run lies within a fraction of a millimetre of the roughed
             # contour, so in the same colour it adds nothing to the picture.
             'finish': [],      # G70 finishing cycle (cyan solid)
+            # What a thread cycle cuts, G92 and G76 alike. Its own kind for the
+            # reason G70 has one: every pass of a thread is a straight line
+            # along Z at its own depth, which is what turning looks like, so in
+            # the colour of an ordinary cut a thread reads as turning.
+            'thread': [],      # thread passes (yellow solid)
             'arc': [],         # G02/G03 (green arc)
             'tool_changes': [], # Tool changes
             'collisions': [],   # Collisions (red)
@@ -650,7 +655,7 @@ class GCodeParser:
             return
 
         self._record_move('rapid', (start_x, start_z), (entry_x, start_z), line_num)
-        self._record_move('cut', (entry_x, start_z), (target_x, target_z), line_num)
+        self._record_move('thread', (entry_x, start_z), (target_x, target_z), line_num)
         self._record_move('rapid', (target_x, target_z), (start_x, target_z), line_num)
         self._record_move('rapid', (start_x, target_z), (start_x, start_z), line_num)
 
@@ -793,11 +798,11 @@ class GCodeParser:
                 x_out = x_in + (x_end - x_in) * (z_out - start_z) / (end_z - start_z)
                 x_clear = x_out - inwards * 2.0 * runout
                 x_clear = (min if inwards < 0 else max)(x_clear, start_x)
-                self._record_move('cut', (x_in, start_z), (x_out, z_out), line_num)
-                self._record_move('cut', (x_out, z_out), (x_clear, end_z), line_num)
+                self._record_move('thread', (x_in, start_z), (x_out, z_out), line_num)
+                self._record_move('thread', (x_out, z_out), (x_clear, end_z), line_num)
                 x_last = x_clear
             else:
-                self._record_move('cut', (x_in, start_z), (x_end, end_z), line_num)
+                self._record_move('thread', (x_in, start_z), (x_end, end_z), line_num)
                 x_last = x_end
             self._record_move('rapid', (x_last, end_z), (start_x, end_z), line_num)
             self._record_move('rapid', (start_x, end_z), (start_x, start_z), line_num)

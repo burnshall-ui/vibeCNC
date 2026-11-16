@@ -189,7 +189,7 @@ class ReferenceProgramTests(unittest.TestCase):
     THREAD_DIAMETERS = [30.0 - 2.0 * depth for depth in THREAD_DEPTHS]
 
     def test_the_thread_is_cut_in_five_passes_to_the_root_diameter(self):
-        cuts = in_the_threading_cycle(self.paths["cut"])
+        cuts = in_the_threading_cycle(self.paths["thread"])
 
         self.assertEqual(len(cuts), 5)
         for cut, diameter in zip(cuts, self.THREAD_DIAMETERS):
@@ -209,7 +209,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertAlmostEqual(rapid, 218.146264, places=5)
 
         self.assertAlmostEqual(
-            sum(segment_length(s) for s in in_the_threading_cycle(self.paths["cut"])),
+            sum(segment_length(s) for s in in_the_threading_cycle(self.paths["thread"])),
             cut, places=9)
         self.assertAlmostEqual(
             sum(segment_length(s) for s in in_the_threading_cycle(self.paths["rapid"])),
