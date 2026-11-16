@@ -10,7 +10,8 @@ import os
 import tempfile
 import unittest
 
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtGui import QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -26,7 +27,9 @@ def load_main_module():
     return module
 
 
-class OperatorPanelTests(unittest.TestCase):
+class PanelCase(unittest.TestCase):
+    """What every test here needs: a window, a way to run it, its log."""
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
@@ -62,6 +65,9 @@ class OperatorPanelTests(unittest.TestCase):
     def log(self, win):
         return [line.strip() for line in win.chat.toPlainText().split("\n") if line.strip()]
 
+
+
+class OperatorPanelTests(PanelCase):
     # --- run state ---
 
     def test_the_display_starts_at_stop(self):
@@ -199,6 +205,67 @@ class OperatorPanelTests(unittest.TestCase):
         win = self.window()
 
         self.assertIn("CAMOTICS", win.btnSim.text())
+
+
+class AssistBoxKeyTests(PanelCase):
+    """Enter checks the program; generating code takes Cmd/Ctrl+Enter.
+
+    Generating calls the AI on whatever is typed, so it must be deliberate.
+    """
+    CTRL = Qt.KeyboardModifier.ControlModifier  # Cmd on a Mac
+
+    def assist(self):
+        win = self.window()
+        # Offline, so generating answers with a stub and nothing reaches a
+        # backend. Only this window's copy of the settings is touched.
+        win.cfg.data['ai']['offline'] = True
+        win.activateWindow()
+        win.input.setFocus()
+        QTest.qWait(50)
+        return win
+
+    def test_ctrl_enter_in_the_assist_box_generates(self):
+        win = self.assist()
+
+        QTest.keyClick(win.input, Qt.Key.Key_Return, self.CTRL)
+
+        text = win.chat.toPlainText()
+        self.assertIn("G00 X36", text)            # the offline generator's stub
+        self.assertNotIn("Lint", text)            # and the program was not checked
+
+    def test_the_keypad_enter_generates_too(self):
+        win = self.assist()
+
+        QTest.keyClick(win.input, Qt.Key.Key_Enter, self.CTRL)
+
+        self.assertIn("G00 X36", win.chat.toPlainText())
+
+    def test_plain_enter_still_checks_the_program_and_does_not_generate(self):
+        win = self.assist()
+
+        QTest.keyClick(win.input, Qt.Key.Key_Return)
+
+        text = win.chat.toPlainText()
+        self.assertIn("Lint", text)
+        self.assertNotIn("G00 X36", text)
+
+    def test_ctrl_enter_does_nothing_from_the_editor(self):
+        # From there it would run a prompt the user never looked at.
+        win = self.assist()
+        win.editor.setFocus()
+        QTest.qWait(50)
+
+        QTest.keyClick(win.editor, Qt.Key.Key_Return, self.CTRL)
+
+        self.assertNotIn("G00 X36", win.chat.toPlainText())
+
+    def test_the_tooltips_name_the_key_as_this_platform_writes_it(self):
+        win = self.window()
+        key = QKeySequence("Ctrl+Return").toString(QKeySequence.SequenceFormat.NativeText)
+
+        self.assertIn(key, win.input.toolTip())
+        self.assertIn(key, win.btnGen.toolTip())
+        self.assertIn("Enter", win.input.toolTip())
 
 
 if __name__ == "__main__":

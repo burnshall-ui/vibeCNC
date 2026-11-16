@@ -3,7 +3,7 @@ import os, sys, json, re
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QSize, QTimer, QSettings, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
-from PyQt6.QtGui import QFont, QAction, QKeySequence, QCloseEvent
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QCloseEvent, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTableView, QTextEdit, QLineEdit, QLabel, QPushButton,
@@ -227,6 +227,10 @@ class Main(QMainWindow):
             grid.setColumnStretch(column, 1)
         self._update_run_state()
 
+        # Qt reads "Ctrl" as Cmd on a Mac, so one sequence is right everywhere.
+        generate_key = QKeySequence("Ctrl+Return").toString(QKeySequence.SequenceFormat.NativeText)
+        self.input.setToolTip(f"Enter: check the program (as AI ANALYZE)\n"
+                              f"{generate_key}: generate G-code from this text (as AI GENERATE)")
         for widget, tip in {
             self.btnCycleStart: "Start the program, or carry on after a hold (Space)",
             self.btnFeedHold: "Pause the program (F)",
@@ -238,8 +242,8 @@ class Main(QMainWindow):
             self.btnSave: "Save the program (Ctrl+S)",
             self.btnSim: "Show the program in CAMotics (3D). If CAMotics cannot start, "
                          "it is copied to the VM share instead. F5 does the same with a lint check first.",
-            self.btnAna: "Check the program against the policies and ask the AI to review it (Ctrl+L: lint only)",
-            self.btnGen: "Generate G-code from the text in the assist box",
+            self.btnAna: "Check the program against the policies and ask the AI to review it (Enter in the assist box; Ctrl+L: lint only)",
+            self.btnGen: f"Generate G-code from the text in the assist box ({generate_key} in the assist box)",
             self.btnSettings: "Machine, AI, paths and font size",
         }.items():
             widget.setToolTip(tip)
@@ -277,6 +281,14 @@ class Main(QMainWindow):
         self.btnSim.clicked.connect(self.action_send_to_sim)
         self.btnSettings.clicked.connect(self.action_settings)
         self.input.returnPressed.connect(self.action_analyze)
+        # Generating calls the AI on whatever is typed, so it is not the plain
+        # Enter. Ctrl+Return is Cmd+Return on a Mac; the keypad's Enter is a
+        # different key and gets its own. Only while the box has the focus: from
+        # the editor it would run a prompt the user never looked at.
+        for sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            shortcut = QShortcut(QKeySequence(sequence), self.input)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(self.action_generate)
 
         # --- Control Signals ---
         self.btnCycleStart.clicked.connect(self.action_cycle_start)
