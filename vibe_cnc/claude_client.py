@@ -21,12 +21,12 @@ class AIClient:
             
             # Validate API key
             if not api_key or api_key.strip() == '':
-                return (False, "❌ ANTHROPIC_API_KEY nicht gesetzt. Bitte setze die Umgebungsvariable (z.B. via 'setx ANTHROPIC_API_KEY \"sk-ant-...\"')")
+                return (False, "❌ ANTHROPIC_API_KEY not set. Please set the environment variable (e.g. via 'setx ANTHROPIC_API_KEY \"sk-ant-...\"')")
             
             # Validate base URL
             base_url = a.get("base_url", "")
             if not base_url:
-                return (False, "❌ config.yaml fehlerhaft: ai.anthropic.base_url fehlt")
+                return (False, "❌ config.yaml invalid: ai.anthropic.base_url missing")
             
             headers = {
                 "x-api-key": api_key,

@@ -4,7 +4,7 @@
   "tool_table": [
     {
       "t": 1,
-      "name": "CNMG1204P-S Außen",
+      "name": "CNMG1204P-S External",
       "type": "turn_rough",
       "insert_radius_mm": 0.8,
       "holder": "PCLNR2525",
@@ -27,7 +27,7 @@
     },
     {
       "t": 5,
-      "name": "Bohrer 8.2",
+      "name": "Drill 8.2",
       "type": "drill",
       "d_mm": 8.2,
       "limits": {
@@ -38,7 +38,7 @@
     },
     {
       "t": 11,
-      "name": "DCMT11T308 Innen",
+      "name": "DCMT11T308 Internal",
       "type": "turn_finish",
       "insert_radius_mm": 0.4,
       "holder": "SDJCR2020",
@@ -51,7 +51,7 @@
     },
     {
       "t": 30,
-      "name": "Gewindeformer M10x1",
+      "name": "Thread Former M10x1",
       "type": "thread_form",
       "limits": {
         "vc_max": 25,

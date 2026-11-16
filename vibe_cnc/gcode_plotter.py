@@ -761,7 +761,7 @@ class GCodePlotterWidget(QWidget):
             return
 
         # Assemble text
-        info_lines = ["🎯 LIVE POSITION"]
+        info_lines = ["LIVE POSITION"]
         if self.live_x is not None:
             info_lines.append(f"X: {self.live_x:.2f} Ø")
         if self.live_z is not None:

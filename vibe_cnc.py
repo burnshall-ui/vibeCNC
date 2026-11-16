@@ -102,7 +102,7 @@ class Main(QMainWindow):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # T
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # D
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # KOMMENTAR
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # NAME
         self.table.setColumnWidth(0, 50)   # T: 5 Zeichen
         self.table.setColumnWidth(1, 60)   # D: 6 Zeichen
 
@@ -636,7 +636,7 @@ class Main(QMainWindow):
             self.editor.centerCursor()
 
         # Update status
-        self.status.showMessage(f"▶ SIM: N{line_num} {line[:30]}...", 0)
+        self.status.showMessage(f"▶ SIM line {line_num}: {line[:30]}{'...' if len(line) > 30 else ''}", 0)
 
         # Parse current line for live position
         self._update_sim_position(line)
@@ -665,8 +665,8 @@ class Main(QMainWindow):
         if 'M01' in line.upper() and self.btnOptStop.isChecked():
             # Optional Stop
             self._sim_pause()
-            self._append_system_message(f"⏸ M01 - OPTIONAL STOP (Zeile {line_num})")
-            self.status.showMessage(f"⏸ M01 - OPTIONAL STOP (N{line_num})", 0)
+            self._append_system_message(f"⏸ M01 - OPTIONAL STOP (line {line_num})")
+            self.status.showMessage(f"⏸ M01 - OPTIONAL STOP (line {line_num})", 0)
             self.sim_current_line += 1  # Line is processed
             return
 

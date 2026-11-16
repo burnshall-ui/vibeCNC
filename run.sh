@@ -1,24 +1,24 @@
 #!/bin/bash
-# Vibe CNC Start-Script (macOS/Linux)
+# Vibe CNC start script (macOS/Linux)
 
 set -e
 
 cd "$(dirname "$0")"
 
-# Virtuelle Umgebung erstellen falls nicht vorhanden
+# Create the virtual environment if it does not exist
 if [ ! -d "venv" ]; then
-    echo "Erstelle virtuelle Umgebung..."
+    echo "Creating virtual environment..."
     python3 -m venv venv
 fi
 
-# Aktivieren
+# Activate
 source venv/bin/activate
 
-# Dependencies installieren
-echo "Installiere Dependencies..."
+# Install dependencies
+echo "Installing dependencies..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 
-# App starten
-echo "Starte Vibe CNC..."
+# Start the app
+echo "Starting Vibe CNC..."
 python vibe_cnc.py

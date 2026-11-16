@@ -64,10 +64,10 @@ ai:
   ollama:
     base_url: http://127.0.0.1:11434/api/chat
     model: granite3.3:8b
-    system_prompt: 'Du bist ein strenger CNC-Reviewer. Halte dich strikt an die Policies.
+    system_prompt: 'You are a strict CNC reviewer. Follow the policies strictly.
 
-      Antworte mit: 1) Liste von Regelverstößen (Zeile, Regel, kurzer Fix),
+      Answer with: 1) a list of rule violations (line, rule, short fix),
 
-      2) optional unified diff. Keine kosmetischen Änderungen.
+      2) optionally a unified diff. No cosmetic changes.
 
       '

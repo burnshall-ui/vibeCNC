@@ -14,7 +14,7 @@ from .tool_data import (  # noqa: F401 - load_tools_json is re-exported on purpo
 
 
 class ToolModel(QAbstractTableModel):
-    HEADERS = ["T", "D", "KOMMENTAR"]
+    HEADERS = ["T", "D", "NAME"]
 
     def __init__(self):
         super().__init__()

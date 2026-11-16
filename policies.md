@@ -1,28 +1,28 @@
-# Vibe CNC — Policies (Fanuc-Style)
+# Vibe CNC — Policies (Fanuc style)
 
-**Zweck:** Diese Regeln werden von der KI und dem Linter erzwungen. Ziel ist robuste, nachvollziehbare NC-Programmierung.
+**Purpose:** The AI and the linter enforce these rules. The goal is robust, traceable NC programming.
 
-## Header-Guards
-- `G18 G40 G80 G97` müssen im Header gesetzt sein.
-- Einheiten: `G21` (mm).
-- Nullpunkt: `G54` (oder explizit im Programm dokumentieren).
+## Header guards
+- `G18 G40 G80 G97` must be set in the header.
+- Units: `G21` (mm).
+- Origin: `G54` (or document it explicitly in the program).
 
-## CSS & Drehzahlbegrenzung
-- `G50` MUSS vor dem ersten `G96` stehen (Drehzahlbegrenzung vor Schnittgeschwindigkeit).
+## CSS & spindle speed limit
+- `G50` MUST come before the first `G96` (limit the spindle speed before setting a surface speed).
 
-## Prozess-Invarianz
-- Roboter-/Luft-M-Codes sind **invariant** und dürfen nicht geändert/entfernt werden
-  (Liste ist in `config.yaml` definiert).
+## Process invariance
+- Robot/air M-codes are **invariant** and must not be changed or removed
+  (the list is defined in `config.yaml`).
 
-## Zyklen & Parameter
-- G7x-Zyklen: keine negativen/Null-Zustellungen/Vorschübe; Wertebereiche plausibel halten.
-- G76 Gewinde: sinnvolle Durchgänge und Endtiefe; Warnung bei extremen Abweichungen.
-- `G4` Verweilzeiten: ≤ 5 s ohne Kommentar, sonst dokumentieren.
+## Cycles & parameters
+- G7x cycles: no negative or zero depths of cut or feeds; keep value ranges plausible.
+- G76 threading: sensible number of passes and final depth; warn on extreme deviations.
+- `G4` dwell: ≤ 5 s without a comment, otherwise document it.
 
-## Sicherer Ablauf
-- Vor `M30`: erst `Z` in sichere Ebene, dann `X` rausfahren.
-- Keine Änderung von Kühlluft/Signalen am Ende, wenn als „invariant“ markiert.
+## Safe sequence
+- Before `M30`: move `Z` to a safe plane first, then retract `X`.
+- Do not change cooling air or signals at the end if they are marked "invariant".
 
-## Kommentare & Doku
-- Kommentar-Header mit: Werkzeugtabelle, Material, Datum, Version (`REV:`).
-- KI darf nur **Fix-Vorschläge** machen oder einen diff ausgeben; Änderungen werden manuell übernommen.
+## Comments & documentation
+- Comment header with: tool table, material, date, version (`REV:`).
+- The AI may only **suggest fixes** or output a diff; changes are applied manually.
