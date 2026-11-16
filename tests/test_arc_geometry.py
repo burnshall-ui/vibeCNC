@@ -75,7 +75,10 @@ class NoSecondCopyTests(unittest.TestCase):
 
         self.assertEqual(source.count("patches.Arc("), 1)
         self.assertNotIn("atan2", source)
-        self.assertEqual(source.count("self._draw_arc(arc"), 4)
+        # Two kinds of arc (programmed and compensated), drawn by one routine.
+        # It was four while the full update and the live redraw each carried
+        # their own copy of the drawing code.
+        self.assertEqual(source.count("self._draw_arc(arc"), 2)
 
 
 class FullCircleTests(unittest.TestCase):

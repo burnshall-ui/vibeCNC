@@ -72,6 +72,7 @@ class Main(QMainWindow):
         # --- Simulation State ---
         self.sim_state = "STOPPED"  # STOPPED, RUNNING, PAUSED
         self.sim_current_line = 0
+        self.sim_move = 0  # Moves of the current line already played; a cycle makes many
         self.sim_lines = []
         self.sim_timer = QTimer()
         self.sim_timer.timeout.connect(self._sim_step)
@@ -563,6 +564,7 @@ class Main(QMainWindow):
             code = self.editor.toPlainText()
             self.sim_lines = [line.strip() for line in code.split('\n')]
             self.sim_current_line = 0
+            self.sim_move = 0
             self.sim_state = "RUNNING"
 
             # Reset live position
@@ -575,9 +577,7 @@ class Main(QMainWindow):
             # Live-Drawing: Start at line 0 (nothing drawn)
             self.plotter.set_live_max_line(0)
 
-            # Speed: 200ms per line (default), 500ms for SINGLE BLOCK
-            interval = 500 if self.btnSingleBlock.isChecked() else 200
-            self.sim_timer.start(interval)
+            self.sim_timer.start(self._sim_interval())
 
             self.status.showMessage("▶ Simulation running", 0)
             self._append_system_message("🎬 Simulation started")
@@ -588,15 +588,32 @@ class Main(QMainWindow):
         elif self.sim_state == "PAUSED":
             # Resume simulation
             self.sim_state = "RUNNING"
-            interval = 500 if self.btnSingleBlock.isChecked() else 200
-            self.sim_timer.start(interval)
+            self.sim_timer.start(self._sim_interval())
             self.status.showMessage("▶ Simulation resumed", 0)
             self._append_system_message("▶ Simulation resumed")
 
+    # A cycle plays back quicker than a line: a roughing cycle is dozens of
+    # moves and should not take a minute. Redrawing the plot costs about 100 ms,
+    # so a long cycle shows several moves per tick rather than one -- it never
+    # takes more than CYCLE_MAX_TICKS ticks, however many passes it cuts.
+    CYCLE_MOVE_MS = 80
+    CYCLE_MAX_TICKS = 40
+
+    def _sim_interval(self) -> int:
+        """Milliseconds per G-Code line: 200, or 500 in SINGLE BLOCK."""
+        return 500 if self.btnSingleBlock.isChecked() else 200
+
     def _sim_step(self):
-        """Executes one simulation step (one G-Code line)"""
+        """Executes one simulation step: one G-Code line, or one move of a cycle"""
         if self.sim_state != "RUNNING":
             return
+
+        # The blocks between P and Q of a roughing cycle only describe the
+        # contour. The cycle has already cut it, and the control carries on
+        # after Q rather than running them as moves of their own.
+        skipped = self.plotter.skipped_lines()
+        while self.sim_current_line + 1 in skipped:
+            self.sim_current_line += 1
 
         # Check if simulation is finished
         if self.sim_current_line >= len(self.sim_lines):
@@ -624,8 +641,25 @@ class Main(QMainWindow):
         # Parse current line for live position
         self._update_sim_position(line)
 
-        # Live-Drawing: Draw only up to current line
-        self.plotter.set_live_max_line(line_num)
+        # Live-Drawing: Draw only up to current line. A cycle is one block that
+        # makes dozens of moves; one move per tick shows the passes being cut
+        # instead of all of them appearing at once. SINGLE BLOCK keeps it a block.
+        moves = self.plotter.steps_in_line(line_num)
+        if moves > 1 and not self.btnSingleBlock.isChecked():
+            stride = -(-moves // self.CYCLE_MAX_TICKS)  # ceiling division
+            self.sim_move = min(self.sim_move + stride, moves)
+            self.plotter.set_live_step(line_num, self.sim_move)
+            end = self.plotter.step_end(line_num, self.sim_move)
+            if end is not None:
+                self.sim_x, self.sim_z = end
+                self._push_live_position()
+            if self.sim_move < moves:
+                self.sim_timer.setInterval(self.CYCLE_MOVE_MS)
+                return  # still on this line; the next tick plays the next move
+        else:
+            self.plotter.set_live_max_line(line_num)
+        self.sim_move = 0
+        self.sim_timer.setInterval(self._sim_interval())
 
         # Check M-Codes
         if 'M01' in line.upper() and self.btnOptStop.isChecked():
@@ -662,6 +696,7 @@ class Main(QMainWindow):
         self.sim_state = "STOPPED"
         self.sim_timer.stop()
         self.sim_current_line = 0
+        self.sim_move = 0
         self.sim_lines = []
         self.status.showMessage("⏹ Simulation stopped", 3000)
 
@@ -705,7 +740,11 @@ class Main(QMainWindow):
         if f_match:
             self.sim_f = float(f_match.group(1))
 
-        # Pass to plotter (always show X and Z, even if 0)
+        self._push_live_position()
+
+    def _push_live_position(self):
+        """Hands the current X, Z, tool, speed and feed to the plotter's overlay"""
+        # Always show X and Z, even if 0
         self.plotter.set_live_position(
             x=self.sim_x,
             z=self.sim_z,

@@ -85,7 +85,17 @@ class GCodeParser:
             'tool_changes': [], # Tool changes
             'collisions': [],   # Collisions (red)
             'comp_cut': [],     # compensated path (G41/G42), yellow
-            'comp_arc': []      # compensated arcs (G41/G42), yellow
+            'comp_arc': [],     # compensated arcs (G41/G42), yellow
+            'stock': None,      # blank from a (STOCK D.. L..) comment, or None
+            # What was recorded, in the order it happened: (list, index, line).
+            # The lists above lose the order across kinds, and a cycle makes
+            # dozens of moves under one line -- this is how a playback can show
+            # them one after another instead of all at once.
+            'order': [],
+            # Lines that describe a contour for a roughing cycle rather than
+            # move the tool. The cycle has already cut them, so a playback
+            # continues after them, the way the control does.
+            'skipped': frozenset()
         }
 
     def parse(self, gcode: str) -> dict:
@@ -100,11 +110,13 @@ class GCodeParser:
         self._lines = lines
         self._blocks = self._index_blocks(lines)
         self._skip = set()
+        self.paths['stock'] = self._read_stock(gcode)
 
         for line_num, line in enumerate(lines, 1):
             if line_num in self._skip:
                 continue
             self._parse_line(line, line_num)
+        self.paths['skipped'] = frozenset(self._skip)
 
         # Post-processing: intersect corners (Lookahead Corner Handling)
         self._intersect_compensated_corners()
@@ -270,6 +282,7 @@ class GCodeParser:
         if self._hits_chuck(*start, *end):
             self.paths['collisions'].append(segment)
         self.paths[kind].append(segment)
+        self.paths['order'].append((kind, len(self.paths[kind]) - 1, line_num))
         return segment
 
     def _add_arc(self, new_x, new_z, i_match, k_match, r_match, line_num):
@@ -306,6 +319,7 @@ class GCodeParser:
             'line': line_num
         }
         self.paths['arc'].append(arc_data)
+        self.paths['order'].append(('arc', len(self.paths['arc']) - 1, line_num))
 
         hit = self._arc_collision_span(arc_data)
         if hit is not None:
@@ -313,6 +327,33 @@ class GCodeParser:
 
         if self._compensating():
             self._add_compensated_arc(arc_data, cr, cz, radius, clockwise, line_num)
+
+    # --- Stock ------------------------------------------------------------
+
+    @staticmethod
+    def _read_stock(gcode: str):
+        """The blank, from a comment such as `(STOCK D40 L50 Z0.5)`.
+
+        NC code does not say what the blank looks like -- the control never
+        needed to know -- so this is stated rather than guessed: D is the
+        diameter, L the length, and Z the front face (default 0, the
+        programmed zero). Without a valid comment there is no stock, and the
+        plotter draws none, because a silhouette inferred from the toolpath
+        would look authoritative while being a guess.
+        """
+        for body in re.findall(r'\(([^)]*)\)', gcode):
+            match = re.match(r'\s*STOCK\b(.*)$', body, re.IGNORECASE)
+            if not match:
+                continue
+            words = match.group(1)
+            diameter = GCodeParser._word(words, 'D')
+            length = GCodeParser._word(words, 'L')
+            if diameter is None or length is None or diameter <= 0 or length <= 0:
+                continue
+            front = GCodeParser._word(words, 'Z')
+            return {'diameter': diameter, 'length': length,
+                    'z_front': 0.0 if front is None else front}
+        return None
 
     # --- Canned cycles ----------------------------------------------------
 

@@ -49,6 +49,15 @@ class GCodePlotterWidget(QWidget):
 
         # Live-Drawing (only draw up to this line, None = all)
         self.live_max_line = None
+        # How many of that line's moves are drawn, None = all of them. A cycle
+        # is one block that makes many moves; this is what lets it be played
+        # back one at a time.
+        self.live_step = None
+        # Rebuilt after every parse: the moves of each line in order, and each
+        # move's place in its line.
+        self._moves_of_line = {}
+        self._rank = {}
+        self._move_of = {}  # id() of a straight segment -> (list, index)
 
         # Matplotlib Figure
         self.fig = Figure(figsize=(6, 4), dpi=100, facecolor='#1A1A1A')
@@ -61,6 +70,7 @@ class GCodePlotterWidget(QWidget):
         self.canvas.mpl_connect('button_press_event', self._on_mouse_press)
         self.canvas.mpl_connect('button_release_event', self._on_mouse_release)
         self.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
+        self.canvas.mpl_connect('resize_event', self._on_resize)
 
         # Layout
         layout = QVBoxLayout(self)
@@ -102,7 +112,50 @@ class GCodePlotterWidget(QWidget):
                      transform=self.ax.transAxes)
         self.ax.set_xlim(-50, 10)
         self.ax.set_ylim(-10, 50)
+        self._match_aspect()
         self.canvas.draw_idle()
+
+    def _match_aspect(self):
+        """Widens the view until a millimetre of radius is as long as one of Z.
+
+        X is a diameter, so a unit of it is drawn half as long as a unit of Z.
+        Without this the part came out several times flatter than it is.
+        matplotlib can enforce it (set_aspect with adjustable='datalim'), but
+        it logs a warning on every draw when the limits were set by hand, as
+        they are here. This does the same widening once, when the limits are
+        set and when the panel changes shape.
+        """
+        box = self.ax.get_window_extent()
+        if box.width < 1 or box.height < 1:
+            return
+        x0, x1 = self.ax.get_xlim()
+        y0, y1 = self.ax.get_ylim()
+        # The Y range that makes the scales 2:1 for this X range, and this
+        # panel's shape. If the Y range already asked for is smaller, widen Y;
+        # otherwise it is X that is too tight.
+        y_needed = 2.0 * (x1 - x0) * box.height / box.width
+        if y_needed >= y1 - y0:
+            centre = 0.5 * (y0 + y1)
+            self.ax.set_ylim(centre - y_needed / 2.0, centre + y_needed / 2.0)
+        else:
+            x_needed = (y1 - y0) * box.width / (2.0 * box.height)
+            centre = 0.5 * (x0 + x1)
+            self.ax.set_xlim(centre - x_needed / 2.0, centre + x_needed / 2.0)
+
+    def _apply_view(self):
+        """Puts the stored limits on the axes, widened to scale.
+
+        clear() throws the old limits away, so every redraw has to set them
+        again.
+        """
+        if self._last_xlim and self._last_ylim:
+            self.ax.set_xlim(self._last_xlim)
+            self.ax.set_ylim(self._last_ylim)
+        self._match_aspect()
+
+    def _on_resize(self, _event):
+        """Keeps the picture to scale when the panel changes shape."""
+        self._apply_view()
 
     def update_plot(self):
         """Starts delayed update (150ms debounce)"""
@@ -160,6 +213,179 @@ class GCodePlotterWidget(QWidget):
                                       angle=0, theta1=90.0 - theta2,
                                       theta2=90.0 - theta1, **style))
 
+    def _draw_stock(self):
+        """Draws the blank behind everything else, when the program names one."""
+        stock = self.paths_cache.get('stock') if self.paths_cache else None
+        if not stock:
+            return
+        z_front = stock['z_front']
+        diameter = stock['diameter']
+        # The upper half of the section, with the centre line as its bottom
+        # edge -- the way the control draws a turned part.
+        self.ax.add_patch(patches.Rectangle(
+            (z_front - stock['length'], 0.0), stock['length'], diameter,
+            linewidth=1, edgecolor='#666666', facecolor='#202020',
+            zorder=0.5, gid='stock'))
+        # At the far end, clear of the rapids that arrive at the front face.
+        self.ax.text(z_front - stock['length'], diameter,
+                     f" STOCK Ø{diameter:g} × {stock['length']:g}",
+                     ha='left', va='bottom', color='#777777', fontsize=7)
+
+    def _draw_tool_changes(self):
+        """Marks where each tool change happens, one label per position.
+
+        Changes usually start from the same safe point, so labelling each one
+        printed T5 and T1 on top of each other.
+        """
+        at_position = {}
+        for tc in self.paths_cache['tool_changes']:
+            if self._shown(tc['line']):
+                key = (round(tc['z'], 3), round(tc['x'], 3))
+                at_position.setdefault(key, []).append(tc['tool'])
+
+        for (z, x), tools in at_position.items():
+            label = ", ".join(f"T{t}" for t in dict.fromkeys(tools))
+            self.ax.plot(z, x, marker='o', color=self.colors['FANUC_YELLOW'],
+                         markersize=6, zorder=3)
+            self.ax.text(z, x, f" {label}", color=self.colors['FANUC_YELLOW'],
+                         fontsize=8, va='center')
+
+    def _draw_scene(self) -> bool:
+        """Clears the axes and draws the program up to live_max_line.
+
+        Shared by the full update and the live redraw, which differ only in
+        what they do with the zoom afterwards. Returns whether any path was
+        drawn.
+        """
+        self.ax.clear()
+        self.highlight_artist = None  # Invalid after clear() - will be recreated
+        self.live_text = None  # Invalid after clear() - will be recreated
+        self._setup_plot()
+
+        has_paths = False
+
+        self._draw_stock()
+        self._draw_chuck()
+
+        # Live drawing: only what the playback has reached. _shown decides.
+
+        # Rapid moves (G00) - gray dashed
+        for index, segment in enumerate(self.paths_cache['rapid']):
+            (x1, z1), (x2, z2), line = segment
+            if self._shown(line, ('rapid', index)):
+                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
+                has_paths = True
+
+        # Cutting paths (G01) - green solid
+        for index, segment in enumerate(self.paths_cache['cut']):
+            (x1, z1), (x2, z2), line = segment
+            if self._shown(line, ('cut', index)):
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
+                has_paths = True
+
+        # Compensated cutting paths (G41/G42) - yellow dashed
+        for segment in self.paths_cache.get('comp_cut', []):
+            (x1, z1), (x2, z2), line = segment
+            if self._shown(line):
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
+                            linestyle='--', alpha=0.9, zorder=3)
+                has_paths = True
+
+        # Compensated arcs (G41/G42) - yellow dashed
+        for arc in self.paths_cache.get('comp_arc', []):
+            if self._shown(arc['line']):
+                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
+                               linewidth=1.5, linestyle='--', alpha=0.9,
+                               zorder=3)
+                has_paths = True
+
+        # Circular arcs (G02/G03) - green arc
+        for index, arc in enumerate(self.paths_cache['arc']):
+            if self._shown(arc['line'], ('arc', index)):
+                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
+                               linewidth=2, zorder=2)
+                has_paths = True
+
+        # Collisions (highlighted red). A straight one is the very segment that
+        # was filed under cut or rapid, so it appears with its move.
+        for segment in self.paths_cache['collisions']:
+            (x1, z1), (x2, z2), line = segment
+            if self._shown(line, self._move_of.get(id(segment))):
+                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
+                            alpha=0.7, zorder=5, label='Collision!')
+
+        self._draw_tool_changes()
+
+        # Zero point marker
+        self.ax.plot(0, 0, marker='+', color=self.colors['CYAN'], markersize=10, zorder=4, linewidth=2)
+        self.ax.text(0, 0, ' G54', color=self.colors['CYAN'], fontsize=8, va='bottom')
+
+        return has_paths
+
+    def _fit_bounds(self):
+        """(z_min, z_max, x_min, x_max) of what the picture should frame.
+
+        That is what the tool cuts, plus the stock and the origin. The rapid
+        moves are left out on purpose: they run out to the tool-change
+        position, and framing them shrank the part to a sliver in one corner.
+        They are still drawn and stay reachable by zooming out.
+        """
+        paths = self.paths_cache
+        points = []  # (x, z)
+        for key in ('cut', 'comp_cut', 'collisions'):
+            for start, end, _line in paths.get(key, []):
+                points.extend((start, end))
+        for key in ('arc', 'comp_arc'):
+            for arc in paths.get(key, []):
+                points.extend((arc['start'], arc['end']))
+        stock = paths.get('stock')
+        if stock:
+            points.append((stock['diameter'], stock['z_front']))
+            points.append((0.0, stock['z_front'] - stock['length']))
+        if not points:
+            # Nothing is cut; a program of rapids alone still wants a frame.
+            for start, end, _line in paths['rapid']:
+                points.extend((start, end))
+        if not points:
+            return None
+        # The centre line and the programmed zero: G54 is always drawn.
+        points.append((0.0, 0.0))
+
+        xs = [p[0] for p in points]
+        zs = [p[1] for p in points]
+        return min(zs), max(zs), min(xs), max(xs)
+
+    @staticmethod
+    def _range_changed(new, old) -> bool:
+        """True when a view limit pair changed in size by more than 20%."""
+        old_range = old[1] - old[0]
+        return abs((new[1] - new[0]) - old_range) / max(old_range, 0.1) > 0.2
+
+    def _fit_view(self):
+        """Frames the work, unless the user has taken over the zoom.
+
+        Small edits leave the view where it is -- re-framing on every keystroke
+        makes the picture jump while typing -- and only a change of more than
+        20% in either direction re-frames it. The stored limits are applied
+        every time, because clear() throws the old ones away.
+        """
+        bounds = self._fit_bounds()
+        if bounds is not None and not self._manual_zoom:
+            z_min, z_max, x_min, x_max = bounds
+            z_pad = max(5.0, (z_max - z_min) * 0.1)
+            # X is a diameter: 10 of it is the same 5 mm of radius as the Z pad.
+            x_pad = max(10.0, (x_max - x_min) * 0.1)
+            new_xlim = (z_min - z_pad, z_max + z_pad)
+            new_ylim = (x_min - x_pad, x_max + x_pad)
+
+            if (self._last_xlim is None or self._last_ylim is None
+                    or self._range_changed(new_xlim, self._last_xlim)
+                    or self._range_changed(new_ylim, self._last_ylim)):
+                self._last_xlim = new_xlim
+                self._last_ylim = new_ylim
+
+        self._apply_view()
+
     def _do_update(self):
         """Performs the actual plot update"""
         if not self.pending_code:
@@ -177,134 +403,13 @@ class GCodePlotterWidget(QWidget):
 
         # Parse G-Code
         self.paths_cache = self.parser.parse(self.pending_code)
+        self._index_moves()
 
-        # Redraw plot
-        self.ax.clear()
-        self.highlight_artist = None  # Invalid after clear() - will be recreated
-        self.live_text = None  # Invalid after clear() - will be recreated
-        self._setup_plot()
-
-        has_paths = False
-
-        self._draw_chuck()
-
-        # Rapid moves (G00) - gray dashed
-        for segment in self.paths_cache['rapid']:
-            (x1, z1), (x2, z2), line = segment
-            # Live drawing: Only draw up to live_max_line
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
-                has_paths = True
-
-        # Cutting paths (G01) - green solid
-        for segment in self.paths_cache['cut']:
-            (x1, z1), (x2, z2), line = segment
-            # Live drawing: Only draw up to live_max_line
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-                has_paths = True
-
-        # Compensated cutting paths (G41/G42) - yellow dashed
-        for segment in self.paths_cache.get('comp_cut', []):
-            (x1, z1), (x2, z2), line = segment
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
-                            linestyle='--', alpha=0.9, zorder=3)
-                has_paths = True
-
-        # Compensated arcs (G41/G42) - yellow dashed
-        for arc in self.paths_cache.get('comp_arc', []):
-            if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
-                               linewidth=1.5, linestyle='--', alpha=0.9,
-                               zorder=3)
-                has_paths = True
-
-        # Circular arcs (G02/G03) - green arc
-        for arc in self.paths_cache['arc']:
-            # Live drawing: Only draw up to live_max_line
-            if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
-                               linewidth=2, zorder=2)
-                has_paths = True
-
-        # Collisions (highlighted red)
-        for segment in self.paths_cache['collisions']:
-            (x1, z1), (x2, z2), line = segment
-            # Live drawing: Only draw up to live_max_line
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
-                            alpha=0.7, zorder=5, label='Collision!')
-
-        # Tool changes - yellow markers
-        for tc in self.paths_cache['tool_changes']:
-            # Live drawing: Only draw up to live_max_line
-            if self.live_max_line is None or tc['line'] <= self.live_max_line:
-                self.ax.plot(tc['z'], tc['x'], marker='o', color=self.colors['FANUC_YELLOW'],
-                            markersize=6, zorder=3)
-                self.ax.text(tc['z'], tc['x'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
-                            fontsize=8, va='center')
-
-        if not has_paths:
+        if not self._draw_scene():
             self._draw_empty()
             return
 
-        # Auto-zoom with padding
-        all_x = []
-        all_z = []
-        for segments in [self.paths_cache['rapid'], self.paths_cache['cut']]:
-            for segment in segments:
-                (x1, z1), (x2, z2), _ = segment
-                all_x.extend([x1, x2])
-                all_z.extend([z1, z2])
-
-        if all_x and all_z:
-            x_min, x_max = min(all_x), max(all_x)
-            z_min, z_max = min(all_z), max(all_z)
-            x_pad = max(5, (x_max - x_min) * 0.1)
-            z_pad = max(5, (z_max - z_min) * 0.1)
-
-            # Fit the toolpath. The chuck used to be forced into view, which on
-            # a short part with a distant chuck limit squeezed the whole path
-            # into a corner; the chuck stays reachable by zooming out.
-            new_xlim = (z_min - z_pad, z_max + z_pad)
-            new_ylim = (x_min - x_pad, x_max + x_pad)
-
-            # Zoom stabilization: Only adjust for significant changes (>20%)
-            # BUT: Only if the user has not zoomed manually
-            should_update_zoom = False
-            if not self._manual_zoom:
-                if self._last_xlim is None or self._last_ylim is None:
-                    # First zoom - always set
-                    should_update_zoom = True
-                else:
-                    # Check if bounding box has changed significantly
-                    x_range_old = self._last_xlim[1] - self._last_xlim[0]
-                    x_range_new = new_xlim[1] - new_xlim[0]
-                    z_range_old = self._last_ylim[1] - self._last_ylim[0]
-                    z_range_new = new_ylim[1] - new_ylim[0]
-
-                    x_change = abs(x_range_new - x_range_old) / max(x_range_old, 0.1)
-                    z_change = abs(z_range_new - z_range_old) / max(z_range_old, 0.1)
-
-                    # Update if change > 20%
-                    if x_change > 0.2 or z_change > 0.2:
-                        should_update_zoom = True
-
-                if should_update_zoom:
-                    self.ax.set_xlim(new_xlim)
-                    self.ax.set_ylim(new_ylim)
-                    self._last_xlim = new_xlim
-                    self._last_ylim = new_ylim
-            else:
-                # Manual zoom active - keep current limits
-                if self._last_xlim and self._last_ylim:
-                    self.ax.set_xlim(self._last_xlim)
-                    self.ax.set_ylim(self._last_ylim)
-
-        # Zero point marker
-        self.ax.plot(0, 0, marker='+', color=self.colors['CYAN'], markersize=10, zorder=4, linewidth=2)
-        self.ax.text(0, 0, ' G54', color=self.colors['CYAN'], fontsize=8, va='bottom')
+        self._fit_view()
 
         # Redraw cursor highlight (if set)
         if self.current_line is not None:
@@ -335,6 +440,11 @@ class GCodePlotterWidget(QWidget):
             if target_pos:
                 break
 
+        # During a playback the ring follows the move being drawn, rather than
+        # sitting on the first move of the line for the whole cycle.
+        if self.live_step and self.current_line == self.live_max_line:
+            target_pos = self.step_end(self.current_line, self.live_step) or target_pos
+
         # Check tool changes
         if not target_pos:
             for tc in self.paths_cache['tool_changes']:
@@ -346,8 +456,10 @@ class GCodePlotterWidget(QWidget):
             # Create marker or update position
             if self.highlight_artist is None:
                 # Create marker for the first time
+                # White, not red: red already means a collision here.
                 self.highlight_artist = self.ax.plot(target_pos[1], target_pos[0],
-                                                     marker='o', color='#FF3333',
+                                                     marker='o',
+                                                     color=self.colors.get('WHITE', '#EDEDED'),
                                                      markersize=10, markeredgewidth=2,
                                                      markerfacecolor='none', zorder=10)[0]
             else:
@@ -367,19 +479,20 @@ class GCodePlotterWidget(QWidget):
         min_dist = float('inf')
         closest_line = None
 
+        # Distances are measured as drawn: X is a diameter, so it counts half.
         # Search all segments
         for segment_list in [self.paths_cache['rapid'], self.paths_cache['cut']]:
             for segment in segment_list:
                 (x1, z1), (x2, z2), line = segment
                 # Distance to end point
-                dist = math.sqrt((x2 - click_x)**2 + (z2 - click_z)**2)
+                dist = math.sqrt(((x2 - click_x) / 2)**2 + (z2 - click_z)**2)
                 if dist < min_dist:
                     min_dist = dist
                     closest_line = line
 
         # Check tool changes
         for tc in self.paths_cache['tool_changes']:
-            dist = math.sqrt((tc['x'] - click_x)**2 + (tc['z'] - click_z)**2)
+            dist = math.sqrt(((tc['x'] - click_x) / 2)**2 + (tc['z'] - click_z)**2)
             if dist < min_dist:
                 min_dist = dist
                 closest_line = tc['line']
@@ -429,6 +542,10 @@ class GCodePlotterWidget(QWidget):
         # Double click: reactivate auto-zoom
         if event.dblclick and event.button == 1:
             self._manual_zoom = False
+            # Forget the view too: a small zoom is within the 20% the fit
+            # tolerates, so the old limits would otherwise survive the reset.
+            self._last_xlim = None
+            self._last_ylim = None
             self._last_code_hash = None  # Invalidate cache
             if self.pending_code:
                 self._do_update()
@@ -538,19 +655,80 @@ class GCodePlotterWidget(QWidget):
             self.canvas.draw_idle()
 
     def set_live_max_line(self, line_num: int):
-        """Sets the maximum line for live drawing (only draws up to this line)"""
-        if self.live_max_line != line_num:
+        """Sets the maximum line for live drawing (only draws up to this line)
+
+        Every move of that line is drawn; set_live_step shows fewer of them.
+        """
+        if self.live_max_line != line_num or self.live_step is not None:
             self.live_max_line = line_num
+            self.live_step = None
             # Only redraw plot if paths exist
             if self.paths_cache:
                 self._redraw_live()
 
     def clear_live_max_line(self):
         """Removes the live drawing limit (all lines will be drawn again)"""
-        if self.live_max_line is not None:
+        if self.live_max_line is not None or self.live_step is not None:
             self.live_max_line = None
+            self.live_step = None
             if self.paths_cache:
                 self._redraw_live()
+
+    def set_live_step(self, line_num: int, step: int):
+        """Draws everything before `line_num`, and the first `step` moves of it.
+
+        For playing a cycle back move by move: a G71 is one block, but the
+        passes it cuts are what the operator is watching.
+        """
+        if self.live_max_line != line_num or self.live_step != step:
+            self.live_max_line = line_num
+            self.live_step = step
+            if self.paths_cache:
+                self._redraw_live()
+
+    def steps_in_line(self, line_num: int) -> int:
+        """How many moves the line makes: 1 for an ordinary block, many for a cycle."""
+        return len(self._moves_of_line.get(line_num, ()))
+
+    def step_end(self, line_num: int, step: int):
+        """Where the `step`-th move (counting from 1) of the line ends, as (x, z)."""
+        moves = self._moves_of_line.get(line_num, ())
+        if not 1 <= step <= len(moves):
+            return None
+        kind, index = moves[step - 1]
+        if kind == 'arc':
+            return self.paths_cache['arc'][index]['end']
+        return self.paths_cache[kind][index][1]
+
+    def skipped_lines(self):
+        """Lines that only describe a roughing contour; a playback goes past them."""
+        return self.paths_cache['skipped'] if self.paths_cache else frozenset()
+
+    def _index_moves(self):
+        """Works out each move's place in its line, after every parse."""
+        self._moves_of_line = {}
+        self._rank = {}
+        for kind, index, line in self.paths_cache['order']:
+            moves = self._moves_of_line.setdefault(line, [])
+            self._rank[(kind, index)] = len(moves)
+            moves.append((kind, index))
+        # Collisions on straight moves are the same segment object as the
+        # move, so they can borrow its place in the line.
+        self._move_of = {id(self.paths_cache[kind][index]): (kind, index)
+                         for (kind, index) in self._rank if kind != 'arc'}
+
+    def _shown(self, line: int, move=None) -> bool:
+        """Whether something filed under `line` is drawn at this point of the playback.
+
+        `move` is (list, index) for a move that has a place in its line. Without
+        one -- a tool change, a compensated path -- the line alone decides.
+        """
+        if self.live_max_line is None or line < self.live_max_line:
+            return True
+        if line > self.live_max_line:
+            return False
+        rank = self._rank.get(move) if move is not None else None
+        return self.live_step is None or rank is None or rank < self.live_step
 
     def _redraw_live(self):
         """Redraws plot without cache check (for live drawing)"""
@@ -558,70 +736,10 @@ class GCodePlotterWidget(QWidget):
         if not self.pending_code or not self.paths_cache:
             return
 
-        # Redraw plot
-        self.ax.clear()
-        self.highlight_artist = None
-        self.live_text = None
-        self._setup_plot()
-
-
-        self._draw_chuck()
-
-        # Rapid moves (G00) - gray dashed
-        for segment in self.paths_cache['rapid']:
-            (x1, z1), (x2, z2), line = segment
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
-
-        # Cutting paths (G01) - green solid
-        for segment in self.paths_cache['cut']:
-            (x1, z1), (x2, z2), line = segment
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-
-        # Compensated cutting paths (G41/G42) - yellow dashed
-        for segment in self.paths_cache.get('comp_cut', []):
-            (x1, z1), (x2, z2), line = segment
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
-                            linestyle='--', alpha=0.9, zorder=3)
-
-        # Compensated arcs (G41/G42) - yellow dashed
-        for arc in self.paths_cache.get('comp_arc', []):
-            if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
-                               linewidth=1.5, linestyle='--', alpha=0.9,
-                               zorder=3)
-
-        # Circular arcs (G02/G03)
-        for arc in self.paths_cache['arc']:
-            if self.live_max_line is None or arc['line'] <= self.live_max_line:
-                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
-                               linewidth=2, zorder=2)
-
-        # Collisions
-        for segment in self.paths_cache['collisions']:
-            (x1, z1), (x2, z2), line = segment
-            if self.live_max_line is None or line <= self.live_max_line:
-                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
-                            alpha=0.7, zorder=5, label='Collision!')
-
-        # Tool changes
-        for tc in self.paths_cache['tool_changes']:
-            if self.live_max_line is None or tc['line'] <= self.live_max_line:
-                self.ax.plot(tc['z'], tc['x'], marker='o', color=self.colors['FANUC_YELLOW'],
-                            markersize=6, zorder=3)
-                self.ax.text(tc['z'], tc['x'], f" T{tc['tool']}", color=self.colors['FANUC_YELLOW'],
-                            fontsize=8, va='center')
-
-        # Zero point marker
-        self.ax.plot(0, 0, marker='+', color=self.colors['CYAN'], markersize=10, zorder=4, linewidth=2)
-        self.ax.text(0, 0, ' G54', color=self.colors['CYAN'], fontsize=8, va='bottom')
+        self._draw_scene()
 
         # Keep zoom if present
-        if self._last_xlim and self._last_ylim:
-            self.ax.set_xlim(self._last_xlim)
-            self.ax.set_ylim(self._last_ylim)
+        self._apply_view()
 
         # Cursor highlight
         if self.current_line is not None:

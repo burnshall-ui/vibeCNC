@@ -115,3 +115,215 @@ class PlotOrientationTests(unittest.TestCase):
         verts = patch.get_path().vertices
         angles = [math.degrees(math.atan2(y, x)) % 360 for x, y in verts]
         return sum((b - a) % 360 for a, b in zip(angles, angles[1:]))
+
+
+class PlotViewTests(unittest.TestCase):
+    """What the panel frames, and at what scale.
+
+    X is a diameter, so a part drawn with equal units on both axes comes out
+    twice as tall as it is. The panel has to be to scale, and has to stay so
+    when it changes shape.
+    """
+
+    # The rapids run out to X100 Z50, the tool-change position; the cut is a
+    # 22 mm stroke at diameter 30.
+    PART = "G00 X100. Z50.\nG00 X30. Z2.\nG01 Z-20. F0.2\nG00 X100. Z50."
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def plotter(self, code, size=(900, 300), chuck_z=-1000.0):
+        widget = GCodePlotterWidget(COLORS, chuck_z=chuck_z)
+        self.addCleanup(widget.deleteLater)
+        widget.resize(*size)
+        # Shown, because an unshown widget never receives the resize event.
+        widget.show()
+        self.app.processEvents()
+        widget.set_gcode(code)
+        widget.canvas.draw()
+        return widget
+
+    @staticmethod
+    def pixels_per_unit(widget):
+        """Screen pixels per unit of Z, and per unit of X, as drawn."""
+        box = widget.ax.get_window_extent()
+        xlim, ylim = widget.ax.get_xlim(), widget.ax.get_ylim()
+        return box.width / (xlim[1] - xlim[0]), box.height / (ylim[1] - ylim[0])
+
+    @staticmethod
+    def stock_patches(widget):
+        return [p for p in widget.ax.patches if p.get_gid() == 'stock']
+
+    def test_a_millimetre_of_radius_is_as_long_as_a_millimetre_of_z(self):
+        per_z, per_x = self.pixels_per_unit(self.plotter(self.PART))
+
+        # A unit of X is a diameter, so it is drawn half as long.
+        self.assertAlmostEqual(per_x / per_z, 0.5, places=3)
+
+    def test_the_scale_survives_the_panel_changing_shape(self):
+        widget = self.plotter(self.PART, size=(900, 300))
+
+        widget.resize(500, 450)
+        self.app.processEvents()
+        widget.canvas.draw()
+        per_z, per_x = self.pixels_per_unit(widget)
+
+        self.assertAlmostEqual(per_x / per_z, 0.5, places=3)
+
+    def test_the_view_frames_the_cuts_and_not_the_tool_change_position(self):
+        widget = self.plotter(self.PART)
+        xlim, ylim = widget.ax.get_xlim(), widget.ax.get_ylim()
+
+        # The cut is in view ...
+        self.assertLessEqual(xlim[0], -20.0)
+        self.assertGreaterEqual(xlim[1], 2.0)
+        self.assertGreaterEqual(ylim[1], 30.0)
+        # ... and the position the rapids run out to is not what sets the zoom.
+        self.assertLess(xlim[1], 50.0)
+        self.assertLess(ylim[1], 100.0)
+
+    def test_a_small_edit_leaves_the_view_alone(self):
+        widget = self.plotter(self.PART)
+        before = (widget.ax.get_xlim(), widget.ax.get_ylim())
+
+        widget.set_gcode(self.PART.replace("Z-20.", "Z-21."))
+        widget.canvas.draw()
+
+        self.assertEqual((widget.ax.get_xlim(), widget.ax.get_ylim()), before)
+
+    def test_a_stock_comment_draws_the_blank(self):
+        widget = self.plotter("(STOCK D40 L50)\n" + self.PART)
+
+        (blank,) = self.stock_patches(widget)
+
+        self.assertEqual((blank.get_x(), blank.get_y(),
+                          blank.get_width(), blank.get_height()),
+                         (-50.0, 0.0, 50.0, 40.0))
+
+    def test_without_a_stock_comment_no_blank_is_drawn(self):
+        self.assertEqual(self.stock_patches(self.plotter(self.PART)), [])
+
+    def test_the_view_makes_room_for_the_stock(self):
+        # A short cut on a long blank: the blank is what the part is made of.
+        widget = self.plotter("(STOCK D40 L50)\nG00 X30. Z2.\nG01 Z-5. F0.2")
+
+        self.assertLessEqual(widget.ax.get_xlim()[0], -50.0)
+        self.assertGreaterEqual(widget.ax.get_ylim()[1], 40.0)
+
+    def test_tool_changes_at_one_position_share_a_label(self):
+        widget = self.plotter("G00 X100. Z50.\nT0505\nG00 X0. Z2.\n"
+                              "G00 X100. Z50.\nT0101\nG01 X30. Z-5. F0.2")
+
+        labels = [t.get_text().strip() for t in widget.ax.texts
+                  if t.get_text().strip().startswith('T')]
+
+        self.assertEqual(labels, ['T5, T1'])
+
+    def test_the_cursor_marker_is_not_the_colour_of_a_collision(self):
+        widget = self.plotter(self.PART)
+
+        widget.highlight_line(3)
+
+        self.assertEqual(widget.highlight_artist.get_color(), COLORS['WHITE'])
+
+    def test_a_click_picks_the_nearest_point_as_it_is_drawn(self):
+        widget = self.plotter("G00 X30. Z0.\nG01 X38. Z-5. F0.2")
+
+        # From (30, -5) the end of line 1 is 5 mm away in Z. The end of line 2
+        # is 8 away in diameter -- 4 mm of radius, so it is the nearer one on
+        # screen even though its raw number is larger.
+        self.assertEqual(widget._find_closest_line(30.0, -5.0), 2)
+
+
+class PlotPlaybackTests(unittest.TestCase):
+    """A cycle is one block that makes many moves; the playback shows them one by one."""
+
+    # Line 4 is the cycle call. The blocks between P and Q (lines 5-8) only
+    # describe the contour.
+    CYCLE = "\n".join([
+        "G00 X52. Z2.",
+        "G01 Z0. F0.2",
+        "G71 U1.0 R0.5",
+        "G71 P100 Q200 U0.3 W0.1 F0.25",
+        "N100 X20. F0.15",
+        "Z-10.",
+        "X50.",
+        "N200 Z-30.",
+        "G00 X100. Z50.",
+    ])
+    CALL = 4
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def plotter(self, chuck_z=-1000.0):
+        widget = GCodePlotterWidget(COLORS, chuck_z=chuck_z)
+        self.addCleanup(widget.deleteLater)
+        widget.set_gcode(self.CYCLE)
+        return widget
+
+    def test_a_cycle_is_one_line_with_many_moves(self):
+        widget = self.plotter()
+
+        self.assertGreater(widget.steps_in_line(self.CALL), 1)
+        self.assertEqual(widget.steps_in_line(1), 1)
+        self.assertEqual(widget.steps_in_line(99), 0)
+
+    def test_a_step_draws_that_many_moves_of_the_line_and_no_more(self):
+        widget = self.plotter()
+        total = widget.steps_in_line(self.CALL)
+
+        widget.set_live_max_line(self.CALL - 1)
+        before = len(widget.ax.lines)
+
+        widget.set_live_step(self.CALL, 0)
+        self.assertEqual(len(widget.ax.lines), before)
+        widget.set_live_step(self.CALL, 1)
+        self.assertEqual(len(widget.ax.lines), before + 1)
+        widget.set_live_step(self.CALL, 2)
+        self.assertEqual(len(widget.ax.lines), before + 2)
+
+        # The last step is the whole line, which is what a line-by-line
+        # playback shows for it.
+        widget.set_live_step(self.CALL, total)
+        self.assertEqual(len(widget.ax.lines), before + total)
+        widget.set_live_max_line(self.CALL)
+        self.assertEqual(len(widget.ax.lines), before + total)
+
+    def test_step_end_is_where_the_move_ends(self):
+        widget = self.plotter()
+        total = widget.steps_in_line(self.CALL)
+
+        self.assertEqual(widget.step_end(1, 1), (52.0, 2.0))
+        # A cycle finishes where it started: at X52, Z0 after the G01.
+        self.assertEqual(widget.step_end(self.CALL, total), (52.0, 0.0))
+        self.assertIsNone(widget.step_end(self.CALL, 0))
+        self.assertIsNone(widget.step_end(self.CALL, total + 1))
+
+    def test_the_contour_blocks_are_the_lines_a_playback_goes_past(self):
+        self.assertEqual(self.plotter().skipped_lines(), frozenset({5, 6, 7, 8}))
+
+    def test_the_cursor_ring_follows_the_move_being_drawn(self):
+        widget = self.plotter()
+        widget.highlight_line(self.CALL)
+
+        widget.set_live_step(self.CALL, 3)
+
+        x, z = widget.step_end(self.CALL, 3)
+        ring = widget.highlight_artist
+        self.assertEqual((ring.get_xdata()[0], ring.get_ydata()[0]), (z, x))
+
+    def test_a_collision_appears_with_its_move_not_with_the_line(self):
+        # The chuck at Z-20 is crossed by the later passes, not by the first.
+        widget = self.plotter(chuck_z=-20.0)
+        total = widget.steps_in_line(self.CALL)
+
+        def red():
+            return [ln for ln in widget.ax.lines if ln.get_color() == '#FF0000']
+
+        widget.set_live_step(self.CALL, 1)
+        self.assertEqual(red(), [])
+        widget.set_live_step(self.CALL, total)
+        self.assertTrue(red())

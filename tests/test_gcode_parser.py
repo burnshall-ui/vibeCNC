@@ -1,4 +1,5 @@
 import math
+import os
 import unittest
 
 from vibe_cnc.arc_geometry import arc_sweep
@@ -674,3 +675,101 @@ class GCodeParserRoughingExpansionTests(unittest.TestCase):
         self.assertTrue(paths["collisions"])
         for segment in paths["collisions"]:
             self.assertLess(min(segment[0][1], segment[1][1]), -20.0)
+
+
+class GCodeParserStockTests(unittest.TestCase):
+    """The blank is stated in a comment, never inferred from the toolpath."""
+
+    def stock(self, code):
+        return GCodeParser().parse(code)["stock"]
+
+    def test_a_stock_comment_gives_diameter_and_length(self):
+        self.assertEqual(self.stock("(STOCK D40 L50)\nG00 X10. Z2."),
+                         {'diameter': 40.0, 'length': 50.0, 'z_front': 0.0})
+
+    def test_z_moves_the_front_face(self):
+        self.assertEqual(self.stock("(STOCK D40 L50 Z0.5)")['z_front'], 0.5)
+
+    def test_the_words_may_come_in_any_order_and_any_case(self):
+        stock = self.stock("(stock l50 d40.5)")
+
+        self.assertEqual((stock['diameter'], stock['length']), (40.5, 50.0))
+
+    def test_no_comment_means_no_stock(self):
+        self.assertIsNone(self.stock("G00 X10. Z2."))
+
+    def test_a_toolpath_does_not_conjure_a_stock(self):
+        # Cutting at diameter 40 says nothing about the blank it came from.
+        self.assertIsNone(self.stock("G00 X40. Z2.\nG01 Z-30. F0.2"))
+
+    def test_a_comment_that_merely_mentions_stock_is_not_a_definition(self):
+        self.assertIsNone(self.stock("(Material C45, STOCK D40 L50, REV A)"))
+
+    def test_a_missing_or_non_positive_size_is_no_stock(self):
+        for body in ("(STOCK)", "(STOCK D40)", "(STOCK L50)",
+                     "(STOCK D0 L50)", "(STOCK D40 L-5)"):
+            with self.subTest(body):
+                self.assertIsNone(self.stock(body))
+
+    def test_the_first_valid_definition_wins(self):
+        stock = self.stock("(STOCK D40)\n(STOCK D30 L20)\n(STOCK D99 L99)")
+
+        self.assertEqual((stock['diameter'], stock['length']), (30.0, 20.0))
+
+    def test_the_comment_moves_nothing(self):
+        self.assertEqual(all_segments(GCodeParser().parse("(STOCK D40 L50 Z0.5)")), [])
+
+
+class GCodeParserOrderTests(unittest.TestCase):
+    """A playback needs the moves in the order they happened.
+
+    The path lists keep the order within a kind and lose it across kinds, and a
+    cycle files dozens of moves under one line.
+    """
+
+    REFERENCE = os.path.join(os.path.dirname(__file__), "fixtures", "reference.nc")
+
+    def test_moves_are_listed_in_program_order_across_kinds(self):
+        paths = GCodeParser().parse("\n".join([
+            "G00 X30. Z0.",
+            "G01 X30. Z-5. F0.2",
+            "G02 X40. Z-10. R5.",
+            "G00 X50.",
+        ]))
+
+        self.assertEqual(paths["order"], [("rapid", 0, 1), ("cut", 0, 2),
+                                          ("arc", 0, 3), ("rapid", 1, 4)])
+
+    def test_every_recorded_move_is_listed_once_under_its_own_line(self):
+        with open(self.REFERENCE, "r", encoding="utf-8") as handle:
+            paths = GCodeParser(chuck_z=-45.0).parse(handle.read())
+
+        for kind in ("rapid", "cut", "arc"):
+            listed = [(index, line) for k, index, line in paths["order"] if k == kind]
+            own = [(index, item["line"] if kind == "arc" else item[2])
+                   for index, item in enumerate(paths[kind])]
+            self.assertEqual(listed, own, kind)
+
+    def test_a_cycle_files_its_moves_under_the_cycle_line_in_order(self):
+        paths = GCodeParser(chuck_z=-100.0).parse(GCodeParserCycleTests.ROUGHING)
+
+        in_cycle = [kind for kind, _index, line in paths["order"] if line == 4]
+
+        self.assertGreater(len(in_cycle), 2)
+        # A pass starts with a rapid onto the layer, then cuts.
+        self.assertEqual(in_cycle[:2], ["rapid", "cut"])
+
+    def test_the_contour_blocks_of_a_cycle_are_listed_as_skipped(self):
+        paths = GCodeParser(chuck_z=-100.0).parse(GCodeParserCycleTests.ROUGHING)
+
+        self.assertEqual(paths["skipped"], frozenset({5, 6, 7, 8}))
+
+    def test_a_program_without_a_cycle_skips_nothing(self):
+        self.assertEqual(GCodeParser().parse("G00 X10. Z2.")["skipped"], frozenset())
+
+    def test_a_cycle_that_cannot_be_expanded_skips_nothing(self):
+        # Its contour blocks are then all there is to draw.
+        paths = GCodeParser().parse("G00 X52. Z2.\nG71 U1.0 R0.5\n"
+                                    "G71 P100 Q200 U0.3 W0.1 F0.25")
+
+        self.assertEqual(paths["skipped"], frozenset())
