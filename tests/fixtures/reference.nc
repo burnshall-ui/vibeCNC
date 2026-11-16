@@ -28,6 +28,12 @@ N110 X30. Z-15.
 (--- from Ø52/Z0 onto the contour, along it, and back to where it began.)
 N115 G70 P090 Q110
 
+(--- threading cycle: two blocks. The first sets the finishing count, the)
+(--- run-out and the limits; the second gives the end point, the height and the)
+(--- first cut. The passes get shallower, then every one cuts the same 20 mm.)
+N117 G76 P010060 Q100 R0.
+N118 G76 X28. Z-20. P1000 Q500 F2.
+
 (--- arcs, outside the cycle, so they stay arcs ---)
 N120 G00 X30. Z-15.            (rapid 2, onto the end of the contour)
 N130 G02 X40. Z-20. R5.        (arc 1, R form)

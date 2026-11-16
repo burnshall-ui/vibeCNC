@@ -32,6 +32,15 @@ ROUGHING_CODES = frozenset({71, 72})
 # once exactly as programmed. It names the same blocks by P and Q.
 FINISHING_CODES = frozenset({70})
 
+# The multi-pass threading cycle. G92 cuts one pass per block and leaves the
+# depth schedule to the program; G76 takes the whole thread from two blocks and
+# works the passes out itself.
+THREADING_CODES = frozenset({76})
+
+# More passes than this is a slip, not a thread: a first cut of 0.001 asks for
+# hundreds of thousands, and drawing them would hang the window.
+THREAD_PASS_LIMIT = 200
+
 
 class GCodeParser:
     """Parser for Fanuc lathe G-code (X=diameter, Z=length)"""
@@ -68,6 +77,11 @@ class GCodeParser:
         # the new X; Z and the taper come from the block that opened it.
         self.cycle_z = None
         self.cycle_taper = 0.0
+        # G76: what its first block sets holds until the next first block.
+        self.thread_finishes = 1      # m: passes at full depth after the roughing
+        self.thread_runout = 0        # r: 45-degree run-out, in tenths of the lead
+        self.thread_min_depth = 0.0   # dmin: no pass shallower than this (mm of radius)
+        self.thread_allowance = 0.0   # d: what the roughing leaves for the finishing
         # Roughing cycle: depth of cut and retract come from the first G71/G72
         # block, the contour and the allowances from the second.
         self.cycle_depth = 0.0
@@ -180,6 +194,8 @@ class GCodeParser:
                     self._read_roughing_cycle(line, g, line_num)
                 elif g in FINISHING_CODES:
                     self._read_finishing_cycle(line, line_num)
+                elif g in THREADING_CODES:
+                    self._read_threading_cycle(line, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -637,6 +653,154 @@ class GCodeParser:
         self._record_move('cut', (entry_x, start_z), (target_x, target_z), line_num)
         self._record_move('rapid', (target_x, target_z), (start_x, target_z), line_num)
         self._record_move('rapid', (start_x, target_z), (start_x, start_z), line_num)
+
+    # --- Multi-pass threading (G76) ---------------------------------------
+    #
+    #     G76 P(m)(r)(a) Q(dmin) R(d)
+    #     G76 X(U) Z(W) R(i) P(k) Q(dd) F(lead)
+    #
+    # The first block says how the passes are made, the second says where the
+    # thread is. Only the second moves anything. What is drawn follows the
+    # control's schedule as it is generally described, not checked against a
+    # manual: the roughing passes get shallower (see _thread_depths), and the
+    # in-feed is drawn straight in. The tool angle `a` makes the real control
+    # feed in along one flank, which shifts each pass a fraction of a
+    # millimetre along Z; which way is not something to guess at, so it is not
+    # drawn.
+
+    @staticmethod
+    def _mm(line: str, letter: str):
+        """A G76 word in millimetres, or None when the block has none.
+
+        With a decimal point the value is millimetres; without one it is in the
+        control's least input increment, 0.001 mm -- Q350 is 0.35 mm and P1226
+        is 1.226 mm. G76 is the cycle where it matters: its depths are
+        conventionally written as bare integers.
+        """
+        match = re.search(rf'{letter}([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+        if match is None:
+            return None
+        text = match.group(1)
+        return float(text) if '.' in text else float(text) / 1000.0
+
+    def _read_threading_cycle(self, line, line_num):
+        """The block with an end point cuts the thread; the other sets it up."""
+        if any(self._word(line, letter) is not None for letter in 'XUZW'):
+            self._expand_multipass_thread(line, line_num)
+        else:
+            self._read_thread_parameters(line)
+
+    def _read_thread_parameters(self, line):
+        """G76 P(m)(r)(a) Q(dmin) R(d): what the passes of the next thread are made of."""
+        packed = self._word(line, 'P')
+        if packed is not None:
+            # Six digits with the leading zeros dropped on the way in, so
+            # P011060 arrives as 11060: m finishing passes, r run-out in tenths
+            # of the lead, a tool angle. A zero count would mean "whatever the
+            # control's parameter says"; one is the least that finishes.
+            digits = f"{int(packed):06d}"[-6:]
+            self.thread_finishes = max(int(digits[0:2]), 1)
+            self.thread_runout = int(digits[2:4])
+        minimum = self._mm(line, 'Q')
+        if minimum is not None:
+            self.thread_min_depth = minimum
+        allowance = self._mm(line, 'R')
+        if allowance is not None:
+            self.thread_allowance = allowance
+
+    def _thread_depths(self, height, first):
+        """Depth of every pass, from the crest inwards, in the order they are cut.
+
+        The roughing passes get shallower. The first is `first` deep and the
+        control keeps the amount of material per pass about equal; for a V
+        thread that makes the depth after n passes first * sqrt(n), so each
+        pass adds first * (sqrt(n) - sqrt(n-1)). A pass never adds less than
+        dmin, which is why the sequence ends in equal steps. Roughing stops
+        short of the full height by the finishing allowance. Then come the
+        finishing passes, all at the full height: the first takes off the
+        allowance and the rest spring off what the tool pushed aside.
+
+        Returns (depths, complete); incomplete means the pass limit was hit.
+        """
+        roughing_to = max(height - self.thread_allowance, 0.0)
+        depths, depth, n = [], 0.0, 0
+        while roughing_to - depth > 1e-9:
+            if len(depths) >= THREAD_PASS_LIMIT:
+                return depths, False
+            n += 1
+            step = max(first * (math.sqrt(n) - math.sqrt(n - 1)), self.thread_min_depth)
+            depth = min(depth + step, roughing_to)
+            depths.append(depth)
+        depths.extend([height] * self.thread_finishes)
+        return depths, True
+
+    def _expand_multipass_thread(self, line, line_num):
+        """G76 X Z R P Q F: the thread, as every pass it takes.
+
+        Each pass is what a G92 block is: feed in to its depth, cut the thread,
+        retract, return. The tool ends where it began, so the position stays.
+        """
+        start_x, start_z = self.x, self.z
+        x_word, u_word = self._word(line, 'X'), self._word(line, 'U')
+        z_word, w_word = self._word(line, 'Z'), self._word(line, 'W')
+        # X and Z are absolute, U and W are measured from where the cycle starts.
+        end_x = x_word if x_word is not None else start_x + (u_word or 0.0)
+        end_z = z_word if z_word is not None else start_z + (w_word or 0.0)
+
+        height = self._mm(line, 'P')       # thread height, a radius
+        first = self._mm(line, 'Q')        # depth of the first pass, a radius
+        taper = self._mm(line, 'R') or 0.0  # radius difference start to end
+        lead = self._word(line, 'F')
+
+        if height is None or height <= 0.0:
+            self._warn(line_num, 'CYCLE_NO_DEPTH',
+                       'G76 without a thread height (P) — nothing to cut')
+            return
+        if first is None or first <= 0.0:
+            self._warn(line_num, 'CYCLE_NO_DEPTH',
+                       'G76 without a first depth of cut (Q) — nothing to cut')
+            return
+        if end_x == start_x or end_z == start_z:
+            self._warn(line_num, 'CYCLE_NO_PASS',
+                       'G76 without a thread to cut — X and Z end where they start')
+            return
+
+        depths, complete = self._thread_depths(height, first)
+        if not complete:
+            self._warn(line_num, 'CYCLE_TOO_MANY_PASSES',
+                       f'G76 would take more than {THREAD_PASS_LIMIT} passes — '
+                       'only that many are drawn; check P and Q')
+
+        # X is a diameter and the thread height a radius. An external thread
+        # feeds towards the centre line, so its end diameter is the root and
+        # the crest is a full height outside it; an internal one is the other
+        # way round.
+        inwards = -1.0 if end_x < start_x else 1.0
+        crest_x = end_x - inwards * 2.0 * height
+        towards = 1.0 if end_z > start_z else -1.0
+        runout = 0.0
+        if lead:
+            runout = min(self.thread_runout * 0.1 * lead, abs(end_z - start_z))
+
+        for depth in depths:
+            x_end = crest_x + inwards * 2.0 * depth
+            x_in = x_end + 2.0 * taper     # the taper makes the start wider
+            self._record_move('rapid', (start_x, start_z), (x_in, start_z), line_num)
+            if runout > 0.0:
+                # The last stretch leaves the thread at 45 degrees: as far out
+                # as it is along, so the tool is clear when it reaches the end.
+                z_out = end_z - towards * runout
+                x_out = x_in + (x_end - x_in) * (z_out - start_z) / (end_z - start_z)
+                x_clear = x_out - inwards * 2.0 * runout
+                x_clear = (min if inwards < 0 else max)(x_clear, start_x)
+                self._record_move('cut', (x_in, start_z), (x_out, z_out), line_num)
+                self._record_move('cut', (x_out, z_out), (x_clear, end_z), line_num)
+                x_last = x_clear
+            else:
+                self._record_move('cut', (x_in, start_z), (x_end, end_z), line_num)
+                x_last = x_end
+            self._record_move('rapid', (x_last, end_z), (start_x, end_z), line_num)
+            self._record_move('rapid', (start_x, end_z), (start_x, start_z), line_num)
 
     # --- Tool nose radius compensation ----------------------------------
     #

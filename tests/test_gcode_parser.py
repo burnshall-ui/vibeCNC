@@ -908,3 +908,238 @@ class GCodeParserFinishingCycleTests(unittest.TestCase):
         kinds = [kind for kind, _index, line in paths["order"] if line == self.CALL]
 
         self.assertEqual(kinds, ["rapid", "finish", "finish", "finish", "rapid"])
+
+
+class GCodeParserMultiPassThreadTests(unittest.TestCase):
+    """G76: two blocks, and the control works the passes out itself.
+
+    The depths are worked out here from the rule, not read back from a run:
+    the depth after n passes is first * sqrt(n), no pass adds less than dmin,
+    the roughing stops short of the full height by the allowance, and the
+    finishing passes cut the full height.
+    """
+
+    # M20x2, external: crest Ø20, root Ø17.4, so a thread height of 1.3 (radius).
+    # First cut 0.4, never less than 0.1 a pass, 0.05 left for the finishing.
+    SETUP = "G00 X24. Z2.\nG76 P010060 Q100 R0.05\n"
+    THREAD = "G76 X17.4 Z-30. P1300 Q400 F2."
+    SECOND_BLOCK = 3   # the block that cuts
+
+    def parse(self, code=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        paths = parser.parse(self.SETUP + self.THREAD if code is None else code)
+        return parser, paths
+
+    @staticmethod
+    def passes(paths, line=3):
+        """The cut of every pass, in order."""
+        return [s for s in paths["cut"] if s[2] == line]
+
+    @staticmethod
+    def depth_of(cut, crest=20.0):
+        """How deep a pass goes, measured from the crest, as a radius."""
+        return (crest - cut[1][0]) / 2.0
+
+    def test_the_passes_get_shallower_and_then_settle_at_the_minimum(self):
+        _parser, paths = self.parse()
+
+        depths = [self.depth_of(c) for c in self.passes(paths)]
+
+        expected = [
+            0.4,                          # first * sqrt(1)
+            0.4 * math.sqrt(2),           # 0.5657
+            0.4 * math.sqrt(3),           # 0.6928
+            0.4 * math.sqrt(4),           # 0.8
+            # The next step would be 0.4*(sqrt(5)-2) = 0.094, under the 0.1
+            # minimum, so from here it is 0.1 a pass.
+            0.9, 1.0, 1.1, 1.2,
+            1.25,                         # height 1.3 less the 0.05 allowance
+            1.3,                          # the finishing pass, full height
+        ]
+        self.assertEqual(len(depths), len(expected))
+        for got, want in zip(depths, expected):
+            self.assertAlmostEqual(got, want, places=9)
+
+    def test_the_finishing_passes_are_cut_at_the_full_height(self):
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P030060 Q100 R0.05\n" + self.THREAD)
+
+        last_three = [c[1][0] for c in self.passes(paths)[-3:]]
+
+        for got in last_three:
+            self.assertAlmostEqual(got, 17.4, places=9)       # the root diameter
+
+    def test_the_roughing_leaves_the_allowance(self):
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.2\n" + self.THREAD)
+
+        depths = [self.depth_of(c) for c in self.passes(paths)]
+
+        self.assertAlmostEqual(depths[-2], 1.3 - 0.2, places=9)   # last roughing pass
+        self.assertAlmostEqual(depths[-1], 1.3, places=9)         # finishing
+
+    def test_each_pass_is_four_moves_and_only_the_second_cuts(self):
+        # No allowance here, so Q1300 -- the whole height -- is one cut.
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.\n"
+                                    "G76 X17.4 Z-30. P1300 Q1300 F2.")
+
+        first_pass = [(kind, paths[kind][i][0], paths[kind][i][1])
+                      for kind, i, line in paths["order"] if line == 3][:4]
+
+        # X = 20 - 2*1.3 = 17.4.
+        self.assertEqual(first_pass, [
+            ("rapid", (24.0, 2.0), (17.4, 2.0)),       # feed in
+            ("cut", (17.4, 2.0), (17.4, -30.0)),       # the thread
+            ("rapid", (17.4, -30.0), (24.0, -30.0)),   # retract
+            ("rapid", (24.0, -30.0), (24.0, 2.0)),     # back to the start
+        ])
+
+    def test_the_tool_ends_where_the_cycle_began(self):
+        parser, _paths = self.parse()
+
+        self.assertEqual((parser.x, parser.z), (24.0, 2.0))
+
+    def test_the_first_block_moves_nothing_and_skips_nothing(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual([m for m in paths["order"] if m[2] == 2], [])
+        self.assertEqual(paths["skipped"], frozenset())
+
+    def test_all_the_moves_are_filed_under_the_cutting_block_in_order(self):
+        _parser, paths = self.parse()
+
+        kinds = [kind for kind, _i, line in paths["order"] if line == self.SECOND_BLOCK]
+
+        self.assertEqual(kinds, ["rapid", "cut", "rapid", "rapid"] * 10)
+
+    def test_a_value_without_a_decimal_point_is_in_thousandths_of_a_millimetre(self):
+        # Q350 is 0.35 mm and P1226 is 1.226 mm; with a point they are millimetres.
+        bare = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.05\nG76 X17.4 Z-30. P1226 Q350 F2.")[1]
+        pointed = self.parse("G00 X24. Z2.\nG76 P010060 Q0.1 R0.05\nG76 X17.4 Z-30. P1.226 Q0.35 F2.")[1]
+
+        self.assertEqual(self.passes(bare), self.passes(pointed))
+        self.assertAlmostEqual(self.depth_of(self.passes(bare)[0], crest=17.4 + 2 * 1.226), 0.35, places=9)
+
+    def test_the_first_block_stays_in_force_for_the_next_thread(self):
+        two_threads = (self.SETUP + self.THREAD + "\n"
+                       "G76 X17.4 Z-30. P1300 Q400 F2.")
+
+        _parser, paths = self.parse(two_threads)
+
+        self.assertEqual([self.depth_of(c) for c in self.passes(paths, 4)],
+                         [self.depth_of(c) for c in self.passes(paths, 3)])
+
+    def test_without_a_first_block_the_passes_follow_the_rule_alone(self):
+        # No minimum, no allowance, one finishing pass: depth first*sqrt(n) up
+        # to 1.3 -- n = 11, since 0.4*sqrt(10) = 1.265 is still short of it --
+        # and then the finishing pass.
+        _parser, paths = self.parse("G00 X24. Z2.\n" + self.THREAD)
+
+        depths = [self.depth_of(c) for c in self.passes(paths, 2)]
+
+        self.assertEqual(len(depths), 12)
+        self.assertAlmostEqual(depths[9], 0.4 * math.sqrt(10), places=9)
+        self.assertAlmostEqual(depths[-2], 1.3, places=9)
+        self.assertAlmostEqual(depths[-1], 1.3, places=9)
+
+    def test_the_run_out_leaves_the_thread_at_45_degrees(self):
+        # r = 10 is one lead, 2 mm: the cut stops 2 mm short of the end and the
+        # last stretch climbs 2 mm of radius while it moves 2 mm along Z.
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P011060 Q100 R0.\n"
+                                    "G76 X17.4 Z-30. P1300 Q1300 F2.")
+
+        first_pass = [paths["cut"][0], paths["cut"][1]]
+
+        self.assertEqual(first_pass[0][:2], [(17.4, 2.0), (17.4, -28.0)])
+        self.assertEqual(first_pass[1][:2], [(17.4, -28.0), (21.4, -30.0)])
+
+    def test_the_run_out_never_climbs_past_the_start(self):
+        # A huge run-out is cut down to the thread's own length, and the climb
+        # stops at the start diameter rather than going beyond it.
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P019960 Q100 R0.\n"
+                                    "G76 X17.4 Z-30. P1300 Q1300 F5.")
+
+        for cut in paths["cut"]:
+            self.assertLessEqual(max(cut[0][0], cut[1][0]), 24.0 + 1e-9)
+
+    def test_an_internal_thread_feeds_outwards(self):
+        # Start Ø12, root Ø16: a bore. The crest is a full height inside the
+        # root, 16 - 2*0.6 = 14.8, and each pass goes deeper = larger.
+        _parser, paths = self.parse("G00 X12. Z2.\nG76 P010060 Q100 R0.\n"
+                                    "G76 X16. Z-20. P600 Q300 F1.")
+
+        ends = [c[1][0] for c in self.passes(paths)]
+
+        expected = [
+            14.8 + 2 * 0.3,                       # first * sqrt(1)
+            14.8 + 2 * 0.3 * math.sqrt(2),
+            14.8 + 2 * (0.3 * math.sqrt(2) + 0.1),  # 0.3*(sqrt(3)-sqrt(2)) = 0.095 < 0.1
+            16.0,                                 # 0.6 reached, capped
+            16.0,                                 # finishing
+        ]
+        self.assertEqual(len(ends), len(expected))
+        for got, want in zip(ends, expected):
+            self.assertAlmostEqual(got, want, places=9)
+
+    def test_a_taper_makes_the_start_of_the_thread_wider(self):
+        # R is the difference in radius from start to end, as in G92.
+        _parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.\n"
+                                    "G76 X17.4 Z-30. R1.5 P1300 Q1300 F2.")
+
+        start, end = paths["cut"][0][0], paths["cut"][0][1]
+
+        self.assertAlmostEqual(start[0], 17.4 + 2 * 1.5, places=9)
+        self.assertEqual(start[1], 2.0)
+        self.assertEqual(end, (17.4, -30.0))
+
+    def test_u_and_w_are_measured_from_the_start(self):
+        absolute = self.parse(self.SETUP + self.THREAD)[1]
+        relative = self.parse(self.SETUP + "G76 U-6.6 W-32. P1300 Q400 F2.")[1]
+
+        for got, want in zip(self.passes(relative), self.passes(absolute)):
+            self.assertAlmostEqual(got[1][0], want[1][0], places=9)
+            self.assertEqual(got[1][1], want[1][1])
+
+    def test_it_is_checked_against_the_chuck(self):
+        _parser, paths = self.parse(chuck_z=-20.0)
+
+        self.assertIn(self.SECOND_BLOCK, [s[2] for s in paths["collisions"]])
+
+    def test_without_a_thread_height_nothing_is_cut(self):
+        parser, paths = self.parse(self.SETUP + "G76 X17.4 Z-30. Q400 F2.")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_without_a_first_depth_nothing_is_cut(self):
+        parser, paths = self.parse(self.SETUP + "G76 X17.4 Z-30. P1300 F2.")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_thread_that_ends_where_it_starts_is_a_warning(self):
+        parser, paths = self.parse(self.SETUP + "G76 X24. Z-30. P1300 Q400 F2.")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_first_cut_of_one_micron_stops_at_the_limit_and_says_so(self):
+        parser, paths = self.parse("G00 X24. Z2.\nG76 P010060 Q0 R0.\n"
+                                   "G76 X17.4 Z-30. P1300 Q1 F2.")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_TOO_MANY_PASSES"])
+        self.assertEqual(len(paths["cut"]), 200)
+
+    def test_a_minimum_cut_keeps_the_pass_count_down(self):
+        # The same one-micron first cut as above, but the first block sets 0.1
+        # as the least a pass may add: roughing to 1.25 is then 13 passes of at
+        # most 0.1, and one finishing pass makes 14 -- no limit is reached.
+        parser, paths = self.parse(self.SETUP + "G76 X17.4 Z-30. P1300 Q1 F2.")
+
+        self.assertEqual(parser.warnings, [])
+        self.assertEqual(len(self.passes(paths)), 14)
+
+    def test_it_is_a_cycle_call_and_not_a_motion_mode(self):
+        parser, paths = self.parse(self.SETUP + self.THREAD + "\nG00 X30.")
+
+        self.assertEqual(parser.cycle, "G76")
+        # The block after it is an ordinary rapid again, from the start point.
+        self.assertEqual(paths["rapid"][-1][:2], [(24.0, 2.0), (30.0, 2.0)])

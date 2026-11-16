@@ -354,6 +354,25 @@ class PlotPlaybackTests(unittest.TestCase):
         widget.set_live_step(call, 5)
         self.assertEqual(len(finishing()), 3)
 
+    def test_the_threading_cycle_plays_back_pass_by_pass_too(self):
+        # No allowance and a first cut of the whole height: one roughing pass
+        # and one finishing pass, four moves each.
+        widget = self.plotter(code="G00 X24. Z2.\nG76 P010060 Q100 R0.\n"
+                                   "G76 X17.4 Z-30. P1300 Q1300 F2.")
+        call = 3
+
+        self.assertEqual(widget.steps_in_line(call), 8)
+        self.assertEqual(widget.step_end(call, 1), (17.4, 2.0))     # fed in
+        self.assertEqual(widget.step_end(call, 2), (17.4, -30.0))   # cut
+        self.assertEqual(widget.step_end(call, 8), (24.0, 2.0))     # back at the start
+
+        widget.set_live_max_line(call - 1)
+        before = len(widget.ax.lines)
+        widget.set_live_step(call, 2)
+        self.assertEqual(len(widget.ax.lines), before + 2)
+        widget.set_live_step(call, 8)
+        self.assertEqual(len(widget.ax.lines), before + 8)
+
     def test_the_finishing_cycle_adds_no_lines_to_skip(self):
         # The contour blocks were stepped past by the G71 above it, and only
         # by that.

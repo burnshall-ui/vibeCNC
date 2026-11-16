@@ -143,6 +143,38 @@ class LintEngineCycleFeedTests(unittest.TestCase):
         self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "G7x"), [])
 
 
+class LintEngineThreadingTests(unittest.TestCase):
+    """What the parser works out about a G76 reaches the operator as a finding."""
+
+    SETUP = "G00 X24. Z2.\nG76 P010060 Q100 R0.05\n"
+
+    def test_a_sensible_thread_has_no_cycle_finding(self):
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all(self.SETUP + "G76 X17.4 Z-30. P1300 Q400 F2.")
+
+        self.assertEqual(rules(findings, "Cycle"), [])
+
+    def test_a_runaway_pass_count_is_reported(self):
+        # A first cut of one micron would be hundreds of thousands of passes --
+        # unless the minimum cut in the first block (Q100 in SETUP, 0.1 mm)
+        # keeps the count down, so this one sets none.
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all("G00 X24. Z2.\nG76 P010060 Q0 R0.05\n"
+                                  "G76 X17.4 Z-30. P1300 Q1 F2.")
+
+        self.assertEqual(len(rules(findings, "Cycle")), 1)
+        self.assertIn("passes", rules(findings, "Cycle")[0]["message"])
+
+    def test_a_thread_with_no_height_is_reported(self):
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all(self.SETUP + "G76 X17.4 Z-30. Q400 F2.")
+
+        self.assertEqual(len(rules(findings, "Cycle")), 1)
+
+
 class LintEngineRetractTests(unittest.TestCase):
     """VC-10: G28 and the U/W words are how a Fanuc lathe retracts."""
 
