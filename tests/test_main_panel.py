@@ -290,6 +290,44 @@ class AssistBoxKeyTests(PanelCase):
 
         self.assertNotIn("G00 X36", win.chat.toPlainText())
 
+    # --- what is sent along: a review and a generation are told different things ---
+
+    def wait_for_chat(self, win, text, seconds=5.0):
+        """The AI call runs on a worker thread; its answer arrives as a queued signal."""
+        for _ in range(int(seconds * 20)):
+            if text in win.chat.toPlainText():
+                return True
+            QTest.qWait(50)
+        return False
+
+    def test_a_review_is_sent_with_the_review_instructions(self):
+        win = self.window()
+        win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
+        calls = []
+        win.ai.ask_ollama = lambda prompt, system=None: calls.append((prompt, system)) or (True, "REVIEW-REPLY")
+
+        win.action_analyze()
+
+        self.assertTrue(self.wait_for_chat(win, "REVIEW-REPLY"))
+        self.assertEqual(calls[0][1], win.ai.review_prompt())
+
+    def test_a_generation_is_sent_with_the_generation_instructions_not_the_review_ones(self):
+        # It used to go out with the review prompt, so asking for G-code was
+        # answered with a list of rule violations.
+        win = self.window()
+        win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
+        win.input.setText("Write a G71 for T1")
+        calls = []
+        win.ai.ask = lambda prompt, system=None: calls.append((prompt, system)) or (True, "GENERATE-REPLY")
+
+        win.action_generate()
+
+        self.assertTrue(self.wait_for_chat(win, "GENERATE-REPLY"))
+        prompt, system = calls[0]
+        self.assertIn("Write a G71 for T1", prompt)
+        self.assertEqual(system, win.ai.generate_prompt())
+        self.assertNotEqual(system, win.ai.review_prompt())
+
     def test_the_tooltips_name_the_key_as_this_platform_writes_it(self):
         win = self.window()
         key = QKeySequence("Ctrl+Return").toString(QKeySequence.SequenceFormat.NativeText)

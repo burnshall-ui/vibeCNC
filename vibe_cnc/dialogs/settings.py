@@ -2,11 +2,14 @@
 
 import os
 import yaml
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QTabWidget, QWidget, QDoubleSpinBox, QComboBox,
     QCheckBox, QLineEdit, QSpinBox, QMessageBox, QFileDialog
 )
+
+from vibe_cnc.claude_client import AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL
 
 
 class SettingsDialog(QDialog):
@@ -65,15 +68,23 @@ class SettingsDialog(QDialog):
 
         self.claude_model_input = QLineEdit()
         self.claude_model_input.setText(
-            self.cfg.data.get('ai', {}).get('anthropic', {}).get('model', 'claude-sonnet-4-20250514')
+            self.cfg.data.get('ai', {}).get('anthropic', {}).get('model', DEFAULT_CLAUDE_MODEL)
         )
         ai_layout.addRow("Claude Model:", self.claude_model_input)
 
         self.ollama_model_input = QLineEdit()
         self.ollama_model_input.setText(
-            self.cfg.data.get('ai', {}).get('ollama', {}).get('model', 'granite3.3:8b')
+            self.cfg.data.get('ai', {}).get('ollama', {}).get('model', DEFAULT_OLLAMA_MODEL)
         )
         ai_layout.addRow("Ollama Model:", self.ollama_model_input)
+
+        # Asks the Models API (Claude) or the tag list (Ollama) about the model
+        # typed above. Nothing is run and nothing is billed.
+        self.btn_test_ai = QPushButton("Test connection")
+        self.btn_test_ai.setToolTip("Check the selected AI mode: is there a working key (Claude) or a "
+                                    "running server (Ollama), and can it use the model typed above?")
+        self.btn_test_ai.clicked.connect(self._test_ai)
+        ai_layout.addRow("", self.btn_test_ai)
 
         self.tabs.addTab(ai_tab, "AI")
 
@@ -127,6 +138,22 @@ class SettingsDialog(QDialog):
         # Signals
         self.btn_save.clicked.connect(self.save_settings)
         self.btn_cancel.clicked.connect(self.reject)
+
+    def _test_ai(self):
+        """Tests the AI mode and model as they stand in the dialog, saved or not."""
+        client = AIClient(self.cfg)
+        if self.ai_mode_combo.currentText() == "claude":
+            check, model = client.check_claude, self.claude_model_input.text().strip()
+        else:
+            check, model = client.check_ollama, self.ollama_model_input.text().strip()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            ok, message = check(model)
+        finally:
+            QApplication.restoreOverrideCursor()
+        # The messages are HTML, like the rest of the chat.
+        box = QMessageBox.information if ok else QMessageBox.warning
+        box(self, "Test connection", message.replace("<br>", "\n"))
 
     def _browse_camotics(self):
         path, _ = QFileDialog.getOpenFileName(

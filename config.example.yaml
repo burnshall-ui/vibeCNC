@@ -56,18 +56,45 @@ ai:
   # editor, plotter, simulation, lint engine and the libraries all work without.
   mode: ollama
   offline: false
+
+  # What a review and a generation are told to do, for either backend. The
+  # review one used to live under ollama: and is still read from there.
+  system_prompt: 'You are a strict CNC reviewer. Follow the policies strictly.
+
+    Answer with: 1) a list of rule violations (line, rule, short fix),
+
+    2) optionally a unified diff. No cosmetic changes.
+
+    '
+
   anthropic:
-    base_url: https://api.anthropic.com/v1/messages
-    model: claude-sonnet-4-20250514
+    # claude-sonnet-4-20250514 was retired on 2026-06-15; requests to it fail.
+    # The current Sonnet is claude-sonnet-5-5. Cheaper: claude-haiku-5-5.
+    # Stronger: claude-opus-5-5.
+    model: claude-sonnet-5-5
     api_key_env: ANTHROPIC_API_KEY
-    max_output_tokens: 800
+    # Thinking counts against this, so keep it generous. Without streaming the
+    # most that is accepted is about 21000; the client caps it there.
+    max_output_tokens: 16000
+    # How hard the model thinks: low, medium, high, xhigh or max. Leave it empty
+    # for a model that has no such setting (Haiku 4.5, Sonnet 4.5).
+    effort: medium
+    timeout_s: 180
+    # Only for a proxy. The SDK knows the address; a whole endpoint ending in
+    # /v1/messages, as older configs had, is still accepted.
+    # base_url: https://api.anthropic.com
+
   ollama:
+    # Another machine on the network works too: http://<host>:11434/api/chat
     base_url: http://127.0.0.1:11434/api/chat
-    model: granite3.3:8b
-    system_prompt: 'You are a strict CNC reviewer. Follow the policies strictly.
-
-      Answer with: 1) a list of rule violations (line, rule, short fix),
-
-      2) optionally a unified diff. No cosmetic changes.
-
-      '
+    # About 18 GB of weights: a 32 GB machine, or a GPU with 24 GB. For less,
+    # a smaller one such as qwen3.5:4b (about 3.5 GB) -- check it on your code.
+    model: qwen3.8:27b
+    # Ollama's own default is 4096 tokens below 24 GiB of VRAM. A review prompt
+    # is 1000-1500 tokens, a long program can be 4000.
+    num_ctx: 8192
+    # qwen3.x and gpt-oss think before they answer, which on a small machine
+    # takes minutes. false skips it. Remove the line for a model that does not
+    # think: it would reject the field.
+    think: false
+    timeout_s: 300

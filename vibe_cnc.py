@@ -1151,7 +1151,7 @@ Example good response:
         prompt = f"Machine: FANUC 0i-TF, Material: 42CrMo4\nPolicies:\n{policies}\nTools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\nCode:\n```\n{snippet}\n```\n\nTask: List rule violations (line/rule/fix). Optional unified diff. No cosmetic changes.\n\n{format_rules}"
         ai_fn = self.ai.ask_claude if mode == 'claude' else self.ai.ask_ollama
         role = "Claude" if mode == 'claude' else "LLM"
-        self._start_ai_task("⚙️ AI analysis running...", ai_fn, (prompt,), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
+        self._start_ai_task("⚙️ AI analysis running...", ai_fn, (prompt, self.ai.review_prompt()), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
 
     def action_generate(self):
         """KI: GEN-CODE Button"""
@@ -1194,7 +1194,7 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
 
         mode = self.cfg.data['ai'].get('mode', 'claude')
         who = "Claude" if mode == 'claude' else "LLM"
-        self._start_ai_task("⚙️ AI generating code...", self.ai.ask, (enhanced_prompt,), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
+        self._start_ai_task("⚙️ AI generating code...", self.ai.ask, (enhanced_prompt, self.ai.generate_prompt()), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
 
     # --- Settings ---
     def action_settings(self):
