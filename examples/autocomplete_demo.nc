@@ -1,30 +1,30 @@
 %
 O1234 (AUTOCOMPLETE DEMO - VIBE CNC)
 ;
-; === ANLEITUNG: Autocomplete testen ===
+; === INSTRUCTIONS: Testing autocomplete ===
 ;
-; 1. Tippe "G" und warte auf Vorschläge (G00, G01, G71, ...)
-; 2. Tippe "G7" → siehst du G70-G76 Zyklen
-; 3. Tippe "M" → siehst du M-Codes (M03, M08, M30, ...)
-; 4. Tippe "T" → siehst du deine Tools aus der Library
-; 5. Drücke Ctrl+Space für manuelle Aktivierung
+; 1. Type "G" and wait for suggestions (G00, G01, G71, ...)
+; 2. Type "G7" → you see the G70-G76 cycles
+; 3. Type "M" → you see M-codes (M03, M08, M30, ...)
+; 4. Type "T" → you see your tools from the library
+; 5. Press Ctrl+Space for manual activation
 ;
-; === PROGRAMM START ===
+; === PROGRAM START ===
 
 N10 ;
 N20 G21 G18 G40 G80 G97 ;
 N30 G50 S3000 ;
 
-; Teste hier: Tippe "G" für G-Code-Vorschläge
+; Test here: type "G" for G-code suggestions
 
 
-; Teste hier: Tippe "T0" für Tool-Vorschläge
+; Test here: type "T0" for tool suggestions
 
 
-; Teste hier: Tippe "M" für M-Code-Vorschläge
+; Test here: type "M" for M-code suggestions
 
 
-; Teste hier: Tippe "M98 P" für Makro-Vorschläge
+; Test here: type "M98 P" for macro suggestions
 
 
 N999 M30 ;

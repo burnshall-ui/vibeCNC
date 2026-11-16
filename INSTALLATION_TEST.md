@@ -1,192 +1,192 @@
 # ✅ Autocomplete Installation & Test
 
-## 📦 Was wurde installiert
+## 📦 What was installed
 
-### Neue Dateien
+### New files
 
-- ✅ `vibe_cnc/gcode_completer.py` - Autocomplete-Engine
-- ✅ `docs/AUTOCOMPLETE.md` - Vollständige Dokumentation
-- ✅ `docs/AUTOCOMPLETE_CHEATSHEET.md` - Quick-Reference
-- ✅ `examples/autocomplete_demo.nc` - Test-Programm
-- ✅ `AUTOCOMPLETE_RELEASE.md` - Release-Notes
+- ✅ `vibe_cnc/gcode_completer.py` - autocomplete engine
+- ✅ `docs/AUTOCOMPLETE.md` - full documentation
+- ✅ `docs/AUTOCOMPLETE_CHEATSHEET.md` - quick reference
+- ✅ `examples/autocomplete_demo.nc` - test program
+- ✅ `AUTOCOMPLETE_RELEASE.md` - release notes
 
-### Geänderte Dateien
+### Changed files
 
-- ✅ `vibe_cnc.py` - Completer integriert
-- ✅ `README.md` - Feature dokumentiert
+- ✅ `vibe_cnc.py` - completer integrated
+- ✅ `README.md` - feature documented
 
 ---
 
-## 🧪 Schnelltest
+## 🧪 Quick test
 
-### 1. App starten
+### 1. Start the app
 
 ```bash
 python vibe_cnc.py
 ```
 
-### 2. Test-Programm öffnen
+### 2. Open the test program
 
 ```text
 OPEN → examples/autocomplete_demo.nc
 ```
 
-### 3. Features testen
+### 3. Test the features
 
-#### Test 1: G-Code Completion
+#### Test 1: G-code completion
 
 ```text
-1. Cursor in leere Zeile setzen
-2. Tippe: G
-3. Erwarte: Popup mit G00, G01, G71, ...
+1. Place the cursor on an empty line
+2. Type: G
+3. Expect: popup with G00, G01, G71, ...
 ```
 
-#### Test 2: Tool Completion
+#### Test 2: Tool completion
 
 ```text
-1. Neue Zeile
-2. Tippe: T0
-3. Erwarte: Popup mit T0101, T0201, ... (deine Tools)
+1. New line
+2. Type: T0
+3. Expect: popup with T0101, T0201, ... (your tools)
 ```
 
-#### Test 3: Makro Completion
+#### Test 3: Macro completion
 
 ```text
-1. Neue Zeile
-2. Tippe: M98 P
-3. Erwarte: Popup mit P9001, P1000, ... (deine Makros)
+1. New line
+2. Type: M98 P
+3. Expect: popup with P9001, P1000, ... (your macros)
 ```
 
-#### Test 4: Manueller Trigger
+#### Test 4: Manual trigger
 
 ```text
-1. Neue Zeile
-2. Drücke: Ctrl+Space
-3. Erwarte: Popup mit Top-G-Codes
+1. New line
+2. Press: Ctrl+Space
+3. Expect: popup with the top G-codes
 ```
 
 #### Test 5: Navigation
 
 ```text
-1. Triggere Autocomplete mit Ctrl+Space (z.B. nach "G")
-2. Drücke ↑/↓ → Auswahl ändert sich
-3. Drücke Enter → Code wird eingefügt
+1. Trigger autocomplete with Ctrl+Space (e.g. after "G")
+2. Press ↑/↓ → the selection changes
+3. Press Enter → the code is inserted
 
-Hinweis: Mausklicks funktionieren NICHT - nur Tastatur!
+Note: mouse clicks do NOT work - keyboard only!
 ```
 
 ---
 
-## ✅ Erfolgs-Checkliste
+## ✅ Success checklist
 
-Prüfe folgende Punkte:
+Check the following points:
 
-- [ ] App startet ohne Fehler
-- [ ] Tippen von "G" zeigt Popup
-- [ ] Tippen von "M" zeigt Popup
-- [ ] Tippen von "T" zeigt Tools aus Library
-- [ ] Ctrl+Space triggert Autocomplete
-- [ ] ↑/↓ navigiert durch Liste
-- [ ] Enter fügt Code ein
-- [ ] Popup hat gelben Fanuc-Style
-- [ ] Tooltips zeigen Beschreibungen
-- [ ] Ausgewählter Eintrag ist gelb-highlight
+- [ ] App starts without errors
+- [ ] Typing "G" shows the popup
+- [ ] Typing "M" shows the popup
+- [ ] Typing "T" shows tools from the library
+- [ ] Ctrl+Space triggers autocomplete
+- [ ] ↑/↓ navigates through the list
+- [ ] Enter inserts the code
+- [ ] The popup has the yellow Fanuc style
+- [ ] Tooltips show descriptions
+- [ ] The selected entry is highlighted in yellow
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Problem: Import-Fehler
+### Problem: Import error
 
 ```text
 ModuleNotFoundError: No module named 'vibe_cnc.gcode_completer'
 ```
 
-**Lösung:**
+**Solution:**
 
 ```bash
-# Stelle sicher, dass du im richtigen Verzeichnis bist
+# Make sure you are in the right directory
 cd cnc-kopilot-fanuc
 python vibe_cnc.py
 ```
 
-### Problem: Popup erscheint nicht
+### Problem: The popup does not appear
 
-**Mögliche Ursachen:**
+**Possible causes:**
 
-1. Editor hat keinen Fokus → Klicke in Editor
-2. Keine passenden Vorschläge → Versuche "G" oder "M"
-3. Popup zu schnell geschlossen → Tippe langsamer
+1. The editor does not have focus → click into the editor
+2. No matching suggestions → try "G" or "M"
+3. The popup was closed too quickly → type more slowly
 
-**Lösung:**
+**Solution:**
 
-- Drücke **Ctrl+Space** manuell
-- Prüfe Console auf Fehler
+- Press **Ctrl+Space** manually
+- Check the console for errors
 
-### Problem: Tools/Makros fehlen
+### Problem: Tools/macros are missing
 
-**Lösung:**
+**Solution:**
 
-1. Öffne Tool-Tab → Sind Tools sichtbar?
-2. Öffne Makro-Tab → Sind Makros sichtbar?
-3. Falls leer: Füge Tools/Makros via "+ NEUES TOOL/MACRO" hinzu
+1. Open the tool tab → are tools visible?
+2. Open the macro tab → are macros visible?
+3. If empty: add tools/macros via "+ NEW TOOL/MACRO"
 
 ---
 
-## 🎯 Erwartetes Verhalten
+## 🎯 Expected behavior
 
-### Autocomplete wird getriggert bei
+### Autocomplete is triggered by
 
-- ✅ `G` → G-Codes (G00, G01, G71, ...)
-- ✅ `M` → M-Codes (M03, M08, M30, ...)
-- ✅ `T` → Tools (T0101, T0201, ...)
-- ✅ `X`, `Z`, `F`, `S` → Parameter
-- ✅ `Ctrl+Space` → Immer
+- ✅ `G` → G-codes (G00, G01, G71, ...)
+- ✅ `M` → M-codes (M03, M08, M30, ...)
+- ✅ `T` → tools (T0101, T0201, ...)
+- ✅ `X`, `Z`, `F`, `S` → parameters
+- ✅ `Ctrl+Space` → always
 
-### Autocomplete wird NICHT getriggert bei
+### Autocomplete is NOT triggered by
 
-- ❌ Leerzeichen oder Zeilenumbruch
-- ❌ Zahlen ohne Buchstaben
-- ❌ Kommentaren (in Klammern)
+- ❌ a space or a line break
+- ❌ numbers without letters
+- ❌ comments (in parentheses)
 
 ---
 
 ## 📊 Performance
 
-**Erwartete Zeiten:**
+**Expected times:**
 
-- Popup-Anzeige: < 50ms ⚡
-- Vorschläge generieren: < 10ms ⚡
-- Code einfügen: Sofort ✅
+- Showing the popup: < 50 ms ⚡
+- Generating suggestions: < 10 ms ⚡
+- Inserting code: instant ✅
 
-**Falls langsamer:**
+**If slower:**
 
-- Prüfe, ob zu viele Tools/Makros geladen sind (>100)
-- Prüfe CPU-Last (sollte minimal sein)
-
----
-
-## 🎉 Alles funktioniert
-
-**Dann bist du bereit für produktives Arbeiten!**
-
-Nächste Schritte:
-
-1. Lies [AUTOCOMPLETE_CHEATSHEET.md](docs/AUTOCOMPLETE_CHEATSHEET.md)
-2. Probiere [autocomplete_demo.nc](examples/autocomplete_demo.nc)
-3. Nutze Autocomplete in eigenen Programmen
-4. Gib Feedback! 🚀
+- Check whether too many tools/macros are loaded (>100)
+- Check the CPU load (it should be minimal)
 
 ---
 
-## 📚 Weitere Infos
+## 🎉 Everything works
 
-- **Vollständige Doku:** [docs/AUTOCOMPLETE.md](docs/AUTOCOMPLETE.md)
+**Then you are ready for productive work!**
+
+Next steps:
+
+1. Read [AUTOCOMPLETE_CHEATSHEET.md](docs/AUTOCOMPLETE_CHEATSHEET.md)
+2. Try [autocomplete_demo.nc](examples/autocomplete_demo.nc)
+3. Use autocomplete in your own programs
+4. Give feedback! 🚀
+
+---
+
+## 📚 More information
+
+- **Full documentation:** [docs/AUTOCOMPLETE.md](docs/AUTOCOMPLETE.md)
 - **Cheatsheet:** [docs/AUTOCOMPLETE_CHEATSHEET.md](docs/AUTOCOMPLETE_CHEATSHEET.md)
-- **Release-Notes:** [AUTOCOMPLETE_RELEASE.md](AUTOCOMPLETE_RELEASE.md)
+- **Release notes:** [AUTOCOMPLETE_RELEASE.md](AUTOCOMPLETE_RELEASE.md)
 
 ---
 
-## 🎯 Happy Autocompleting
+## 🎯 Happy autocompleting
 
-*"Vibe CNC - Jetzt mit Turbo-Speed!"* ⚡
+*"Vibe CNC - now with turbo speed!"* ⚡

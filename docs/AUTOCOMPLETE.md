@@ -1,136 +1,136 @@
 # 🎯 Autocomplete & IntelliSense
 
-**Context-aware G-Code Completion für Vibe CNC**
+**Context-aware G-code completion for Vibe CNC**
 
 ---
 
 ## 📋 Features
 
-### ✅ Was wird unterstützt?
+### ✅ What is supported?
 
-#### 1. **G-Code Completion**
-Alle wichtigen Fanuc G-Codes mit Beschreibungen:
+#### 1. **G-code completion**
+All the important Fanuc G-codes, with descriptions:
 ```
-G00 → Eilgang (G00 X... Z...)
-G01 → Linearinterpolation (G01 X... Z... F...)
-G71 → Schrupp-Zyklus außen (G71 U... R... P... Q... D... F...)
-G76 → Gewindezyklus (G76 P... Q... R... X... Z... F...)
-```
-
-#### 2. **M-Code Completion**
-```
-M03 → Spindel rechts (M03 S...)
-M08 → Kühlmittel EIN
-M98 → Unterprogramm rufen (M98 P...)
-M30 → Programmende mit Reset
+G00 → Rapid traverse (G00 X... Z...)
+G01 → Linear interpolation (G01 X... Z... F...)
+G71 → Roughing cycle OD (G71 U... R... P... Q... D... F...)
+G76 → Threading cycle (G76 P... Q... R... X... Z... F...)
 ```
 
-#### 3. **Tool Completion**
-Automatische Vervollständigung aus deiner Tool-Library:
+#### 2. **M-code completion**
 ```
-T → T0101 (Werkzeug 1: CNMG1204P-SM)
-    T0201 (Werkzeug 2: DCMT11T3)
-    T0301 (Werkzeug 3: Stechplatte)
-```
-
-#### 4. **Achsen & Parameter**
-```
-X → X0.0 (X-Achse Durchmesser)
-Z → Z0.0 (Z-Achse Länge)
-F → F100 (Vorschub)
-S → S100 (Spindeldrehzahl)
+M03 → Spindle CW (M03 S...)
+M08 → Coolant ON
+M98 → Subprogram call (M98 P...)
+M30 → Program end with reset
 ```
 
-#### 5. **Makro Completion**
-Nach `M98` werden alle Makros aus deiner Library vorgeschlagen:
+#### 3. **Tool completion**
+Automatic completion from your tool library:
 ```
-M98 P → P9001 (Makro 9001: Bohrzyklus Peck)
-        P1000 (Makro 1000: Nutprogramm)
+T → T0101 (Tool 1: CNMG1204P-SM)
+    T0201 (Tool 2: DCMT11T3)
+    T0301 (Tool 3: Grooving insert)
+```
+
+#### 4. **Axes & parameters**
+```
+X → X0.0 (X axis, diameter)
+Z → Z0.0 (Z axis, length)
+F → F100 (Feed rate)
+S → S100 (Spindle speed)
+```
+
+#### 5. **Macro completion**
+After `M98`, all macros from your library are suggested:
+```
+M98 P → P9001 (Macro 9001: Peck Drilling Cycle)
+        P1000 (Macro 1000: Grooving Program)
 ```
 
 ---
 
-## 🎮 Bedienung
+## 🎮 Usage
 
-### Automatischer Trigger
-Das Autocomplete wird **automatisch** beim Tippen aktiviert, wenn du:
-- `G` tippst (zeigt G-Codes)
-- `M` tippst (zeigt M-Codes)
-- `T` tippst (zeigt Tools aus Library)
-- Achsen-Buchstaben tippst (`X`, `Z`, `F`, `S`, etc.)
+### Automatic trigger
+Autocomplete is activated **automatically** while you type when you enter:
+- `G` (shows G-codes)
+- `M` (shows M-codes)
+- `T` (shows tools from the library)
+- an axis letter (`X`, `Z`, `F`, `S`, etc.)
 
-### Manueller Trigger
-**Ctrl+Space** - Zeigt Vorschläge an der aktuellen Cursor-Position
+### Manual trigger
+**Ctrl+Space** - shows suggestions at the current cursor position
 
 ### Navigation
-- **↑/↓** - Durch Vorschläge navigieren
-- **Enter/Tab** - Vorschlag übernehmen
-- **Esc** - Popup schließen
+- **↑/↓** - move through the suggestions
+- **Enter/Tab** - accept a suggestion
+- **Esc** - close the popup
 
-> **Hinweis:** Mausklicks im Popup sind derzeit nicht unterstützt. Bitte nutze die Tastatur-Navigation.
-
----
-
-## 💡 Beispiele
-
-### Beispiel 1: G-Code eingeben
-```
-Du tippst: G7
-Vorschläge:
-  → G70 (Fertigbearbeitungszyklus)
-  → G71 (Schrupp-Zyklus außen) ← auswählen
-  → G72 (Schrupp-Zyklus Plan)
-  → G73 (Wiederholzyklus unregelmäßig)
-
-Ergebnis: G71
-```
-
-### Beispiel 2: Werkzeug wählen
-```
-Du tippst: T0
-Vorschläge:
-  → T0101 (Werkzeug 1: CNMG1204P-SM) ← auswählen
-  → T0201 (Werkzeug 2: DCMT11T3)
-  → T0301 (Werkzeug 3: Stechplatte)
-
-Ergebnis: T0101
-```
-
-### Beispiel 3: Makro rufen
-```
-Du tippst: M98 P9
-Vorschläge:
-  → P9001 (Makro 9001: Bohrzyklus Peck) ← auswählen
-  → P9002 (Makro 9002: Ansenken 90°)
-  → P9010 (Makro 9010: Antasten Z)
-
-Ergebnis: M98 P9001
-```
-
-### Beispiel 4: Parameter-Hint
-```
-Du tippst: G01 X50 Z
-Vorschläge:
-  → Z0.0 (Z-Achse Länge) ← auswählen
-
-Ergebnis: G01 X50 Z0.0
-```
+> **Note:** Mouse clicks in the popup are currently not supported. Please use keyboard navigation.
 
 ---
 
-## 🎨 UI-Design
+## 💡 Examples
 
-Das Autocomplete-Popup verwendet **Fanuc-Yellow** auf schwarzem Hintergrund:
-- **Normaler Eintrag:** Gelber Text auf schwarz
-- **Ausgewählter Eintrag:** Schwarzer Text auf gelbem Hintergrund (bold)
-- **Hover:** Leicht transparentes Gelb
-- **Tooltip:** Zeigt ausführliche Beschreibung
+### Example 1: Entering a G-code
+```
+You type: G7
+Suggestions:
+  → G70 (Finish cycle)
+  → G71 (Roughing cycle OD) ← select
+  → G72 (Roughing cycle facing)
+  → G73 (Pattern repeat cycle)
+
+Result: G71
+```
+
+### Example 2: Choosing a tool
+```
+You type: T0
+Suggestions:
+  → T0101 (Tool 1: CNMG1204P-SM) ← select
+  → T0201 (Tool 2: DCMT11T3)
+  → T0301 (Tool 3: Grooving insert)
+
+Result: T0101
+```
+
+### Example 3: Calling a macro
+```
+You type: M98 P9
+Suggestions:
+  → P9001 (Macro 9001: Peck Drilling Cycle) ← select
+  → P9002 (Macro 9002: Countersink 90°)
+  → P9010 (Macro 9010: Probe Z)
+
+Result: M98 P9001
+```
+
+### Example 4: Parameter hint
+```
+You type: G01 X50 Z
+Suggestions:
+  → Z0.0 (Z axis, length) ← select
+
+Result: G01 X50 Z0.0
+```
 
 ---
 
-## 🔧 Technische Details
+## 🎨 UI design
 
-### Architektur
+The autocomplete popup uses **Fanuc yellow** on a black background:
+- **Normal entry:** yellow text on black
+- **Selected entry:** black text on a yellow background (bold)
+- **Hover:** slightly transparent yellow
+- **Tooltip:** shows a detailed description
+
+---
+
+## 🔧 Technical details
+
+### Architecture
 ```
 GCodeCompleter (QCompleter)
   ├─ GCodeCompleterModel (QAbstractListModel)
@@ -138,48 +138,48 @@ GCodeCompleter (QCompleter)
   │   └─ descriptions: List[str]
   │
   ├─ Context Detection
-  │   ├─ Text vor Cursor analysieren
-  │   ├─ Letztes Wort extrahieren
-  │   └─ Passende Vorschläge generieren
+  │   ├─ Analyze the text before the cursor
+  │   ├─ Extract the last word
+  │   └─ Generate matching suggestions
   │
-  └─ Integration mit Editor
+  └─ Integration with the editor
       ├─ keyPressEvent override
-      ├─ Ctrl+Space Trigger
-      └─ Auto-Trigger bei G/M/T/Achsen
+      ├─ Ctrl+Space trigger
+      └─ Auto-trigger on G/M/T/axes
 ```
 
-### Datenquellen
-1. **Statische G/M-Code-Listen** (`GCODES`, `MCODES` in `gcode_completer.py`)
-2. **Tool Library** (`ToolModel` aus `tools.json` / `tools.db`)
-3. **Macro Library** (`MacroModel` aus `macros.db`)
+### Data sources
+1. **Static G/M-code lists** (`GCODES`, `MCODES` in `gcode_completer.py`)
+2. **Tool library** (`ToolModel` from `tools.json` / `tools.db`)
+3. **Macro library** (`MacroModel` from `macros.db`)
 
 ### Performance
-- **Lazy Loading:** Vorschläge werden erst bei Bedarf generiert
-- **Caching:** Tool/Macro-Listen werden im Model gehalten
-- **Fast Response:** < 10ms für normale Vorschläge
+- **Lazy loading:** suggestions are only generated on demand
+- **Caching:** tool/macro lists are kept in the model
+- **Fast response:** < 10 ms for normal suggestions
 
 ---
 
-## 🚀 Erweiterungen (Roadmap)
+## 🚀 Extensions (roadmap)
 
-### Geplante Features
-- [ ] **Snippet-Expansion:** `g71` → Kompletter G71-Zyklus mit Platzhaltern
-- [ ] **Parameter-Hints während Eingabe:** Zeige `U` und `R` nach `G71 `
-- [ ] **Fehlerhafte Syntax-Korrektur:** `g 01` → `G01`
-- [ ] **Frequenz-basierte Sortierung:** Häufig genutzte Codes zuerst
-- [ ] **Custom User-Snippets:** Eigene Abkürzungen definieren
+### Planned features
+- [ ] **Snippet expansion:** `g71` → a complete G71 cycle with placeholders
+- [ ] **Parameter hints while typing:** show `U` and `R` after `G71 `
+- [ ] **Syntax correction:** `g 01` → `G01`
+- [ ] **Frequency-based sorting:** frequently used codes first
+- [ ] **Custom user snippets:** define your own abbreviations
 
 ---
 
-## 📝 Konfiguration
+## 📝 Configuration
 
-Aktuell keine Konfiguration nötig - funktioniert out-of-the-box!
+No configuration needed at the moment - it works out of the box!
 
-Zukünftig geplant in `config.yaml`:
+Planned for the future in `config.yaml`:
 ```yaml
 autocomplete:
   enabled: true
-  auto_trigger: true           # Auto bei G/M/T
+  auto_trigger: true           # Automatic on G/M/T
   manual_trigger_key: "Ctrl+Space"
   max_suggestions: 10
   show_descriptions: true
@@ -189,54 +189,54 @@ autocomplete:
 
 ## 🐛 Troubleshooting
 
-### Problem: Autocomplete erscheint nicht
-**Lösung:**
-1. Stelle sicher, dass du einen **G-Code-relevanten Buchstaben** tippst (`G`, `M`, `T`)
-2. Versuche **Ctrl+Space** manuell zu drücken
-3. Prüfe, ob der Editor Fokus hat
+### Problem: Autocomplete does not appear
+**Solution:**
+1. Make sure you type a **G-code-relevant letter** (`G`, `M`, `T`)
+2. Try pressing **Ctrl+Space** manually
+3. Check that the editor has focus
 
-### Problem: Tool/Makro-Vorschläge fehlen
-**Lösung:**
-1. Prüfe, ob `tools.json` / `tools.db` korrekt geladen wurde
-2. Prüfe, ob `macros.db` existiert und Daten enthält
-3. Öffne die Tool/Makro-Library in der UI (sollten sichtbar sein)
+### Problem: Tool/macro suggestions are missing
+**Solution:**
+1. Check that `tools.json` / `tools.db` was loaded correctly
+2. Check that `macros.db` exists and contains data
+3. Open the tool/macro library in the UI (they should be visible)
 
-### Problem: Popup verschwindet sofort
-**Lösung:**
-- Das ist normal, wenn keine passenden Vorschläge gefunden werden
-- Versuche **Ctrl+Space** für Force-Trigger
+### Problem: The popup disappears immediately
+**Solution:**
+- That is normal when no matching suggestions are found
+- Try **Ctrl+Space** to force the trigger
 
 ---
 
 ## 👨‍💻 Development
 
-### Autocomplete erweitern
+### Extending autocomplete
 
-#### Neue G-Codes hinzufügen
-Editiere `vibe_cnc/gcode_completer.py`:
+#### Adding new G-codes
+Edit `vibe_cnc/gcode_completer.py`:
 ```python
 GCODES = {
-    "G00": "Eilgang (G00 X... Z...)",
-    "G01": "Linearinterpolation (G01 X... Z... F...)",
-    # Füge hier neue G-Codes hinzu:
-    "G84": "Gewindebohrzyklus (G84 X... Z... R... F...)",
+    "G00": "Rapid traverse (G00 X... Z...)",
+    "G01": "Linear interpolation (G01 X... Z... F...)",
+    # Add new G-codes here:
+    "G84": "Tapping cycle (G84 X... Z... R... F...)",
 }
 ```
 
-#### Context-Logik anpassen
-Editiere `get_context_suggestions()` in `gcode_completer.py`:
+#### Adjusting the context logic
+Edit `get_context_suggestions()` in `gcode_completer.py`:
 ```python
 def get_context_suggestions(self, text_before_cursor):
-    # Füge eigene Logik hinzu
+    # Add your own logic
     if "G71" in text_before_cursor:
-        # Nach G71 → zeige U, R, P, Q
+        # After G71 → show U, R, P, Q
         suggestions = ["U", "R", "P", "Q", "D", "F"]
     ...
 ```
 
 ---
 
-## 📖 Siehe auch
+## 📖 See also
 - [Editor Shortcuts](../README.md#keyboard-shortcuts)
 - [Tool Library](../README.md#tool-library)
 - [Macro Library](../README.md#macro-library)
@@ -244,7 +244,6 @@ def get_context_suggestions(self, text_before_cursor):
 ---
 
 <div align="center">
-  <p>🎯 <b>Autocomplete macht CNC-Programmierung schneller & fehlerfreier!</b></p>
+  <p>🎯 <b>Autocomplete makes CNC programming faster & less error-prone!</b></p>
   <p>Built with ❤️ for Vibe CNC</p>
 </div>
-

@@ -198,7 +198,7 @@ policies:
 
 ### Tool Library
 
-**Quick Edit:** Right-click any tool in the app → Tool Editor, or use **+ NEUES TOOL** button.
+**Quick Edit:** Right-click any tool in the app → Tool Editor, or use **+ NEW TOOL** button.
 
 **Manual Edit:** Edit `tools/tools.json`:
 ```json
@@ -207,7 +207,7 @@ policies:
   "tool_table": [
     {
       "t": 1,
-      "name": "CNMG1204P-S Außen",
+      "name": "CNMG1204P-S External",
       "type": "turn_rough",
       "insert_radius_mm": 0.8,
       "nose_direction": 3,

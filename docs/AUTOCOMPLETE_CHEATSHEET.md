@@ -1,153 +1,152 @@
 # 🚀 Autocomplete Cheatsheet
 
-**Schnellreferenz für G-Code IntelliSense in Vibe CNC**
+**Quick reference for G-code IntelliSense in Vibe CNC**
 
 ---
 
 ## ⌨️ Shortcuts
 
-| Taste | Aktion |
-|-------|--------|
-| **Ctrl+Space** | Autocomplete manuell triggern |
-| **↑/↓** | Durch Vorschläge navigieren |
-| **Enter/Tab** | Vorschlag übernehmen |
-| **Esc** | Popup schließen |
+| Key | Action |
+|-----|--------|
+| **Ctrl+Space** | Trigger autocomplete manually |
+| **↑/↓** | Move through the suggestions |
+| **Enter/Tab** | Accept a suggestion |
+| **Esc** | Close the popup |
 
 ---
 
-## 🎯 Auto-Trigger
+## 🎯 Auto-trigger
 
-Das Autocomplete wird **automatisch** aktiviert beim Tippen von:
+Autocomplete is activated **automatically** when you type:
 
-| Zeichen | Zeigt an... |
-|---------|-------------|
-| **G** | G-Codes (G00, G01, G71, G76, ...) |
-| **M** | M-Codes (M03, M08, M30, M98, ...) |
-| **T** | Tools aus deiner Library (T0101, T0201, ...) |
-| **X, Z, U, W** | Achsen-Parameter (X0.0, Z0.0, ...) |
-| **F, S, P, Q** | Feed, Speed, Parameter |
+| Character | Shows... |
+|-----------|----------|
+| **G** | G-codes (G00, G01, G71, G76, ...) |
+| **M** | M-codes (M03, M08, M30, M98, ...) |
+| **T** | Tools from your library (T0101, T0201, ...) |
+| **X, Z, U, W** | Axis parameters (X0.0, Z0.0, ...) |
+| **F, S, P, Q** | Feed, speed, parameters |
 
 ---
 
-## 📖 Wichtigste G-Codes
+## 📖 Most important G-codes
 
-| Code | Bedeutung | Syntax |
-|------|-----------|--------|
-| **G00** | Eilgang | `G00 X... Z...` |
+| Code | Meaning | Syntax |
+|------|---------|--------|
+| **G00** | Rapid traverse | `G00 X... Z...` |
 | **G01** | Linear | `G01 X... Z... F...` |
-| **G71** | Schrupp außen | `G71 U... R... P... Q... D... F...` |
-| **G76** | Gewinde | `G76 P... Q... R... X... Z... F...` |
-| **G40** | Korrektur AUS | `G40` |
-| **G96** | Const. Vc EIN | `G96 S...` |
-| **G97** | Const. Vc AUS | `G97 S...` |
+| **G71** | Roughing OD | `G71 U... R... P... Q... D... F...` |
+| **G76** | Threading | `G76 P... Q... R... X... Z... F...` |
+| **G40** | Compensation OFF | `G40` |
+| **G96** | Constant surface speed ON | `G96 S...` |
+| **G97** | Constant surface speed OFF | `G97 S...` |
 
 ---
 
-## 🔧 Wichtigste M-Codes
+## 🔧 Most important M-codes
 
-| Code | Bedeutung |
-|------|-----------|
-| **M03** | Spindel rechts (CW) |
-| **M05** | Spindel STOP |
-| **M08** | Kühlmittel EIN |
-| **M09** | Kühlmittel AUS |
-| **M98** | Unterprogramm rufen |
-| **M30** | Programm-Ende |
-
----
-
-## 🛠️ Workflow-Beispiele
-
-### 1. **Neues Programm starten**
-```
-Tippe: N10 G   → wähle G21
-       N20 G   → wähle G18
-       N30 G   → wähle G40
-       N40 T0  → wähle T0101 (dein Tool)
-       N50 M   → wähle M03
-       N60 S   → S1200
-```
-
-### 2. **G71 Schrupp-Zyklus**
-```
-Tippe: N100 G7   → wähle G71
-              U   → U1.0
-              R   → R0.5
-              P   → P110
-              Q   → Q120
-              D   → D500
-              F   → F0.25
-```
-
-### 3. **Makro aufrufen**
-```
-Tippe: N200 M98 P9   → wähle P9001 (Bohrzyklus Peck)
-```
+| Code | Meaning |
+|------|---------|
+| **M03** | Spindle CW |
+| **M05** | Spindle STOP |
+| **M08** | Coolant ON |
+| **M09** | Coolant OFF |
+| **M98** | Subprogram call |
+| **M30** | Program end |
 
 ---
 
-## 💡 Pro-Tipps
+## 🛠️ Workflow examples
 
-### ✅ Best Practices
-1. **Ctrl+Space ist dein Freund** - Nutze es, wenn du nicht weiterweißt
-2. **Tippe nur Anfangsbuchstaben** - Autocomplete ergänzt den Rest
-3. **Tooltips lesen** - Jeder Vorschlag hat eine Beschreibung (hover)
-4. **Tool-Library pflegen** - Deine Tools erscheinen automatisch
+### 1. **Starting a new program**
+```
+Type: N10 G   → select G21
+      N20 G   → select G18
+      N30 G   → select G40
+      N40 T0  → select T0101 (your tool)
+      N50 M   → select M03
+      N60 S   → S1200
+```
 
-### ⚠️ Vermeide
-- Zu schnelles Tippen (gib dem Popup Zeit zu erscheinen)
-- Komplette Codes ausschreiben (nutze Autocomplete!)
-- Esc drücken aus Versehen (Popup verschwindet)
+### 2. **G71 roughing cycle**
+```
+Type: N100 G7   → select G71
+             U   → U1.0
+             R   → R0.5
+             P   → P110
+             Q   → Q120
+             D   → D500
+             F   → F0.25
+```
+
+### 3. **Calling a macro**
+```
+Type: N200 M98 P9   → select P9001 (Peck Drilling Cycle)
+```
 
 ---
 
-## 🔥 Power-User-Tricks
+## 💡 Pro tips
 
-### Trick 1: Schnelles Werkzeug-Wechsel-Template
-```
-Tippe: T0   → T0101
-       G    → G00
-       X    → X200.
-       Z    → Z200.
-       M    → M03
-       S    → S1200
-       F    → F0.25
-```
-**Ergebnis:** Kompletter Tool-Change in Sekunden!
+### ✅ Best practices
+1. **Ctrl+Space is your friend** - use it when you are stuck
+2. **Type only the first letters** - autocomplete fills in the rest
+3. **Read the tooltips** - every suggestion has a description (hover)
+4. **Maintain your tool library** - your tools show up automatically
 
-### Trick 2: Header-Boilerplate
+### ⚠️ Avoid
+- Typing too fast (give the popup time to appear)
+- Spelling out complete codes (use autocomplete!)
+- Pressing Esc by accident (the popup disappears)
+
+---
+
+## 🔥 Power-user tricks
+
+### Trick 1: Quick tool-change template
+```
+Type: T0   → T0101
+      G    → G00
+      X    → X200.
+      Z    → Z200.
+      M    → M03
+      S    → S1200
+      F    → F0.25
+```
+**Result:** a complete tool change in seconds!
+
+### Trick 2: Header boilerplate
 ```
 N10 G21 G18 G40 G80 G97 ;
-    └─ Jedes "G" via Autocomplete eingeben
+    └─ Enter every "G" via autocomplete
 ```
 
-### Trick 3: Makro-Chain
+### Trick 3: Macro chain
 ```
-M98 P   → P9001 (Bohren)
-M98 P   → P9002 (Ansenken)
-M98 P   → P1000 (Nutprogramm)
+M98 P   → P9001 (Drilling)
+M98 P   → P9002 (Countersinking)
+M98 P   → P1000 (Grooving Program)
 ```
 
 ---
 
-## 📊 Statistik (was du sparst)
+## 📊 Statistics (what you save)
 
-**Ohne Autocomplete:**
-- G71-Zyklus eingeben: **~45 Sekunden**
-- 10 Tool-Changes: **~3 Minuten**
-- Tippfehler korrigieren: **~5 Minuten/Tag**
+**Without autocomplete:**
+- Entering a G71 cycle: **~45 seconds**
+- 10 tool changes: **~3 minutes**
+- Correcting typos: **~5 minutes/day**
 
-**Mit Autocomplete:**
-- G71-Zyklus eingeben: **~10 Sekunden** ⚡
-- 10 Tool-Changes: **~30 Sekunden** ⚡
-- Tippfehler: **fast keine!** ✅
+**With autocomplete:**
+- Entering a G71 cycle: **~10 seconds** ⚡
+- 10 tool changes: **~30 seconds** ⚡
+- Typos: **almost none!** ✅
 
-**Zeitersparnis: ~80%** 🚀
+**Time saved: ~80%** 🚀
 
 ---
 
 <div align="center">
-  <h2>🎯 Master G-Code mit Autocomplete!</h2>
-  <p><i>"Programmiere wie ein Profi - schnell, fehlerfrei, effizient."</i></p>
+  <h2>🎯 Master G-code with autocomplete!</h2>
+  <p><i>"Program like a pro - fast, error-free, efficient."</i></p>
 </div>
-
