@@ -283,6 +283,13 @@ class GCodePlotterWidget(QWidget):
                 self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
                 has_paths = True
 
+        # Finishing cycle (G70) - cyan solid, over the roughing it follows
+        for index, segment in enumerate(self.paths_cache['finish']):
+            (x1, z1), (x2, z2), line = segment
+            if self._shown(line, ('finish', index)):
+                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CYAN'], linewidth=2, zorder=2.5)
+                has_paths = True
+
         # Compensated cutting paths (G41/G42) - yellow dashed
         for segment in self.paths_cache.get('comp_cut', []):
             (x1, z1), (x2, z2), line = segment
@@ -332,7 +339,7 @@ class GCodePlotterWidget(QWidget):
         """
         paths = self.paths_cache
         points = []  # (x, z)
-        for key in ('cut', 'comp_cut', 'collisions'):
+        for key in ('cut', 'finish', 'comp_cut', 'collisions'):
             for start, end, _line in paths.get(key, []):
                 points.extend((start, end))
         for key in ('arc', 'comp_arc'):
@@ -481,7 +488,8 @@ class GCodePlotterWidget(QWidget):
 
         # Distances are measured as drawn: X is a diameter, so it counts half.
         # Search all segments
-        for segment_list in [self.paths_cache['rapid'], self.paths_cache['cut']]:
+        for segment_list in [self.paths_cache['rapid'], self.paths_cache['cut'],
+                             self.paths_cache['finish']]:
             for segment in segment_list:
                 (x1, z1), (x2, z2), line = segment
                 # Distance to end point

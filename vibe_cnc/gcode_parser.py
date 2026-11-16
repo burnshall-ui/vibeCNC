@@ -28,6 +28,10 @@ CYCLE_CODES = frozenset({70, 71, 72, 73, 74, 75, 76})
 # and cuts along Z, G72 the other way round.
 ROUGHING_CODES = frozenset({71, 72})
 
+# The finishing cycle: the contour the roughing cycles left material on, run
+# once exactly as programmed. It names the same blocks by P and Q.
+FINISHING_CODES = frozenset({70})
+
 
 class GCodeParser:
     """Parser for Fanuc lathe G-code (X=diameter, Z=length)"""
@@ -81,6 +85,10 @@ class GCodeParser:
         self.paths = {
             'rapid': [],       # G00 (gray dashed)
             'cut': [],         # G01 (green solid)
+            # What a G70 cuts. Its own kind rather than 'cut': the finishing
+            # run lies within a fraction of a millimetre of the roughed
+            # contour, so in the same colour it adds nothing to the picture.
+            'finish': [],      # G70 finishing cycle (cyan solid)
             'arc': [],         # G02/G03 (green arc)
             'tool_changes': [], # Tool changes
             'collisions': [],   # Collisions (red)
@@ -170,6 +178,8 @@ class GCodeParser:
                 self.cycle = f'G{g:02d}'
                 if g in ROUGHING_CODES:
                     self._read_roughing_cycle(line, g, line_num)
+                elif g in FINISHING_CODES:
+                    self._read_finishing_cycle(line, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -397,6 +407,35 @@ class GCodeParser:
                                     self._word(line, 'W') or 0.0,
                                     line_num)
 
+    def _read_finishing_cycle(self, line, line_num):
+        """G70 P.. Q..: runs the contour once, as programmed, and comes back.
+
+        The same blocks G71 or G72 roughed, now without the allowance: what the
+        roughing left standing is what this takes off. The tool goes to the
+        contour, follows it, and returns to where the cycle was called -- the
+        start point -- before the next block is read.
+
+        It skips no lines of its own. The contour blocks are normally the ones
+        G71 already stepped past; where nothing did, they are ordinary blocks
+        and run as such, as they would on the control.
+        """
+        first_block = self._word(line, 'P')
+        last_block = self._word(line, 'Q')
+        if first_block is None or last_block is None:
+            # Nothing to run. A control would raise an alarm; there is no
+            # contour to draw.
+            return
+
+        found = self._contour_points(int(first_block), int(last_block), line_num)
+        if found is None:
+            return
+        contour, _contour_lines = found
+
+        start = (self.x, self.z)
+        self._follow_contour(contour, line_num, kind='finish')
+        self._record_move('rapid', (self.x, self.z), start, line_num)
+        self.x, self.z = start
+
     def _expand_roughing_cycle(self, code, first_block, last_block,
                                allowance_x, allowance_z, line_num):
         """Turns one G71/G72 call into the passes it actually cuts."""
@@ -484,12 +523,12 @@ class GCodeParser:
                           line_num)
         self.x, self.z = point(corner[level], start[travel])
 
-    def _follow_contour(self, rough, line_num):
-        """Runs the roughed contour once, which is how the cycle finishes."""
+    def _follow_contour(self, rough, line_num, kind='cut'):
+        """Runs the contour once: how a roughing cycle ends, and all a G70 does."""
         self._record_move('rapid', (self.x, self.z), rough[0], line_num)
         previous = rough[0]
         for current in rough[1:]:
-            self._record_move('cut', previous, current, line_num)
+            self._record_move(kind, previous, current, line_num)
             previous = current
         self.x, self.z = previous
 

@@ -18,6 +18,9 @@ CHUCK_Z = -45.0
 # under it, so it is also how the cycle's paths are told from the rest.
 CYCLE_LINE = 22
 
+# The G70 block, which runs the same contour once more as it was programmed.
+FINISH_LINE = 29
+
 
 def segment_length(segment):
     """Travel of one segment in the radius plane (X is a diameter)."""
@@ -26,12 +29,16 @@ def segment_length(segment):
 
 
 def outside_the_cycle(segments):
-    """The moves the program makes itself, without the ones G71 generates."""
-    return [s for s in segments if s[2] != CYCLE_LINE]
+    """The moves the program makes itself, without those G71 and G70 generate."""
+    return [s for s in segments if s[2] not in (CYCLE_LINE, FINISH_LINE)]
 
 
 def inside_the_cycle(segments):
     return [s for s in segments if s[2] == CYCLE_LINE]
+
+
+def in_the_finishing_cycle(segments):
+    return [s for s in segments if s[2] == FINISH_LINE]
 
 
 class ReferenceProgramTests(unittest.TestCase):
@@ -47,7 +54,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.paths = self.parser.parse(self.source)
 
     def test_segment_counts(self):
-        # Counted without the cycle: three rapids of its own, four cuts, three
+        # Counted without the cycles: three rapids of its own, four cuts, three
         # arcs. What G71 generates is checked on its own further down.
         self.assertEqual(len(outside_the_cycle(self.paths["rapid"])), 3)
         self.assertEqual(len(outside_the_cycle(self.paths["cut"])), 4)
@@ -101,6 +108,64 @@ class ReferenceProgramTests(unittest.TestCase):
 
         self.assertEqual(cycle_rapids[-1][1], (52.0, 0.0))
 
+    def test_the_line_numbers_name_the_blocks_they_say_they_do(self):
+        # CYCLE_LINE and FINISH_LINE are worked out by hand; this ties them to
+        # the file, so a line added above them cannot quietly move the cycles.
+        lines = self.source.splitlines()
+
+        self.assertTrue(lines[CYCLE_LINE - 1].startswith("N080 G71 P090 Q110"))
+        self.assertTrue(lines[FINISH_LINE - 1].startswith("N115 G70 P090 Q110"))
+
+    def test_the_finishing_cycle_runs_the_contour_exactly_as_programmed(self):
+        # N090 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
+        # N110 X30. Z-15. ends at Ø30/Z-15. No U0.4/W0.1: that allowance is
+        # what this cut exists to take off.
+        cuts = self.paths["finish"]
+
+        self.assertEqual(cuts, [
+            [(20.0, 0.0), (20.0, -10.0), FINISH_LINE],
+            [(20.0, -10.0), (30.0, -15.0), FINISH_LINE],
+        ])
+
+    def test_the_finishing_run_is_its_own_kind_of_path_not_a_cut(self):
+        # In the roughing's colour it would add nothing: it lies a fraction of a
+        # millimetre from the roughed contour.
+        self.assertTrue(self.paths["finish"])
+        self.assertEqual([s for s in self.paths["cut"] if s[2] == FINISH_LINE], [])
+
+    def test_the_finishing_cycle_goes_to_the_contour_and_back_to_the_start(self):
+        rapids = in_the_finishing_cycle(self.paths["rapid"])
+
+        self.assertEqual(rapids, [
+            [(52.0, 0.0), (20.0, 0.0), FINISH_LINE],     # onto the contour
+            [(30.0, -15.0), (52.0, 0.0), FINISH_LINE],   # and back where it began
+        ])
+
+    def test_the_finishing_cycle_path_lengths(self):
+        # Cuts: 10.0 along Z at Ø20, then hypot(5,5) -- X is a diameter, so the
+        # 10 mm step to Ø30 is 5 mm of radius. Rapids: 16.0 of radius onto Ø20,
+        # and hypot(11,15) back out to Ø52.
+        cut = 10.0 + math.hypot(5.0, 5.0)
+        rapid = 16.0 + math.hypot(11.0, 15.0)
+        self.assertAlmostEqual(cut, 17.071067812, places=6)
+        self.assertAlmostEqual(rapid, 34.601075238, places=6)
+
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in self.paths["finish"]),
+            cut, places=9)
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_finishing_cycle(self.paths["rapid"])),
+            rapid, places=9)
+
+    def test_the_finishing_cycle_cuts_below_the_roughed_contour(self):
+        # The roughing run stops U0.4 / W0.1 clear of the contour; the finishing
+        # run is what reaches it.
+        roughed = inside_the_cycle(self.paths["cut"])[-2]       # (20.4, 0.1)..(20.4, -9.9)
+        finished = self.paths["finish"][0]  # (20.0, 0.0)..(20.0, -10.0)
+
+        self.assertLess(finished[0][0], roughed[0][0])
+        self.assertLess(finished[0][1], roughed[0][1])
+
     def test_every_arc_is_r5_and_closes_on_its_endpoints(self):
         self.assertEqual([round(a["radius"], 9) for a in self.paths["arc"]], [5.0, 5.0, 5.0])
 
@@ -136,7 +201,7 @@ class ReferenceProgramTests(unittest.TestCase):
 
     def test_modal_state_survives_cycles_dwell_and_reference_run(self):
         self.assertEqual(self.parser.mode, "G02")   # G28 must not clobber it
-        self.assertEqual(self.parser.cycle, "G71")
+        self.assertEqual(self.parser.cycle, "G70")  # the last one called
         self.assertEqual(self.parser.comp, "G40")
         self.assertEqual(self.parser.tool, 1)
         self.assertEqual(self.parser.s, 180)        # from G96 S180

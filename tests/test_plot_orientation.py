@@ -254,14 +254,18 @@ class PlotPlaybackTests(unittest.TestCase):
     ])
     CALL = 4
 
+    # The same, with the finishing cycle on line 9 and the retract after it.
+    FINISHED = CYCLE.replace("G00 X100. Z50.", "G70 P100 Q200\nG00 X100. Z50.")
+    FINISH_CALL = 9
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def plotter(self, chuck_z=-1000.0):
+    def plotter(self, chuck_z=-1000.0, code=None):
         widget = GCodePlotterWidget(COLORS, chuck_z=chuck_z)
         self.addCleanup(widget.deleteLater)
-        widget.set_gcode(self.CYCLE)
+        widget.set_gcode(self.CYCLE if code is None else code)
         return widget
 
     def test_a_cycle_is_one_line_with_many_moves(self):
@@ -301,6 +305,60 @@ class PlotPlaybackTests(unittest.TestCase):
         self.assertEqual(widget.step_end(self.CALL, total), (52.0, 0.0))
         self.assertIsNone(widget.step_end(self.CALL, 0))
         self.assertIsNone(widget.step_end(self.CALL, total + 1))
+
+    def test_the_finishing_cycle_plays_back_move_by_move_too(self):
+        widget = self.plotter(code=self.FINISHED)
+        call = self.FINISH_CALL
+
+        # Onto the contour, three cuts along it, and back to the start.
+        self.assertEqual(widget.steps_in_line(call), 5)
+        self.assertEqual(widget.step_end(call, 1), (20.0, 0.0))
+        self.assertEqual(widget.step_end(call, 5), (52.0, 0.0))
+
+        widget.set_live_max_line(call - 1)
+        before = len(widget.ax.lines)
+        widget.set_live_step(call, 2)
+        self.assertEqual(len(widget.ax.lines), before + 2)
+        widget.set_live_step(call, 5)
+        self.assertEqual(len(widget.ax.lines), before + 5)
+
+    def test_the_finishing_run_is_drawn_in_its_own_colour_over_the_roughing(self):
+        # It lies a fraction of a millimetre from the roughed contour, so in the
+        # roughing's green it would add nothing to the picture.
+        widget = self.plotter(code=self.FINISHED)
+
+        def finishing(w):
+            # The G54 cross is cyan as well, but it is a single point.
+            return [ln for ln in w.ax.lines
+                    if ln.get_color() == COLORS['CYAN'] and len(ln.get_xdata()) == 2]
+
+        run = finishing(widget)
+        roughing = [ln for ln in widget.ax.lines if ln.get_color() == COLORS['CRT_GREEN']]
+
+        self.assertEqual(len(run), 3)
+        self.assertGreater(min(ln.get_zorder() for ln in run),
+                           max(ln.get_zorder() for ln in roughing))
+
+    def test_the_finishing_run_appears_with_its_moves(self):
+        widget = self.plotter(code=self.FINISHED)
+        call = self.FINISH_CALL
+
+        def finishing():
+            return [ln for ln in widget.ax.lines
+                    if ln.get_color() == COLORS['CYAN'] and len(ln.get_xdata()) == 2]
+
+        widget.set_live_step(call, 1)       # only the rapid onto the contour
+        self.assertEqual(finishing(), [])
+        widget.set_live_step(call, 2)       # the first cut
+        self.assertEqual(len(finishing()), 1)
+        widget.set_live_step(call, 5)
+        self.assertEqual(len(finishing()), 3)
+
+    def test_the_finishing_cycle_adds_no_lines_to_skip(self):
+        # The contour blocks were stepped past by the G71 above it, and only
+        # by that.
+        self.assertEqual(self.plotter(code=self.FINISHED).skipped_lines(),
+                         frozenset({5, 6, 7, 8}))
 
     def test_the_contour_blocks_are_the_lines_a_playback_goes_past(self):
         self.assertEqual(self.plotter().skipped_lines(), frozenset({5, 6, 7, 8}))

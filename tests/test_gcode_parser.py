@@ -773,3 +773,138 @@ class GCodeParserOrderTests(unittest.TestCase):
                                     "G71 P100 Q200 U0.3 W0.1 F0.25")
 
         self.assertEqual(paths["skipped"], frozenset())
+
+
+class GCodeParserFinishingCycleTests(unittest.TestCase):
+    """G70 runs the roughed contour once more, exactly as programmed."""
+
+    # ROUGHING is lines 1-8; the cycle is on line 4 and G70 is line 9. The tool
+    # is back at X52 Z0 when G70 is called -- where the G71 started.
+    FINISHING = GCodeParserCycleTests.ROUGHING + "\nG70 P100 Q200"
+    CALL = 9
+
+    def parse(self, code=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        paths = parser.parse(self.FINISHING if code is None else code)
+        return parser, paths
+
+    @staticmethod
+    def moves_of(paths, line):
+        """(kind, start, end) of every move filed under `line`, in order."""
+        return [(kind, paths[kind][index][0], paths[kind][index][1])
+                for kind, index, filed in paths["order"] if filed == line]
+
+    def test_it_goes_to_the_contour_follows_it_and_comes_back(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual(self.moves_of(paths, self.CALL), [
+            ("rapid", (52.0, 0.0), (20.0, 0.0)),
+            ("finish", (20.0, 0.0), (20.0, -10.0)),
+            ("finish", (20.0, -10.0), (50.0, -10.0)),
+            ("finish", (50.0, -10.0), (50.0, -30.0)),
+            ("rapid", (50.0, -30.0), (52.0, 0.0)),
+        ])
+
+    def test_the_contour_is_run_without_the_roughing_allowance(self):
+        # The G71 above has U0.3 W0.1. What it left standing is what G70 cuts,
+        # so G70 itself must not offset the contour by it.
+        _parser, paths = self.parse()
+
+        run = [m for m in self.moves_of(paths, self.CALL) if m[0] == "finish"]
+
+        self.assertEqual(run[0][2], (20.0, -10.0))
+        self.assertEqual(run[-1][2], (50.0, -30.0))
+
+    def test_the_tool_ends_where_the_cycle_was_called(self):
+        parser, _paths = self.parse()
+
+        self.assertEqual((parser.x, parser.z), (52.0, 0.0))
+
+    def test_the_block_after_it_is_measured_from_the_start_point(self):
+        _parser, paths = self.parse(self.FINISHING + "\nG00 X100.")
+
+        last = paths["rapid"][-1]
+
+        self.assertEqual((last[0], last[1], last[2]), ((52.0, 0.0), (100.0, 0.0), 10))
+
+    def test_it_is_a_cycle_call_and_not_a_motion_mode(self):
+        parser, _paths = self.parse(self.FINISHING + "\nX60.")
+
+        self.assertEqual(parser.cycle, "G70")
+        # X60. after the cycle is an ordinary rapid or cut again, not a G70 move.
+        self.assertEqual(parser.mode, "G01")
+
+    def test_it_skips_no_lines_of_its_own(self):
+        # G71 already stepped past the contour blocks; G70 adds none.
+        _parser, paths = self.parse()
+
+        self.assertEqual(paths["skipped"], frozenset({5, 6, 7, 8}))
+
+    def test_where_no_roughing_cycle_ran_the_contour_blocks_are_ordinary_blocks(self):
+        # Without a G71 nothing steps past them, so they run as they would on
+        # the control -- and G70 runs them once more.
+        code = "\n".join([
+            "G00 X52. Z0.",
+            "G70 P10 Q20",
+            "N10 G01 X20. F0.15",
+            "N20 Z-10.",
+        ])
+
+        _parser, paths = self.parse(code)
+
+        self.assertEqual(paths["skipped"], frozenset())
+        self.assertTrue([m for m in self.moves_of(paths, 3) if m[0] == "cut"])
+        self.assertTrue([m for m in self.moves_of(paths, 2) if m[0] == "finish"])
+
+    def test_an_arc_in_the_contour_is_followed_along_the_curve(self):
+        code = "\n".join([
+            "G00 X40. Z2.",
+            "G70 P10 Q30",
+            "N10 G00 X30. Z0.",
+            "N20 G02 X40. Z-5. R5.",
+            "N30 G01 Z-10.",
+        ])
+
+        _parser, paths = self.parse(code)
+        cuts = [m for m in self.moves_of(paths, 2) if m[0] == "finish"]
+
+        # Chorded it would be the arc's single straight line plus the Z move.
+        self.assertGreater(len(cuts), 3)
+        # And the run ends where the contour does.
+        self.assertEqual(cuts[-1][2], (40.0, -10.0))
+
+    def test_it_is_checked_against_the_chuck(self):
+        _parser, paths = self.parse(chuck_z=-20.0)
+
+        self.assertIn(self.CALL, [segment[2] for segment in paths["collisions"]])
+
+    def test_blocks_that_are_not_in_the_program_draw_nothing_and_warn(self):
+        parser, paths = self.parse("G00 X52. Z2.\nG70 P100 Q200")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_BLOCKS_MISSING"])
+        self.assertEqual(paths["finish"], [])
+        self.assertEqual((parser.x, parser.z), (52.0, 2.0))
+
+    def test_without_p_and_q_there_is_nothing_to_run(self):
+        parser, paths = self.parse("G00 X52. Z2.\nG70")
+
+        self.assertEqual(paths["finish"], [])
+        self.assertEqual(len(paths["rapid"]), 1)
+        self.assertEqual(parser.cycle, "G70")
+
+    def test_calling_it_twice_runs_the_contour_twice_from_the_same_start(self):
+        _parser, paths = self.parse(self.FINISHING + "\nG70 P100 Q200")
+
+        first, second = self.moves_of(paths, 9), self.moves_of(paths, 10)
+
+        self.assertEqual(len(first), 5)
+        # The cycle returned to its start, so the second call begins there too
+        # and makes exactly the same moves.
+        self.assertEqual(second, first)
+
+    def test_its_moves_are_filed_in_order_under_the_call(self):
+        _parser, paths = self.parse()
+
+        kinds = [kind for kind, _index, line in paths["order"] if line == self.CALL]
+
+        self.assertEqual(kinds, ["rapid", "finish", "finish", "finish", "rapid"])

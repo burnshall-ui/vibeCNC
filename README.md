@@ -38,6 +38,7 @@
 - **Real-Time Position Display** - Live X, Z, Tool, Spindle Speed, and Feedrate overlay
 - **2D Visualization** - Interactive lathe simulation with zoom, pan, and click-to-jump
 - **Collision Detection** - Automatic chuck limit warnings with visual highlights
+- **Canned Cycles** - G71/G72 roughing, G70 finishing (drawn in cyan) and G92 threading are expanded into the moves they make and played back one at a time; G73-G76 are not drawn yet
 
 ###  AI-Powered Assistance
 - **Dual AI Support** - Works with both Claude (cloud) and Ollama (local)
