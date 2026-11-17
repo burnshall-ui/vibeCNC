@@ -38,7 +38,7 @@
 - **Real-Time Position Display** - Live X, Z, Tool, Spindle Speed, and Feedrate overlay
 - **2D Visualization** - Interactive lathe simulation with zoom, pan, and click-to-jump
 - **Collision Detection** - Automatic chuck limit warnings with visual highlights
-- **Canned Cycles** - G71/G72 roughing, G70 finishing (drawn in cyan), G76 and G92 threading (drawn in yellow) are expanded into the moves they make and played back one at a time; G73-G75 are not drawn yet. G76 follows the control's usual depth schedule (shallower passes, a minimum cut, finishing passes at full depth) and feeds straight in rather than along the flank
+- **Canned Cycles** - G71/G72 roughing, G70 finishing (drawn in cyan), G76 and G92 threading (drawn in yellow) and G75 grooving are expanded into the moves they make and played back one at a time; G73 and G74 are not drawn yet. G75 pecks in X (P, a radius) with a return after each peck (R of its first block), steps along Z (Q) and makes the last step short so the groove ends on the programmed Z; the relief at the groove bottom (R of the second block) is not drawn, because the sources it was built from disagree about its direction, and the width of the grooving tool is not drawn either. G76 follows the control's usual depth schedule (shallower passes, a minimum cut, finishing passes at full depth) and feeds straight in rather than along the flank
 
 ###  AI-Powered Assistance
 - **Dual AI Support** - Works with both Claude (cloud) and Ollama (local)

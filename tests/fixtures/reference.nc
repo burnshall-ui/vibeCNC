@@ -1,7 +1,7 @@
 %
 O0001 (VIBECNC PARSER REFERENCE)
 (Exercises every branch the parser has: absolute and incremental words,)
-(I/K arcs and R arcs, roughing and finishing cycles, a threading cycle, a dwell, a speed)
+(I/K and R arcs, roughing, finishing, threading and grooving cycles, a dwell, a speed)
 (cap, a reference run and nose radius compensation. The expected counts and)
 (path lengths are asserted in tests/test_reference.py -- keep the two in step.)
 (Chuck limit for this program is Z-45. The last two cutting blocks)
@@ -33,6 +33,12 @@ N115 G70 P090 Q110
 (--- first cut. The passes get shallower, then every one cuts the same 20 mm.)
 N117 G76 P010060 Q100 R0.
 N118 G76 X28. Z-20. P1000 Q500 F2.
+
+(--- grooving cycle: two blocks. The first sets the return after each peck,)
+(--- the second the groove: Ø52 down to Ø46 in pecks of 1.0, at Z0 and then)
+(--- 2.5 along at a time to Z-6, the last step only 1.0. Back to Ø52/Z0.)
+N1191 G75 R0.5
+N1192 G75 X46. Z-6. P1000 Q2500 F0.1
 
 (--- arcs, outside the cycle, so they stay arcs ---)
 N120 G00 X30. Z-15.            (rapid 2, onto the end of the contour)

@@ -1034,6 +1034,15 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         self.assertEqual(self.passes(bare), self.passes(pointed))
         self.assertAlmostEqual(self.depth_of(self.passes(bare)[0], crest=17.4 + 2 * 1.226), 0.35, places=9)
 
+    def test_a_point_at_the_end_still_means_millimetres(self):
+        # Q1. is 1 mm, as Q1000 is. Read as Q1 -- a thousandth -- it asked for
+        # the pass limit instead of a two-pass thread.
+        trailing = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.\nG76 X17.4 Z-30. P1300 Q1. F2.")
+        bare = self.parse("G00 X24. Z2.\nG76 P010060 Q100 R0.\nG76 X17.4 Z-30. P1300 Q1000 F2.")
+
+        self.assertEqual(trailing[0].warnings, [])
+        self.assertEqual(self.passes(trailing[1]), self.passes(bare[1]))
+
     def test_the_first_block_stays_in_force_for_the_next_thread(self):
         two_threads = (self.SETUP + self.THREAD + "\n"
                        "G76 X17.4 Z-30. P1300 Q400 F2.")
@@ -1159,3 +1168,174 @@ class GCodeParserMultiPassThreadTests(unittest.TestCase):
         self.assertEqual(parser.cycle, "G76")
         # The block after it is an ordinary rapid again, from the start point.
         self.assertEqual(paths["rapid"][-1][:2], [(24.0, 2.0), (30.0, 2.0)])
+
+
+class GCodeParserGroovingTests(unittest.TestCase):
+    """G75: peck in X to the groove bottom, step along Z, peck again.
+
+    Every expected position is worked out here from the program text. P and Q
+    without a decimal point are thousandths of a millimetre, P is a radius,
+    and the return e from the first block is drawn as a radius as well.
+    """
+
+    # From Ø32 at Z-10 down to Ø26: 3.0 of radius, 1.0 a peck, 0.5 back
+    # after each peck -- 1.0 on the diameter.
+    SINGLE = "G00 X32. Z-10.\nG75 R0.5\nG75 X26. P1000 F0.05"
+    CUTTING_BLOCK = 3
+
+    def parse(self, code=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        paths = parser.parse(self.SINGLE if code is None else code)
+        return parser, paths
+
+    @staticmethod
+    def moves(paths, line=3):
+        """Every move of the cycle, in order, as (kind, start, end)."""
+        return [(kind, paths[kind][i][0], paths[kind][i][1])
+                for kind, i, at in paths["order"] if at == line]
+
+    def test_a_single_groove_pecks_to_the_bottom_and_goes_back_out(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual(self.moves(paths), [
+            ("cut", (32.0, -10.0), (30.0, -10.0)),     # first peck, 1.0 deep
+            ("rapid", (30.0, -10.0), (31.0, -10.0)),   # back 0.5
+            ("cut", (31.0, -10.0), (28.0, -10.0)),     # through the 0.5, then 1.0
+            ("rapid", (28.0, -10.0), (29.0, -10.0)),
+            ("cut", (29.0, -10.0), (26.0, -10.0)),     # the bottom
+            ("rapid", (26.0, -10.0), (32.0, -10.0)),   # out to the start
+        ])
+
+    def test_a_wide_groove_steps_along_z_and_the_last_step_is_shorter(self):
+        # Z-20 to Z-27 in steps of 3.0: plunges at -20, -23, -26, and the last
+        # at -27, one millimetre on. P1.5 reaches Ø26 in two pecks.
+        _parser, paths = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05")
+
+        bottoms = [end[1] for kind, _start, end in self.moves(paths)
+                   if kind == "cut" and end[0] == 26.0]
+        steps = [(start, end) for kind, start, end in self.moves(paths)
+                 if kind == "rapid" and start[0] == end[0] == 32.0]
+
+        self.assertEqual(bottoms, [-20.0, -23.0, -26.0, -27.0])
+        self.assertEqual(steps, [
+            ((32.0, -20.0), (32.0, -23.0)),
+            ((32.0, -23.0), (32.0, -26.0)),
+            ((32.0, -26.0), (32.0, -27.0)),
+            ((32.0, -27.0), (32.0, -20.0)),   # and back to the start
+        ])
+
+    def test_the_tool_ends_where_the_cycle_began(self):
+        parser, _paths = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05")
+
+        self.assertEqual((parser.x, parser.z), (32.0, -20.0))
+
+    def test_the_pecks_are_cuts_and_everything_else_is_rapid(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual([kind for kind, _s, _e in self.moves(paths)],
+                         ["cut", "rapid", "cut", "rapid", "cut", "rapid"])
+        self.assertEqual(paths["thread"], [])
+        self.assertEqual(paths["finish"], [])
+
+    def test_the_return_never_goes_past_the_start(self):
+        # A 5 mm return after a 1 mm peck would leave the work; it stops at Ø32.
+        _parser, paths = self.parse("G00 X32. Z-10.\nG75 R5.\nG75 X26. P1000 F0.05")
+
+        for _kind, start, end in self.moves(paths):
+            self.assertLessEqual(max(start[0], end[0]), 32.0)
+        self.assertEqual(self.moves(paths)[1], ("rapid", (30.0, -10.0), (32.0, -10.0)))
+
+    def test_without_a_first_block_the_pecks_follow_on_without_a_return(self):
+        # The return then comes from a machine parameter that is not known
+        # here, so none is drawn: the pecks run one into the next.
+        _parser, paths = self.parse("G00 X32. Z-10.\nG75 X26. P1000 F0.05", )
+
+        self.assertEqual(self.moves(paths, 2), [
+            ("cut", (32.0, -10.0), (30.0, -10.0)),
+            ("cut", (30.0, -10.0), (28.0, -10.0)),
+            ("cut", (28.0, -10.0), (26.0, -10.0)),
+            ("rapid", (26.0, -10.0), (32.0, -10.0)),
+        ])
+
+    def test_the_first_block_stays_in_force_for_the_next_groove(self):
+        _parser, paths = self.parse(self.SINGLE + "\nG75 X26. P1000 F0.05")
+
+        self.assertEqual([m[1:] for m in self.moves(paths, 4)],
+                         [m[1:] for m in self.moves(paths, 3)])
+
+    def test_a_value_without_a_decimal_point_is_in_thousandths_of_a_millimetre(self):
+        bare = self.parse("G00 X32. Z-20.\nG75 R500\nG75 X26. Z-27. P1500 Q3000 F0.05")[1]
+        pointed = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1.5 Q3. F0.05")[1]
+
+        self.assertEqual(self.moves(bare), self.moves(pointed))
+
+    def test_an_internal_groove_pecks_outwards(self):
+        # A bore at Ø20, groove bottom Ø24: two pecks of 1.0, a return of 0.5
+        # between them that goes back towards the centre line.
+        _parser, paths = self.parse("G00 X20. Z-5.\nG75 R0.5\nG75 X24. P1000 F0.05")
+
+        self.assertEqual(self.moves(paths), [
+            ("cut", (20.0, -5.0), (22.0, -5.0)),
+            ("rapid", (22.0, -5.0), (21.0, -5.0)),
+            ("cut", (21.0, -5.0), (24.0, -5.0)),
+            ("rapid", (24.0, -5.0), (20.0, -5.0)),
+        ])
+
+    def test_u_and_w_are_measured_from_the_start(self):
+        absolute = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05")[1]
+        relative = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 U-6. W-7. P1500 Q3000 F0.05")[1]
+
+        self.assertEqual(self.moves(relative), self.moves(absolute))
+
+    def test_the_relief_at_the_bottom_is_not_drawn(self):
+        # Its direction is not settled by the sources this was built from, so
+        # it changes nothing -- and the README says so.
+        without = self.parse()[1]
+        with_relief = self.parse("G00 X32. Z-10.\nG75 R0.5\nG75 X26. P1000 R0.2 F0.05")[1]
+
+        self.assertEqual(self.moves(with_relief), self.moves(without))
+
+    def test_it_is_checked_against_the_chuck(self):
+        _parser, paths = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05",
+                                    chuck_z=-25.0)
+
+        self.assertIn(self.CUTTING_BLOCK, [s[2] for s in paths["collisions"]])
+
+    def test_without_a_peck_depth_nothing_is_cut(self):
+        parser, paths = self.parse("G00 X32. Z-10.\nG75 R0.5\nG75 X26. F0.05")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_z_move_without_a_step_cuts_nothing(self):
+        parser, paths = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 F0.05")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_groove_without_depth_is_a_warning(self):
+        parser, paths = self.parse("G00 X32. Z-20.\nG75 R0.5\nG75 X32. Z-27. P1500 Q3000 F0.05")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_peck_of_one_micron_stops_at_the_limit_and_says_so(self):
+        # 3 mm of radius in pecks of 0.001 is 3000 pecks. The first 1000 are
+        # drawn, which reach Ø32 - 2*1.0 = Ø30 -- and not the bottom.
+        parser, paths = self.parse("G00 X32. Z-10.\nG75 X26. P1 F0.05")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_TOO_MANY_PASSES"])
+        self.assertEqual(len(paths["cut"]), 1000)
+        self.assertAlmostEqual(paths["cut"][-1][1][0], 30.0, places=9)
+        self.assertEqual(paths["rapid"][-1][1], (32.0, -10.0))
+
+    def test_the_first_block_moves_nothing(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual(self.moves(paths, 2), [])
+
+    def test_it_is_a_cycle_call_and_not_a_motion_mode(self):
+        parser, paths = self.parse(self.SINGLE + "\nG00 X40.")
+
+        self.assertEqual(parser.cycle, "G75")
+        self.assertEqual(paths["rapid"][-1][:2], [(32.0, -10.0), (40.0, -10.0)])

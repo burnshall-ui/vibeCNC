@@ -24,6 +24,9 @@ FINISH_LINE = 29
 # The G76 block that cuts the thread; the one above it only sets it up.
 THREAD_LINE = 35
 
+# The G75 block that cuts the groove; the one above it sets the return.
+GROOVE_LINE = 41
+
 
 def segment_length(segment):
     """Travel of one segment in the radius plane (X is a diameter)."""
@@ -33,7 +36,8 @@ def segment_length(segment):
 
 def outside_the_cycle(segments):
     """The moves the program makes itself, without those the cycles generate."""
-    return [s for s in segments if s[2] not in (CYCLE_LINE, FINISH_LINE, THREAD_LINE)]
+    return [s for s in segments
+            if s[2] not in (CYCLE_LINE, FINISH_LINE, THREAD_LINE, GROOVE_LINE)]
 
 
 def inside_the_cycle(segments):
@@ -46,6 +50,10 @@ def in_the_finishing_cycle(segments):
 
 def in_the_threading_cycle(segments):
     return [s for s in segments if s[2] == THREAD_LINE]
+
+
+def in_the_grooving_cycle(segments):
+    return [s for s in segments if s[2] == GROOVE_LINE]
 
 
 class ReferenceProgramTests(unittest.TestCase):
@@ -123,6 +131,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertTrue(lines[CYCLE_LINE - 1].startswith("N080 G71 P090 Q110"))
         self.assertTrue(lines[FINISH_LINE - 1].startswith("N115 G70 P090 Q110"))
         self.assertTrue(lines[THREAD_LINE - 1].startswith("N118 G76 X28. Z-20."))
+        self.assertTrue(lines[GROOVE_LINE - 1].startswith("N1192 G75 X46. Z-6."))
 
     def test_the_finishing_cycle_runs_the_contour_exactly_as_programmed(self):
         # N090 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
@@ -231,6 +240,50 @@ class ReferenceProgramTests(unittest.TestCase):
     def test_the_setup_block_of_the_thread_moves_nothing(self):
         self.assertEqual([s for s in self.paths["rapid"] + self.paths["cut"] if s[2] == THREAD_LINE - 1], [])
 
+    # --- the grooving cycle ---
+    #
+    # N1191 sets a return of 0.5 after each peck. N1192 cuts from Ø52/Z0, where
+    # the G76 above left the tool, down to Ø46: 3.0 of radius in pecks of 1.0.
+    # One plunge is a cut of 1.0 to Ø50, back 0.5 to Ø51, a cut of 1.5 to Ø48,
+    # back 0.5 to Ø49, a cut of 1.5 to Ø46, and out 3.0 to Ø52. Along Z it
+    # plunges at Z0, -2.5 and -5.0, and at -6.0 after a last step of only 1.0.
+
+    def test_the_groove_is_cut_in_four_plunges_to_the_bottom(self):
+        cuts = in_the_grooving_cycle(self.paths["cut"])
+
+        self.assertEqual(len(cuts), 12)
+        self.assertEqual([c[1][1] for c in cuts if c[1][0] == 46.0], [0.0, -2.5, -5.0, -6.0])
+        self.assertEqual(cuts[:3], [
+            [(52.0, 0.0), (50.0, 0.0), GROOVE_LINE],
+            [(51.0, 0.0), (48.0, 0.0), GROOVE_LINE],
+            [(49.0, 0.0), (46.0, 0.0), GROOVE_LINE],
+        ])
+
+    def test_the_groove_path_lengths(self):
+        # Cut: 1.0 + 1.5 + 1.5 a plunge, four plunges. Rapid: 0.5 + 0.5 back
+        # after the pecks and 3.0 out, four times; 2.5 + 2.5 + 1.0 of steps
+        # along Z; and 6.0 back to Z0 at the end.
+        cut = 4 * (1.0 + 1.5 + 1.5)
+        rapid = 4 * (0.5 + 0.5 + 3.0) + (2.5 + 2.5 + 1.0) + 6.0
+        self.assertEqual((cut, rapid), (16.0, 28.0))
+
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_grooving_cycle(self.paths["cut"])),
+            cut, places=9)
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_grooving_cycle(self.paths["rapid"])),
+            rapid, places=9)
+
+    def test_the_grooving_cycle_hands_the_tool_back_where_it_took_it(self):
+        rapids = in_the_grooving_cycle(self.paths["rapid"])
+
+        self.assertEqual(len(rapids), 16)   # 3 a plunge, 3 steps, 1 home
+        self.assertEqual(rapids[-1][:2], [(52.0, -6.0), (52.0, 0.0)])
+
+    def test_the_setup_block_of_the_groove_moves_nothing(self):
+        self.assertEqual([s for s in self.paths["rapid"] + self.paths["cut"]
+                          if s[2] == GROOVE_LINE - 1], [])
+
     def test_every_arc_is_r5_and_closes_on_its_endpoints(self):
         self.assertEqual([round(a["radius"], 9) for a in self.paths["arc"]], [5.0, 5.0, 5.0])
 
@@ -266,7 +319,7 @@ class ReferenceProgramTests(unittest.TestCase):
 
     def test_modal_state_survives_cycles_dwell_and_reference_run(self):
         self.assertEqual(self.parser.mode, "G02")   # G28 must not clobber it
-        self.assertEqual(self.parser.cycle, "G76")  # the last one called
+        self.assertEqual(self.parser.cycle, "G75")  # the last one called
         self.assertEqual(self.parser.comp, "G40")
         self.assertEqual(self.parser.tool, 1)
         self.assertEqual(self.parser.s, 180)        # from G96 S180

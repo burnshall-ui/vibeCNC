@@ -41,6 +41,14 @@ THREADING_CODES = frozenset({76})
 # hundreds of thousands, and drawing them would hang the window.
 THREAD_PASS_LIMIT = 200
 
+# The grooving cycle: pecks in X, steps along Z. G74, its counterpart on the
+# face, is not drawn yet.
+GROOVING_CODES = frozenset({75})
+
+# The same guard for a groove. A wide groove deep in small pecks is a few
+# hundred; a P1 (one micron) is tens of thousands and hangs the window.
+GROOVE_PECK_LIMIT = 1000
+
 
 class GCodeParser:
     """Parser for Fanuc lathe G-code (X=diameter, Z=length)"""
@@ -82,6 +90,10 @@ class GCodeParser:
         self.thread_runout = 0        # r: 45-degree run-out, in tenths of the lead
         self.thread_min_depth = 0.0   # dmin: no pass shallower than this (mm of radius)
         self.thread_allowance = 0.0   # d: what the roughing leaves for the finishing
+        # G75: the return after each peck, from its first block. Modal, and
+        # without a first block it is whatever the control's parameter 5139
+        # holds -- unknown here, so nothing is drawn for it.
+        self.groove_retract = 0.0     # e, radius
         # Roughing cycle: depth of cut and retract come from the first G71/G72
         # block, the contour and the allowances from the second.
         self.cycle_depth = 0.0
@@ -201,6 +213,8 @@ class GCodeParser:
                     self._read_finishing_cycle(line, line_num)
                 elif g in THREADING_CODES:
                     self._read_threading_cycle(line, line_num)
+                elif g in GROOVING_CODES:
+                    self._read_grooving_cycle(line, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -681,8 +695,12 @@ class GCodeParser:
         control's least input increment, 0.001 mm -- Q350 is 0.35 mm and P1226
         is 1.226 mm. G76 is the cycle where it matters: its depths are
         conventionally written as bare integers.
+
+        The point may come last, Fanuc style: Q3. is 3 mm. The pattern every
+        other word is read with drops a trailing point -- harmless for a value,
+        but here the point is what decides the unit, and Q3. became 0.003.
         """
-        match = re.search(rf'{letter}([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+        match = re.search(rf'{letter}([-+]?(?:\d+\.?\d*|\.\d+))', line, re.IGNORECASE)
         if match is None:
             return None
         text = match.group(1)
@@ -806,6 +824,104 @@ class GCodeParser:
                 x_last = x_end
             self._record_move('rapid', (x_last, end_z), (start_x, end_z), line_num)
             self._record_move('rapid', (start_x, end_z), (start_x, start_z), line_num)
+
+    # --- Grooving (G75) ------------------------------------------------------
+    #
+    #     G75 R(e)
+    #     G75 X(U) Z(W) P(di) Q(dk) R(dd) F(feed)
+    #
+    # From the start point the tool pecks in X to the groove bottom, di at a
+    # time with a return of e after each peck to break the chip, goes back out
+    # to the start diameter, steps dk along Z and pecks again, until it has
+    # cut at the end Z. Then it returns to where it began.
+    #
+    # Read from training material that cites the Fanuc manual, not from the
+    # manual itself: di is a radius, P and Q without a decimal point are in
+    # thousandths of a millimetre. Drawn as an assumption: e is a radius too,
+    # the return after a peck and the step along Z are rapids, the next peck
+    # feeds through the returned distance again, and the last step along Z is
+    # shortened so the last plunge lands on the programmed Z. Not drawn: the
+    # relief dd at the groove bottom, because the sources disagree about its
+    # direction. The width of the tool is not drawn either; like every other
+    # path this is the path of the point the tool is set on.
+
+    def _read_grooving_cycle(self, line, line_num):
+        """The block with an end point cuts the groove; the other sets the return."""
+        if any(self._word(line, letter) is not None for letter in 'XUZW'):
+            self._expand_grooving_cycle(line, line_num)
+        else:
+            retract = self._mm(line, 'R')
+            if retract is not None:
+                self.groove_retract = abs(retract)
+
+    def _expand_grooving_cycle(self, line, line_num):
+        """G75 X Z P Q F: the groove, as every peck and step it takes."""
+        start_x, start_z = self.x, self.z
+        x_word, u_word = self._word(line, 'X'), self._word(line, 'U')
+        z_word, w_word = self._word(line, 'Z'), self._word(line, 'W')
+        # X and Z are absolute, U and W are measured from where the cycle
+        # starts. Without Z or W it is one plunge where the tool stands.
+        end_x = x_word if x_word is not None else start_x + (u_word or 0.0)
+        end_z = z_word if z_word is not None else start_z + (w_word or 0.0)
+        peck = self._mm(line, 'P')        # di, depth of one peck, a radius
+        step = self._mm(line, 'Q')        # dk, the step along Z
+
+        if end_x == start_x:
+            self._warn(line_num, 'CYCLE_NO_PASS',
+                       'G75 without a groove to cut — X ends where it starts')
+            return
+        if peck is None or peck <= 0.0:
+            self._warn(line_num, 'CYCLE_NO_DEPTH',
+                       'G75 without a depth of cut per peck (P) — nothing to cut')
+            return
+        width = abs(end_z - start_z)
+        if width > 0.0 and (step is None or step <= 0.0):
+            self._warn(line_num, 'CYCLE_NO_PASS',
+                       'G75 with a Z move but no step along it (Q) — nothing to cut')
+            return
+
+        # An external groove pecks towards the centre line, an internal one
+        # away from it; a return goes the other way and never past the start.
+        inwards = -1.0 if end_x < start_x else 1.0
+        depth = abs(end_x - start_x) / 2.0
+        peck_count = math.ceil(depth / peck - 1e-9)
+        plunge_count = math.ceil(width / step - 1e-9) + 1 if width > 0.0 else 1
+        if peck_count * plunge_count > GROOVE_PECK_LIMIT:
+            self._warn(line_num, 'CYCLE_TOO_MANY_PASSES',
+                       f'G75 would take more than {GROOVE_PECK_LIMIT} pecks — '
+                       'only that many are drawn; check P and Q')
+
+        # The last peck and the last plunge land exactly on the programmed
+        # bottom and end, not on a multiple of the step that rounds near them.
+        # Past the limit the pecks stop where they stop: no jump to the bottom
+        # that the program never made.
+        pecks = [start_x + inwards * 2.0 * peck * k
+                 for k in range(1, min(peck_count, GROOVE_PECK_LIMIT) + 1)]
+        if peck_count <= GROOVE_PECK_LIMIT:
+            pecks[-1] = end_x
+        towards = 1.0 if end_z > start_z else -1.0
+        back_to = min if inwards < 0 else max
+
+        budget = GROOVE_PECK_LIMIT
+        z = start_z
+        for plunge in range(plunge_count):
+            if budget <= 0:
+                break
+            plunge_z = end_z if plunge == plunge_count - 1 else start_z + towards * step * plunge
+            self._record_move('rapid', (start_x, z), (start_x, plunge_z), line_num)
+            z, x = plunge_z, start_x
+            for n, peck_x in enumerate(pecks):
+                if budget <= 0:
+                    break
+                budget -= 1
+                self._record_move('cut', (x, z), (peck_x, z), line_num)
+                x = peck_x
+                if n < len(pecks) - 1 and self.groove_retract > 0.0:
+                    returned = back_to(peck_x - inwards * 2.0 * self.groove_retract, start_x)
+                    self._record_move('rapid', (x, z), (returned, z), line_num)
+                    x = returned
+            self._record_move('rapid', (x, z), (start_x, z), line_num)
+        self._record_move('rapid', (start_x, z), (start_x, start_z), line_num)
 
     # --- Tool nose radius compensation ----------------------------------
     #
