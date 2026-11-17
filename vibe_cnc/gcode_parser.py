@@ -41,6 +41,14 @@ THREADING_CODES = frozenset({76})
 # hundreds of thousands, and drawing them would hang the window.
 THREAD_PASS_LIMIT = 200
 
+# The pattern repeating cycle: the contour between P and Q, run again and
+# again, each pass closer to it. Made for forgings and castings, whose
+# material already follows the shape.
+PATTERN_CODES = frozenset({73})
+
+# More passes than this is a slip, as for a thread.
+PATTERN_PASS_LIMIT = 200
+
 # The peck cycles. G75 pecks in X and steps along Z, a groove in the diameter;
 # G74 pecks along Z and steps in X, a groove in the face or a deep hole.
 GROOVING_CODES = frozenset({74, 75})
@@ -94,6 +102,12 @@ class GCodeParser:
         # without a first block it is whatever the control's parameter 5139
         # holds -- unknown here, so nothing is drawn for it.
         self.groove_retract = 0.0     # e, radius
+        # G73: the relief and the number of passes from its first block. Modal;
+        # without a first block they come from parameters 5135-5137, which are
+        # not known here -- so no passes are drawn until a block sets R.
+        self.pattern_relief_x = 0.0   # di, radius, signed
+        self.pattern_relief_z = 0.0   # dk, signed
+        self.pattern_passes = None    # d
         # Roughing cycle: depth of cut and retract come from the first G71/G72
         # block, the contour and the allowances from the second.
         self.cycle_depth = 0.0
@@ -215,6 +229,8 @@ class GCodeParser:
                     self._read_threading_cycle(line, line_num)
                 elif g in GROOVING_CODES:
                     self._read_peck_cycle(line, g, line_num)
+                elif g in PATTERN_CODES:
+                    self._read_pattern_cycle(line, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -470,6 +486,80 @@ class GCodeParser:
         self._follow_contour(contour, line_num, kind='finish')
         self._record_move('rapid', (self.x, self.z), start, line_num)
         self.x, self.z = start
+
+    # --- Pattern repeating (G73) --------------------------------------------
+    #
+    #     G73 U(di) W(dk) R(d)
+    #     G73 P(ns) Q(nf) U(du) W(dw) F
+    #
+    # The contour between P and Q is cut d times, each time shifted along the
+    # axes, from far outside it to the finishing allowance. Every pass starts
+    # at the cycle start point, goes to the shifted contour, follows it and
+    # comes back. What a G70 then takes off is the allowance.
+    #
+    # From training material: di is a radius, signed by the direction of the
+    # relief, dk the same along Z, d the number of passes, du and dw the
+    # allowance as in G71. Not in any source read for this, and drawn as the
+    # usual reading of the cycle: the first pass lies di/dk outside the
+    # allowance contour, the last on it, and the passes in between are evenly
+    # spaced -- di/(d-1) apart. The approach and the return are rapids, the
+    # return straight back to the start point.
+
+    def _read_pattern_cycle(self, line, line_num):
+        """The block with P and Q cuts; the other sets relief and passes."""
+        first_block = self._word(line, 'P')
+        last_block = self._word(line, 'Q')
+        if first_block is None or last_block is None:
+            relief_x = self._word(line, 'U')
+            relief_z = self._word(line, 'W')
+            passes = self._word(line, 'R')
+            if relief_x is not None:
+                self.pattern_relief_x = relief_x
+            if relief_z is not None:
+                self.pattern_relief_z = relief_z
+            if passes is not None:
+                self.pattern_passes = int(round(passes))
+            return
+
+        self._expand_pattern_cycle(int(first_block), int(last_block),
+                                   self._word(line, 'U') or 0.0,
+                                   self._word(line, 'W') or 0.0,
+                                   line_num)
+
+    def _expand_pattern_cycle(self, first_block, last_block,
+                              allowance_x, allowance_z, line_num):
+        """Turns one G73 call into the passes it cuts."""
+        found = self._contour_points(first_block, last_block, line_num)
+        if found is None:
+            return
+        contour, contour_lines = found
+        passes = self.pattern_passes
+        if passes is None or passes < 1:
+            # Leaving the contour lines to the main loop draws the shape at
+            # least, as G71 does when it has no depth of cut.
+            self._warn(line_num, 'CYCLE_NO_DEPTH',
+                       'G73 without a number of passes (R of its first block) — '
+                       'the contour is drawn, but no passes')
+            return
+        if passes > PATTERN_PASS_LIMIT:
+            self._warn(line_num, 'CYCLE_TOO_MANY_PASSES',
+                       f'G73 asks for {passes} passes — only the first '
+                       f'{PATTERN_PASS_LIMIT} are drawn; check R')
+
+        start = (self.x, self.z)
+        for n in range(1, min(passes, PATTERN_PASS_LIMIT) + 1):
+            # From all of the relief on the first pass to none on the last;
+            # a single pass is the last. The relief is a radius, X a diameter.
+            share = (passes - n) / (passes - 1) if passes > 1 else 0.0
+            shift_x = 2.0 * self.pattern_relief_x * share + allowance_x
+            shift_z = self.pattern_relief_z * share + allowance_z
+            shifted = [(x + shift_x, z + shift_z) for (x, z) in contour]
+            self._follow_contour(shifted, line_num)
+            self._record_move('rapid', (self.x, self.z), start, line_num)
+            self.x, self.z = start
+
+        # Past the contour blocks, as after G71: they are the shape.
+        self._skip.update(contour_lines)
 
     def _expand_roughing_cycle(self, code, first_block, last_block,
                                allowance_x, allowance_z, line_num):

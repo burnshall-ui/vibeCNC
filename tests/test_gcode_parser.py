@@ -1450,3 +1450,137 @@ class GCodeParserFaceGroovingTests(unittest.TestCase):
 
         self.assertEqual(parser.cycle, "G74")
         self.assertEqual(paths["rapid"][-1][:2], [(0.0, 2.0), (0.0, 50.0)])
+
+
+class GCodeParserPatternCycleTests(unittest.TestCase):
+    """G73: the contour between P and Q, cut again and again, closer each time.
+
+    Worked out by hand from the rule drawn here: the first pass lies the
+    relief (a radius, so twice that on X) outside the allowance contour, the
+    last on it, the passes between evenly spaced.
+    """
+
+    # The contour is Ø20 from Z2 to Z-10, then up to Ø30 at Z-15. A relief of
+    # 3.0 in X over three passes: 6.0, 3.0 and 0 on the diameter, plus the
+    # 0.4 allowance -- the contour shifted by 6.4, 3.4 and 0.4 in X, and by
+    # the 0.1 allowance in Z.
+    SETUP = "G00 X40. Z2.\nG73 U3. W0. R3\n"
+    CALL = "G73 P10 Q20 U0.4 W0.1 F0.2\n"
+    CONTOUR = "N10 G00 X20.\nG01 Z-10.\nN20 X30. Z-15."
+    CUTTING_BLOCK = 3
+
+    def parse(self, code=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        paths = parser.parse(self.SETUP + self.CALL + self.CONTOUR if code is None else code)
+        return parser, paths
+
+    moves = staticmethod(GCodeParserGroovingTests.moves)
+
+    @staticmethod
+    def pass_starts(paths, line=3):
+        """Where each pass meets the contour: the end of every approach."""
+        return [end for kind, start, end in GCodeParserGroovingTests.moves(paths, line)
+                if kind == "rapid" and start == (40.0, 2.0)]
+
+    def assertPoints(self, got, want):
+        self.assertEqual(len(got), len(want))
+        for (gx, gz), (wx, wz) in zip(got, want):
+            self.assertAlmostEqual(gx, wx, places=9)
+            self.assertAlmostEqual(gz, wz, places=9)
+
+    def test_the_passes_close_in_evenly_on_the_allowance(self):
+        _parser, paths = self.parse()
+
+        self.assertPoints(self.pass_starts(paths), [(26.4, 2.1), (23.4, 2.1), (20.4, 2.1)])
+
+    def test_every_pass_follows_the_whole_contour_and_comes_back(self):
+        _parser, paths = self.parse()
+
+        last_pass = self.moves(paths)[-4:]
+
+        self.assertEqual([kind for kind, _s, _e in self.moves(paths)],
+                         ["rapid", "cut", "cut", "rapid"] * 3)
+        self.assertPoints([p for _kind, start, end in last_pass for p in (start, end)], [
+            (40.0, 2.0), (20.4, 2.1),       # onto the allowance contour
+            (20.4, 2.1), (20.4, -9.9),      # along Ø20.4
+            (20.4, -9.9), (30.4, -14.9),    # up the taper
+            (30.4, -14.9), (40.0, 2.0),     # straight back to the start
+        ])
+
+    def test_the_tool_ends_where_the_cycle_began(self):
+        parser, _paths = self.parse()
+
+        self.assertEqual((parser.x, parser.z), (40.0, 2.0))
+
+    def test_the_contour_blocks_are_a_shape_and_not_moves(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual(paths["skipped"], frozenset({4, 5, 6}))
+        self.assertEqual([m for m in paths["order"] if m[2] in (4, 5, 6)], [])
+
+    def test_a_relief_along_z_shifts_the_passes_along_z(self):
+        # W2. over two passes: 2.0 and then 0 along Z, plus the 0.1.
+        _parser, paths = self.parse("G00 X40. Z2.\nG73 U0. W2. R2\n" + self.CALL + self.CONTOUR)
+
+        self.assertPoints(self.pass_starts(paths), [(20.4, 4.1), (20.4, 2.1)])
+
+    def test_a_single_pass_lies_on_the_allowance(self):
+        _parser, paths = self.parse("G00 X40. Z2.\nG73 U3. W0. R1\n" + self.CALL + self.CONTOUR)
+
+        self.assertPoints(self.pass_starts(paths), [(20.4, 2.1)])
+
+    def test_a_negative_relief_moves_the_passes_inwards(self):
+        # A bore: relief and allowance both point towards the centre line.
+        _parser, paths = self.parse("G00 X10. Z2.\nG73 U-2. W0. R2\n"
+                                    "G73 P10 Q20 U-0.4 W0.1 F0.2\n"
+                                    "N10 G00 X20.\nG01 Z-10.\nN20 X16. Z-15.")
+
+        starts = [end for kind, start, end in self.moves(paths)
+                  if kind == "rapid" and start == (10.0, 2.0)]
+
+        self.assertPoints(starts, [(15.6, 2.1), (19.6, 2.1)])
+
+    def test_a_g70_after_it_finishes_on_the_contour_itself(self):
+        _parser, paths = self.parse(self.SETUP + self.CALL + self.CONTOUR + "\nG70 P10 Q20")
+
+        self.assertEqual([s[:2] for s in paths["finish"]], [
+            [(20.0, 2.0), (20.0, -10.0)],
+            [(20.0, -10.0), (30.0, -15.0)],
+        ])
+
+    def test_the_first_block_stays_in_force_for_the_next_call(self):
+        _parser, paths = self.parse(self.SETUP + self.CALL + self.CONTOUR + "\n" + self.CALL)
+
+        self.assertPoints(self.pass_starts(paths, 7), self.pass_starts(paths, 3))
+
+    def test_without_a_number_of_passes_the_contour_is_drawn_as_it_stands(self):
+        parser, paths = self.parse("G00 X40. Z2.\n" + self.CALL + self.CONTOUR)
+
+        # Line 2 is the call, lines 3-5 the contour, which now runs as blocks.
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        self.assertEqual(self.moves(paths, 2), [])
+        self.assertEqual(self.moves(paths, 4), [("cut", (20.0, 2.0), (20.0, -10.0))])
+
+    def test_block_numbers_that_name_nothing_are_a_warning(self):
+        parser, _paths = self.parse(self.SETUP + "G73 P90 Q95 U0.4 W0.1 F0.2\n" + self.CONTOUR)
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_BLOCKS_MISSING"])
+
+    def test_a_runaway_pass_count_stops_at_the_limit_and_says_so(self):
+        parser, paths = self.parse("G00 X40. Z2.\nG73 U3. W0. R1000\n" + self.CALL + self.CONTOUR)
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_TOO_MANY_PASSES"])
+        self.assertEqual(len(self.pass_starts(paths)), 200)
+
+    def test_it_is_checked_against_the_chuck(self):
+        _parser, paths = self.parse(chuck_z=-12.0)
+
+        self.assertIn(self.CUTTING_BLOCK, [s[2] for s in paths["collisions"]])
+
+    def test_it_is_a_cycle_call_and_not_a_motion_mode(self):
+        parser, _paths = self.parse()
+
+        # The contour blocks are skipped, so the mode is the one from before
+        # the cycle -- as after G71.
+        self.assertEqual(parser.cycle, "G73")
+        self.assertEqual(parser.mode, "G00")

@@ -30,6 +30,9 @@ GROOVE_LINE = 41
 # The G74 block that cuts the face groove; the one above it sets the return.
 FACE_GROOVE_LINE = 47
 
+# The G73 block that cuts; the one above it sets the relief and the passes.
+PATTERN_LINE = 53
+
 
 def segment_length(segment):
     """Travel of one segment in the radius plane (X is a diameter)."""
@@ -41,7 +44,7 @@ def outside_the_cycle(segments):
     """The moves the program makes itself, without those the cycles generate."""
     return [s for s in segments
             if s[2] not in (CYCLE_LINE, FINISH_LINE, THREAD_LINE, GROOVE_LINE,
-                            FACE_GROOVE_LINE)]
+                            FACE_GROOVE_LINE, PATTERN_LINE)]
 
 
 def inside_the_cycle(segments):
@@ -62,6 +65,10 @@ def in_the_grooving_cycle(segments):
 
 def in_the_face_grooving_cycle(segments):
     return [s for s in segments if s[2] == FACE_GROOVE_LINE]
+
+
+def in_the_pattern_cycle(segments):
+    return [s for s in segments if s[2] == PATTERN_LINE]
 
 
 class ReferenceProgramTests(unittest.TestCase):
@@ -141,6 +148,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertTrue(lines[THREAD_LINE - 1].startswith("N118 G76 X28. Z-20."))
         self.assertTrue(lines[GROOVE_LINE - 1].startswith("N1192 G75 X46. Z-6."))
         self.assertTrue(lines[FACE_GROOVE_LINE - 1].startswith("N1194 G74 X46. Z-3."))
+        self.assertTrue(lines[PATTERN_LINE - 1].startswith("N1196 G73 P090 Q110"))
 
     def test_the_finishing_cycle_runs_the_contour_exactly_as_programmed(self):
         # N090 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
@@ -330,6 +338,51 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertEqual(len(rapids), 12)   # 2 a plunge, 3 steps, 1 home
         self.assertEqual(rapids[-1][:2], [(46.0, 0.0), (52.0, 0.0)])
 
+    # --- the pattern repeating cycle ---
+    #
+    # N1196 runs the contour N090-N110 -- Ø20 from Z0 to Z-10, then up to Ø30
+    # at Z-15 -- twice from Ø52/Z0. The relief is 2.0 of radius and 1.0 along
+    # Z, the allowance 0.4 on the diameter and 0.1 along Z. Over two passes
+    # the first carries all of the relief and the second none: shifted by
+    # (2*2.0 + 0.4, 1.0 + 0.1) = (4.4, 1.1), then by (0.4, 0.1).
+
+    def test_the_pattern_passes_are_the_contour_shifted_twice(self):
+        cuts = in_the_pattern_cycle(self.paths["cut"])
+
+        expected = [
+            [(24.4, 1.1), (24.4, -8.9)], [(24.4, -8.9), (34.4, -13.9)],
+            [(20.4, 0.1), (20.4, -9.9)], [(20.4, -9.9), (30.4, -14.9)],
+        ]
+        self.assertEqual(len(cuts), len(expected))
+        for cut, (start, end) in zip(cuts, expected):
+            for got, want in ((cut[0], start), (cut[1], end)):
+                self.assertAlmostEqual(got[0], want[0], places=9)
+                self.assertAlmostEqual(got[1], want[1], places=9)
+
+    def test_the_pattern_cycle_path_lengths(self):
+        # Cut: each pass is 10.0 along Z and hypot(5,5) up the taper.
+        # Rapid: from Ø52/Z0 onto each shifted start and back from each
+        # shifted end -- 13.8 and 1.1, 8.8 and 13.9 for the first pass, 15.8
+        # and 0.1, 10.8 and 14.9 for the second, radius against Z.
+        cut = 2 * (10.0 + math.hypot(5.0, 5.0))
+        rapid = (math.hypot(13.8, 1.1) + math.hypot(8.8, 13.9)
+                 + math.hypot(15.8, 0.1) + math.hypot(10.8, 14.9))
+        self.assertAlmostEqual(cut, 34.142135624, places=6)
+        self.assertAlmostEqual(rapid, 64.497976810, places=6)
+
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_pattern_cycle(self.paths["cut"])),
+            cut, places=9)
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_pattern_cycle(self.paths["rapid"])),
+            rapid, places=9)
+
+    def test_the_pattern_cycle_hands_the_tool_back_where_it_took_it(self):
+        rapids = in_the_pattern_cycle(self.paths["rapid"])
+
+        self.assertEqual(len(rapids), 4)    # in and back out, twice
+        self.assertEqual(rapids[-1][1], (52.0, 0.0))
+
     def test_every_arc_is_r5_and_closes_on_its_endpoints(self):
         self.assertEqual([round(a["radius"], 9) for a in self.paths["arc"]], [5.0, 5.0, 5.0])
 
@@ -365,7 +418,7 @@ class ReferenceProgramTests(unittest.TestCase):
 
     def test_modal_state_survives_cycles_dwell_and_reference_run(self):
         self.assertEqual(self.parser.mode, "G02")   # G28 must not clobber it
-        self.assertEqual(self.parser.cycle, "G74")  # the last one called
+        self.assertEqual(self.parser.cycle, "G73")  # the last one called
         self.assertEqual(self.parser.comp, "G40")
         self.assertEqual(self.parser.tool, 1)
         self.assertEqual(self.parser.s, 180)        # from G96 S180

@@ -46,6 +46,12 @@ N1192 G75 X46. Z-6. P1000 Q2500 F0.1
 N1193 G74 R0.5
 N1194 G74 X46. Z-3. P1000 Q1500 F0.1
 
+(--- pattern repeating cycle: the contour of the G71 once more, in two passes.)
+(--- The first 2.0 of radius and 1.0 along Z outside the allowance, the second)
+(--- on it. Each pass starts and ends at Ø52/Z0.)
+N1195 G73 U2. W1. R2
+N1196 G73 P090 Q110 U0.4 W0.1 F0.25
+
 (--- arcs, outside the cycle, so they stay arcs ---)
 N120 G00 X30. Z-15.            (rapid 2, onto the end of the contour)
 N130 G02 X40. Z-20. R5.        (arc 1, R form)
