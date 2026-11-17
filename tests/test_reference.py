@@ -27,6 +27,9 @@ THREAD_LINE = 35
 # The G75 block that cuts the groove; the one above it sets the return.
 GROOVE_LINE = 41
 
+# The G74 block that cuts the face groove; the one above it sets the return.
+FACE_GROOVE_LINE = 47
+
 
 def segment_length(segment):
     """Travel of one segment in the radius plane (X is a diameter)."""
@@ -37,7 +40,8 @@ def segment_length(segment):
 def outside_the_cycle(segments):
     """The moves the program makes itself, without those the cycles generate."""
     return [s for s in segments
-            if s[2] not in (CYCLE_LINE, FINISH_LINE, THREAD_LINE, GROOVE_LINE)]
+            if s[2] not in (CYCLE_LINE, FINISH_LINE, THREAD_LINE, GROOVE_LINE,
+                            FACE_GROOVE_LINE)]
 
 
 def inside_the_cycle(segments):
@@ -54,6 +58,10 @@ def in_the_threading_cycle(segments):
 
 def in_the_grooving_cycle(segments):
     return [s for s in segments if s[2] == GROOVE_LINE]
+
+
+def in_the_face_grooving_cycle(segments):
+    return [s for s in segments if s[2] == FACE_GROOVE_LINE]
 
 
 class ReferenceProgramTests(unittest.TestCase):
@@ -132,6 +140,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertTrue(lines[FINISH_LINE - 1].startswith("N115 G70 P090 Q110"))
         self.assertTrue(lines[THREAD_LINE - 1].startswith("N118 G76 X28. Z-20."))
         self.assertTrue(lines[GROOVE_LINE - 1].startswith("N1192 G75 X46. Z-6."))
+        self.assertTrue(lines[FACE_GROOVE_LINE - 1].startswith("N1194 G74 X46. Z-3."))
 
     def test_the_finishing_cycle_runs_the_contour_exactly_as_programmed(self):
         # N090 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
@@ -284,6 +293,43 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertEqual([s for s in self.paths["rapid"] + self.paths["cut"]
                           if s[2] == GROOVE_LINE - 1], [])
 
+    # --- the face grooving cycle ---
+    #
+    # N1194 starts from Ø52/Z0, where the G75 left the tool. One plunge along
+    # Z is a cut of 1.5 to Z-1.5, back 0.5 to Z-1.0, a cut of 2.0 to Z-3 and
+    # out 3.0 to Z0. Across, it plunges at Ø52, 50, 48 and 46: 1.0 of radius
+    # a step.
+
+    def test_the_face_groove_is_cut_in_four_plunges_to_z_minus_3(self):
+        cuts = in_the_face_grooving_cycle(self.paths["cut"])
+
+        self.assertEqual(len(cuts), 8)
+        self.assertEqual([c[1][0] for c in cuts if c[1][1] == -3.0], [52.0, 50.0, 48.0, 46.0])
+        self.assertEqual(cuts[:2], [
+            [(52.0, 0.0), (52.0, -1.5), FACE_GROOVE_LINE],
+            [(52.0, -1.0), (52.0, -3.0), FACE_GROOVE_LINE],
+        ])
+
+    def test_the_face_groove_path_lengths(self):
+        # Cut: 1.5 + 2.0 a plunge, four plunges. Rapid: 0.5 back and 3.0 out,
+        # four times; three steps of 1.0 of radius; 3.0 back out to Ø52.
+        cut = 4 * (1.5 + 2.0)
+        rapid = 4 * (0.5 + 3.0) + 3 * 1.0 + 3.0
+        self.assertEqual((cut, rapid), (14.0, 20.0))
+
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_face_grooving_cycle(self.paths["cut"])),
+            cut, places=9)
+        self.assertAlmostEqual(
+            sum(segment_length(s) for s in in_the_face_grooving_cycle(self.paths["rapid"])),
+            rapid, places=9)
+
+    def test_the_face_grooving_cycle_hands_the_tool_back_where_it_took_it(self):
+        rapids = in_the_face_grooving_cycle(self.paths["rapid"])
+
+        self.assertEqual(len(rapids), 12)   # 2 a plunge, 3 steps, 1 home
+        self.assertEqual(rapids[-1][:2], [(46.0, 0.0), (52.0, 0.0)])
+
     def test_every_arc_is_r5_and_closes_on_its_endpoints(self):
         self.assertEqual([round(a["radius"], 9) for a in self.paths["arc"]], [5.0, 5.0, 5.0])
 
@@ -319,7 +365,7 @@ class ReferenceProgramTests(unittest.TestCase):
 
     def test_modal_state_survives_cycles_dwell_and_reference_run(self):
         self.assertEqual(self.parser.mode, "G02")   # G28 must not clobber it
-        self.assertEqual(self.parser.cycle, "G75")  # the last one called
+        self.assertEqual(self.parser.cycle, "G74")  # the last one called
         self.assertEqual(self.parser.comp, "G40")
         self.assertEqual(self.parser.tool, 1)
         self.assertEqual(self.parser.s, 180)        # from G96 S180

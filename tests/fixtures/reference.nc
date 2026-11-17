@@ -40,6 +40,12 @@ N118 G76 X28. Z-20. P1000 Q500 F2.
 N1191 G75 R0.5
 N1192 G75 X46. Z-6. P1000 Q2500 F0.1
 
+(--- face grooving cycle: the same turned through 90 degrees. Pecks of 1.5)
+(--- along Z down to Z-3 with a return of 0.5, at Ø52 and then 1.0 of radius)
+(--- inwards at a time to Ø46. Back to Ø52/Z0.)
+N1193 G74 R0.5
+N1194 G74 X46. Z-3. P1000 Q1500 F0.1
+
 (--- arcs, outside the cycle, so they stay arcs ---)
 N120 G00 X30. Z-15.            (rapid 2, onto the end of the contour)
 N130 G02 X40. Z-20. R5.        (arc 1, R form)

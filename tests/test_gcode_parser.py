@@ -1339,3 +1339,114 @@ class GCodeParserGroovingTests(unittest.TestCase):
 
         self.assertEqual(parser.cycle, "G75")
         self.assertEqual(paths["rapid"][-1][:2], [(32.0, -10.0), (40.0, -10.0)])
+
+
+class GCodeParserFaceGroovingTests(unittest.TestCase):
+    """G74: G75 turned through 90 degrees -- pecks along Z, steps in X.
+
+    Q is the peck along Z, P the step in X as a radius, and the return e of
+    the first block is a distance along Z. Positions are worked out by hand.
+    """
+
+    # A deep hole on the centre line: no X, so one plunge. From Z2 to Z-12 is
+    # 14 mm in pecks of 5: to Z-3, Z-8 and the bottom at Z-12, with 0.5 back
+    # after the first two.
+    DRILL = "G00 X0. Z2.\nG74 R0.5\nG74 Z-12. Q5000 F0.1"
+
+    def parse(self, code=None, chuck_z=-100.0):
+        parser = GCodeParser(chuck_z=chuck_z)
+        paths = parser.parse(self.DRILL if code is None else code)
+        return parser, paths
+
+    moves = staticmethod(GCodeParserGroovingTests.moves)
+
+    def test_a_deep_hole_is_pecked_along_the_centre_line(self):
+        _parser, paths = self.parse()
+
+        self.assertEqual(self.moves(paths), [
+            ("cut", (0.0, 2.0), (0.0, -3.0)),
+            ("rapid", (0.0, -3.0), (0.0, -2.5)),
+            ("cut", (0.0, -2.5), (0.0, -8.0)),
+            ("rapid", (0.0, -8.0), (0.0, -7.5)),
+            ("cut", (0.0, -7.5), (0.0, -12.0)),
+            ("rapid", (0.0, -12.0), (0.0, 2.0)),
+        ])
+
+    def test_a_face_groove_steps_inwards_by_a_radius(self):
+        # Ø52 to Ø46 is 3.0 of radius, P1.0 a step: plunges at Ø52, 50, 48
+        # and 46, each pecked to Z-3 in 1.5 with 0.5 back between.
+        _parser, paths = self.parse("G00 X52. Z0.\nG74 R0.5\nG74 X46. Z-3. P1000 Q1500 F0.1")
+
+        bottoms = [end[0] for kind, _start, end in self.moves(paths)
+                   if kind == "cut" and end[1] == -3.0]
+        first_plunge = self.moves(paths)[:4]
+
+        self.assertEqual(bottoms, [52.0, 50.0, 48.0, 46.0])
+        self.assertEqual(first_plunge, [
+            ("cut", (52.0, 0.0), (52.0, -1.5)),
+            ("rapid", (52.0, -1.5), (52.0, -1.0)),
+            ("cut", (52.0, -1.0), (52.0, -3.0)),
+            ("rapid", (52.0, -3.0), (52.0, 0.0)),
+        ])
+
+    def test_the_last_step_in_x_is_shorter(self):
+        # 3.5 of radius in steps of 1.5: Ø52, 49, 46 and then Ø45.
+        _parser, paths = self.parse("G00 X52. Z0.\nG74 X45. Z-3. P1500 Q3000 F0.1")
+
+        self.assertEqual([end[0] for kind, _start, end in self.moves(paths, 2) if kind == "cut"],
+                         [52.0, 49.0, 46.0, 45.0])
+
+    def test_the_tool_ends_where_the_cycle_began(self):
+        parser, _paths = self.parse("G00 X52. Z0.\nG74 R0.5\nG74 X46. Z-3. P1000 Q1500 F0.1")
+
+        self.assertEqual((parser.x, parser.z), (52.0, 0.0))
+
+    def test_the_return_never_goes_back_past_the_start(self):
+        _parser, paths = self.parse("G00 X0. Z2.\nG74 R5.\nG74 Z-12. Q5000 F0.1")
+
+        self.assertEqual(self.moves(paths)[1], ("rapid", (0.0, -3.0), (0.0, 2.0)))
+
+    def test_g74_and_g75_share_the_return(self):
+        # One machine parameter holds it for both cycles, so a G75 first block
+        # sets it for the G74 that follows.
+        _parser, paths = self.parse("G00 X0. Z2.\nG75 R0.5\nG74 Z-12. Q5000 F0.1")
+
+        self.assertEqual(self.moves(paths)[1], ("rapid", (0.0, -3.0), (0.0, -2.5)))
+
+    def test_u_and_w_are_measured_from_the_start(self):
+        absolute = self.parse("G00 X52. Z0.\nG74 R0.5\nG74 X46. Z-3. P1000 Q1500 F0.1")[1]
+        relative = self.parse("G00 X52. Z0.\nG74 R0.5\nG74 U-6. W-3. P1000 Q1500 F0.1")[1]
+
+        self.assertEqual(self.moves(relative), self.moves(absolute))
+
+    def test_it_is_checked_against_the_chuck(self):
+        _parser, paths = self.parse(chuck_z=-10.0)
+
+        self.assertIn(3, [s[2] for s in paths["collisions"]])
+
+    def test_without_a_peck_depth_nothing_is_cut(self):
+        parser, paths = self.parse("G00 X0. Z2.\nG74 R0.5\nG74 Z-12. F0.1")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_DEPTH"])
+        self.assertIn("(Q)", parser.warnings[0]["message"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_an_x_move_without_a_step_cuts_nothing(self):
+        parser, paths = self.parse("G00 X52. Z0.\nG74 X46. Z-3. Q1500 F0.1")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+        self.assertIn("an X move", parser.warnings[0]["message"])
+        self.assertIn("(P)", parser.warnings[0]["message"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_a_hole_without_depth_is_a_warning(self):
+        parser, paths = self.parse("G00 X0. Z2.\nG74 X0. Z2. Q5000 F0.1")
+
+        self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
+        self.assertEqual(paths["cut"], [])
+
+    def test_it_is_a_cycle_call_and_not_a_motion_mode(self):
+        parser, paths = self.parse(self.DRILL + "\nG00 Z50.")
+
+        self.assertEqual(parser.cycle, "G74")
+        self.assertEqual(paths["rapid"][-1][:2], [(0.0, 2.0), (0.0, 50.0)])

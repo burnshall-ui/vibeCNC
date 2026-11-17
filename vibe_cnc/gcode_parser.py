@@ -41,9 +41,9 @@ THREADING_CODES = frozenset({76})
 # hundreds of thousands, and drawing them would hang the window.
 THREAD_PASS_LIMIT = 200
 
-# The grooving cycle: pecks in X, steps along Z. G74, its counterpart on the
-# face, is not drawn yet.
-GROOVING_CODES = frozenset({75})
+# The peck cycles. G75 pecks in X and steps along Z, a groove in the diameter;
+# G74 pecks along Z and steps in X, a groove in the face or a deep hole.
+GROOVING_CODES = frozenset({74, 75})
 
 # The same guard for a groove. A wide groove deep in small pecks is a few
 # hundred; a P1 (one micron) is tens of thousands and hangs the window.
@@ -214,7 +214,7 @@ class GCodeParser:
                 elif g in THREADING_CODES:
                     self._read_threading_cycle(line, line_num)
                 elif g in GROOVING_CODES:
-                    self._read_grooving_cycle(line, line_num)
+                    self._read_peck_cycle(line, g, line_num)
 
         # Tool changes
         t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
@@ -828,103 +828,138 @@ class GCodeParser:
             self._record_move('rapid', (x_last, end_z), (start_x, end_z), line_num)
             self._record_move('rapid', (start_x, end_z), (start_x, start_z), line_num)
 
-    # --- Grooving (G75) ------------------------------------------------------
+    # --- Peck grooving and drilling (G74, G75) ---------------------------------
     #
-    #     G75 R(e)
-    #     G75 X(U) Z(W) P(di) Q(dk) R(dd) F(feed)
+    #     G75 R(e)                            G74 R(e)
+    #     G75 X(U) Z(W) P(di) Q(dk) R(dd) F   G74 X(U) Z(W) P(di) Q(dk) R(dd) F
     #
-    # From the start point the tool pecks in X to the groove bottom, di at a
-    # time with a return of e after each peck to break the chip, goes back out
-    # to the start diameter, steps dk along Z and pecks again, until it has
-    # cut at the end Z. Then it returns to where it began.
+    # G75 pecks in X: from the start point it feeds di at a time towards the
+    # groove bottom, with a return of e after each peck to break the chip,
+    # goes back out to the start diameter at the bottom, steps dk along Z and
+    # pecks again, until it has cut at the end Z. G74 is the same turned
+    # through 90 degrees: it pecks dk at a time along Z -- a groove in the
+    # face, or without X a deep hole on the centre line -- and steps di in X.
+    # Either way the tool ends where it began.
     #
     # Read from training material that cites the Fanuc manual, not from the
-    # manual itself: di is a radius, P and Q without a decimal point are in
-    # thousandths of a millimetre. Drawn as an assumption: e is a radius too,
-    # the return after a peck and the step along Z are rapids, the next peck
-    # feeds through the returned distance again, and the last step along Z is
-    # shortened so the last plunge lands on the programmed Z. Not drawn: the
-    # relief dd at the groove bottom, because the sources disagree about its
-    # direction. The width of the tool is not drawn either; like every other
-    # path this is the path of the point the tool is set on.
+    # manual itself: di is a radius in both cycles, P and Q without a decimal
+    # point are in thousandths of a millimetre, e is modal and comes from
+    # parameter 5139 when no first block sets it -- one parameter for both
+    # cycles, so one value here too. Drawn as an assumption: in G75 e is a
+    # radius as well, the return after a peck and the step to the next plunge
+    # are rapids, the next peck feeds through the returned distance again, and
+    # the last step is shortened so the last plunge lands on the programmed
+    # end. Not drawn: the relief dd at the bottom, because the sources
+    # disagree about its direction. The width of the tool is not drawn either;
+    # like every other path this is the path of the point the tool is set on.
 
-    def _read_grooving_cycle(self, line, line_num):
-        """The block with an end point cuts the groove; the other sets the return."""
+    # How each cycle lies on the axes (0 is X, 1 is Z): the axis it pecks
+    # along, the word that is the peck and the word that is the step.
+    _PECK_CYCLES = {
+        75: {'along': 0, 'peck_word': 'P', 'step_word': 'Q', 'cut': 'groove'},
+        74: {'along': 1, 'peck_word': 'Q', 'step_word': 'P', 'cut': 'hole or groove'},
+    }
+    _AXIS_NAMES = ('X', 'Z')
+    # X is a diameter, so an amount given as a radius counts twice along it.
+    _AXIS_SCALE = (2.0, 1.0)
+
+    def _read_peck_cycle(self, line, code, line_num):
+        """The block with an end point cuts; the other sets the return."""
         if any(self._word(line, letter) is not None for letter in 'XUZW'):
-            self._expand_grooving_cycle(line, line_num)
+            self._expand_peck_cycle(line, code, line_num)
         else:
             retract = self._mm(line, 'R')
             if retract is not None:
                 self.groove_retract = abs(retract)
 
-    def _expand_grooving_cycle(self, line, line_num):
-        """G75 X Z P Q F: the groove, as every peck and step it takes."""
-        start_x, start_z = self.x, self.z
+    def _expand_peck_cycle(self, line, code, line_num):
+        """G74/G75 X Z P Q F: every peck and every step the cycle takes."""
+        layout = self._PECK_CYCLES[code]
+        name = f'G{code}'
+        start = (self.x, self.z)
         x_word, u_word = self._word(line, 'X'), self._word(line, 'U')
         z_word, w_word = self._word(line, 'Z'), self._word(line, 'W')
         # X and Z are absolute, U and W are measured from where the cycle
-        # starts. Without Z or W it is one plunge where the tool stands.
-        end_x = x_word if x_word is not None else start_x + (u_word or 0.0)
-        end_z = z_word if z_word is not None else start_z + (w_word or 0.0)
-        peck = self._mm(line, 'P')        # di, depth of one peck, a radius
-        step = self._mm(line, 'Q')        # dk, the step along Z
+        # starts. Without a word for the step axis it is one plunge where the
+        # tool stands.
+        end = (x_word if x_word is not None else start[0] + (u_word or 0.0),
+               z_word if z_word is not None else start[1] + (w_word or 0.0))
+        along = layout['along']           # the axis the pecks go along
+        across = 1 - along                # the axis the steps go along
+        peck = self._mm(line, layout['peck_word'])
+        step = self._mm(line, layout['step_word'])
 
-        if end_x == start_x:
+        if end[along] == start[along]:
             self._warn(line_num, 'CYCLE_NO_PASS',
-                       'G75 without a groove to cut — X ends where it starts')
+                       f"{name} without a {layout['cut']} to cut — "
+                       f"{self._AXIS_NAMES[along]} ends where it starts")
             return
         if peck is None or peck <= 0.0:
             self._warn(line_num, 'CYCLE_NO_DEPTH',
-                       'G75 without a depth of cut per peck (P) — nothing to cut')
+                       f"{name} without a depth of cut per peck ({layout['peck_word']}) "
+                       "— nothing to cut")
             return
-        width = abs(end_z - start_z)
+        width = abs(end[across] - start[across]) / self._AXIS_SCALE[across]
         if width > 0.0 and (step is None or step <= 0.0):
+            article = 'an' if across == 0 else 'a'
             self._warn(line_num, 'CYCLE_NO_PASS',
-                       'G75 with a Z move but no step along it (Q) — nothing to cut')
+                       f"{name} with {article} {self._AXIS_NAMES[across]} move but no step "
+                       f"along it ({layout['step_word']}) — nothing to cut")
             return
 
-        # An external groove pecks towards the centre line, an internal one
-        # away from it; a return goes the other way and never past the start.
-        inwards = -1.0 if end_x < start_x else 1.0
-        depth = abs(end_x - start_x) / 2.0
+        def point(along_value, across_value):
+            p = [0.0, 0.0]
+            p[along], p[across] = along_value, across_value
+            return tuple(p)
+
+        # Into the material and out again: towards the centre line for an
+        # external groove, away from it for an internal one, towards the chuck
+        # in the face. A return goes the other way and never past the start.
+        scale = self._AXIS_SCALE[along]
+        inwards = -1.0 if end[along] < start[along] else 1.0
+        depth = abs(end[along] - start[along]) / scale
         peck_count = math.ceil(depth / peck - 1e-9)
         plunge_count = math.ceil(width / step - 1e-9) + 1 if width > 0.0 else 1
         if peck_count * plunge_count > GROOVE_PECK_LIMIT:
             self._warn(line_num, 'CYCLE_TOO_MANY_PASSES',
-                       f'G75 would take more than {GROOVE_PECK_LIMIT} pecks — '
+                       f'{name} would take more than {GROOVE_PECK_LIMIT} pecks — '
                        'only that many are drawn; check P and Q')
 
         # The last peck and the last plunge land exactly on the programmed
         # bottom and end, not on a multiple of the step that rounds near them.
         # Past the limit the pecks stop where they stop: no jump to the bottom
         # that the program never made.
-        pecks = [start_x + inwards * 2.0 * peck * k
+        pecks = [start[along] + inwards * scale * peck * k
                  for k in range(1, min(peck_count, GROOVE_PECK_LIMIT) + 1)]
         if peck_count <= GROOVE_PECK_LIMIT:
-            pecks[-1] = end_x
-        towards = 1.0 if end_z > start_z else -1.0
+            pecks[-1] = end[along]
+        towards = 1.0 if end[across] > start[across] else -1.0
         back_to = min if inwards < 0 else max
 
         budget = GROOVE_PECK_LIMIT
-        z = start_z
+        at = start[across]
         for plunge in range(plunge_count):
             if budget <= 0:
                 break
-            plunge_z = end_z if plunge == plunge_count - 1 else start_z + towards * step * plunge
-            self._record_move('rapid', (start_x, z), (start_x, plunge_z), line_num)
-            z, x = plunge_z, start_x
-            for n, peck_x in enumerate(pecks):
+            plunge_at = (end[across] if plunge == plunge_count - 1 else
+                         start[across] + towards * self._AXIS_SCALE[across] * step * plunge)
+            self._record_move('rapid', point(start[along], at), point(start[along], plunge_at),
+                              line_num)
+            at, depth_now = plunge_at, start[along]
+            for n, peck_to in enumerate(pecks):
                 if budget <= 0:
                     break
                 budget -= 1
-                self._record_move('cut', (x, z), (peck_x, z), line_num)
-                x = peck_x
+                self._record_move('cut', point(depth_now, at), point(peck_to, at), line_num)
+                depth_now = peck_to
                 if n < len(pecks) - 1 and self.groove_retract > 0.0:
-                    returned = back_to(peck_x - inwards * 2.0 * self.groove_retract, start_x)
-                    self._record_move('rapid', (x, z), (returned, z), line_num)
-                    x = returned
-            self._record_move('rapid', (x, z), (start_x, z), line_num)
-        self._record_move('rapid', (start_x, z), (start_x, start_z), line_num)
+                    returned = back_to(peck_to - inwards * scale * self.groove_retract,
+                                       start[along])
+                    self._record_move('rapid', point(depth_now, at), point(returned, at),
+                                      line_num)
+                    depth_now = returned
+            self._record_move('rapid', point(depth_now, at), point(start[along], at), line_num)
+        self._record_move('rapid', point(start[along], at), start, line_num)
 
     # --- Tool nose radius compensation ----------------------------------
     #
