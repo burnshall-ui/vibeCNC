@@ -223,7 +223,11 @@ class AIClient:
 
     def check_claude(self, model: Optional[str] = None) -> Tuple[bool, str]:
         """Is there a working key, and is this model one it can use? Costs nothing:
-        it asks the Models API about the model, it does not run it."""
+        it asks the Models API about the model, it does not run it.
+
+        It cannot see the credit balance: an account with no credits passes
+        this check and is turned away (400) on the first real request. Seen
+        on 2026-11-17, so the message says so instead of implying more."""
         try:
             sdk = _anthropic()
         except ImportError:
@@ -237,7 +241,8 @@ class AIClient:
         except Exception as e:
             return (False, self._claude_error(sdk, e, model, key_env, 10.0))
         name = getattr(info, "display_name", "") or model
-        return (True, f"✅ Claude API reachable. Model '{model}' ({name}) is available to this key.")
+        return (True, f"✅ Claude API reachable. Model '{model}' ({name}) is available to this key. "
+                      "This check does not look at the credit balance; the first analysis does.")
 
     # ---- Ollama (local) ------------------------------------------------------------
 

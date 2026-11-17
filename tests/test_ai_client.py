@@ -270,6 +270,11 @@ class ClaudeErrorTests(ClaudeCase):
             (529, "overloaded_error", "busy", {}, ["overloaded", "529"]),
             (500, "api_error", "internal", {}, ["error 500", "internal"]),
             (402, "billing_error", "no credit", {}, ["credit balance"]),
+            # What an account without credits actually got on 2026-11-17.
+            (400, "invalid_request_error",
+             "Your credit balance is too low to access the Anthropic API. "
+             "Please go to Plans & Billing to upgrade or purchase credits.",
+             {}, ["rejected the request", "credit balance is too low"]),
         )
         for status, kind, text, headers, expected in cases:
             with self.subTest(status=status):
@@ -364,6 +369,8 @@ class ClaudeCheckTests(ClaudeCase):
 
         self.assertTrue(ok)
         self.assertIn("Claude Sonnet 5.5", text)
+        # A green check with an empty account must not read as "all set".
+        self.assertIn("does not look at the credit balance", text)
         self.assertEqual((api.requests[0].method, api.requests[0].url.path),
                          ("GET", "/v1/models/claude-sonnet-5-5"))
 

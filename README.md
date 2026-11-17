@@ -124,7 +124,10 @@ setx ANTHROPIC_API_KEY "sk-ant-..."       # Windows
 ```
 
 Then open **Settings → AI** and press **Test connection**: it asks the API whether
-the key works and the model exists, without running the model. The default model is
+the key works and the model exists, without running the model. It does not see the
+credit balance: an account without API credits passes the test and is turned away on
+the first analysis ("Your credit balance is too low"). API credits are bought in the
+Anthropic Console and are separate from a claude.ai subscription. The default model is
 `claude-sonnet-5-5`; the Claude SDK (`anthropic`) is installed with `requirements.txt`.
 
 ---
