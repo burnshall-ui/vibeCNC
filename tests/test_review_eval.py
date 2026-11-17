@@ -152,13 +152,21 @@ class FaultTests(unittest.TestCase):
 class GroundTruthTests(unittest.TestCase):
 
     def test_a_fault_the_linter_does_not_see_is_left_out(self):
-        # An impossible R inside a G71 contour: the contour is read by a parser
-        # of its own whose warnings go nowhere, so the linter is silent there.
-        program = SHAFT.replace("N120 Z-18.", "N120 G02 X24. Z-20. R2.")
+        # No Z retract to begin with: taking the X retract out as well changes
+        # the program, but the linter already said "no retract" and says no more.
+        program = SHAFT.replace("N160 G00 Z50.", "N160 M09")
         cases, left_out = cases_of(P=program)
-        self.assertNotIn(("P", "arc_radius"), cases)
-        self.assertEqual([why for _, fault, why in left_out if fault == "arc_radius"],
+        self.assertNotIn(("P", "no_retract"), cases)
+        self.assertEqual([why for _, fault, why in left_out if fault == "no_retract"],
                          ["the linter reports nothing new at any of 1 place(s)"])
+
+    def test_an_impossible_arc_in_a_cycle_contour_is_used(self):
+        # Left out until the parser passed on the warnings of its contour reader.
+        program = SHAFT.replace("N120 Z-18.", "N120 G02 X24. Z-20. R2.")
+        cases, _ = cases_of(P=program)
+        self.assertEqual(cases[("P", "arc_radius")].after, ["N120 G02 X24. Z-20. R0.2"])
+        self.assertEqual([(f["line"], f["rule"]) for f in cases[("P", "arc_radius")].expected],
+                         [(14, "Arc R")])
 
     def test_only_what_is_new_is_expected(self):
         # No retract to begin with: every copy still has that finding, and no

@@ -183,8 +183,15 @@ class GCodeParser:
         return float(match.group(1)) if match else None
 
     def _warn(self, line_num: int, code: str, message: str):
-        """Records a geometry problem instead of silently drawing nothing."""
-        self.warnings.append({'line': line_num, 'code': code, 'message': message})
+        """Records a geometry problem instead of silently drawing nothing.
+
+        Once: a cycle contour is read by its roughing cycle, again by the G70
+        after it, and by the main loop too when the cycle leaves it there, so
+        one bad block would otherwise be reported two or three times.
+        """
+        warning = {'line': line_num, 'code': code, 'message': message}
+        if warning not in self.warnings:
+            self.warnings.append(warning)
 
     def _parse_line(self, line: str, line_num: int):
         """Parses a single G-code line"""
@@ -717,6 +724,14 @@ class GCodeParser:
                 points.extend(reader._sample_arc(arc)[1:])
             if not points or (reader.x, reader.z) != points[-1]:
                 points.append((reader.x, reader.z))
+
+        # What the reader could not make sense of is the operator's problem as
+        # much as anything outside a cycle. Its warnings used to stay with it,
+        # so an impossible R in the contour was drawn as a straight line with
+        # no word about it, and the linter, which reads only these warnings,
+        # had nothing to report. Its line numbers are the program's.
+        for w in reader.warnings:
+            self._warn(w['line'], w['code'], w['message'])
 
         if len(points) < 2:
             self._warn(line_num, 'CYCLE_NO_CONTOUR',

@@ -211,6 +211,25 @@ class LintEngineParserWarningTests(unittest.TestCase):
         self.assertEqual(arc[0]["line"], 2)
         self.assertIn("half the chord", arc[0]["message"])
 
+    def test_impossible_r_in_a_cycle_contour_is_reported(self):
+        # The contour is read by a parser of its own, whose warnings used to
+        # go nowhere: the plot drew a straight line and the linter said nothing.
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all("\n".join([
+            "G00 X52. Z2.",
+            "G71 U1.5 R0.5",
+            "G71 P100 Q200 U0.4 W0.1 F0.25",
+            "N100 G01 X20. F0.15",
+            "N110 Z-10.",
+            "N120 G02 X30. Z-15. R1.",
+            "N200 G01 Z-30.",
+            "G70 P100 Q200",
+        ]))
+
+        arc = rules(findings, "Arc R")
+        self.assertEqual([f["line"] for f in arc], [6])
+
     def test_arc_without_a_centre_is_reported(self):
         engine = LintEngine(make_cfg())
 

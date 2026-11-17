@@ -1584,3 +1584,68 @@ class GCodeParserPatternCycleTests(unittest.TestCase):
         # the cycle -- as after G71.
         self.assertEqual(parser.cycle, "G73")
         self.assertEqual(parser.mode, "G00")
+
+
+class GCodeParserContourWarningTests(unittest.TestCase):
+    """What is wrong inside a cycle contour reaches the warnings, once.
+
+    The contour is read by a parser of its own. Its warnings used to stay
+    there, so an impossible R in the contour was drawn as a straight line and
+    nothing said why.
+    """
+
+    # From (r10, z-10) to (r15, z-15) the chord is 7.0711, half of it 3.5355:
+    # an R1 cannot reach.
+    PROGRAM = "\n".join([
+        "G00 X52. Z2.",
+        "G71 U1.5 R0.5",
+        "G71 P100 Q200 U0.4 W0.1 F0.25",
+        "N100 G01 X20. F0.15",
+        "N110 Z-10.",
+        "N120 G02 X30. Z-15. R1.",
+        "N200 G01 Z-30.",
+        "G70 P100 Q200",
+    ])
+    ARC_LINE = 6
+    TOO_SMALL = {"line": ARC_LINE, "code": "ARC_R_TOO_SMALL",
+                 "message": "R1 is below half the chord (3.5355 mm) — "
+                            "no arc of that radius reaches both endpoints"}
+
+    def warnings(self, code):
+        parser = GCodeParser(chuck_z=-100.0)
+        parser.parse(code)
+        return parser.warnings
+
+    def test_an_impossible_arc_in_the_contour_is_reported_once(self):
+        # Read by the G71 and again by the G70; one warning all the same.
+        self.assertEqual(self.warnings(self.PROGRAM), [self.TOO_SMALL])
+
+    def test_once_also_when_the_main_loop_reads_the_contour_too(self):
+        # Without a depth of cut the cycle leaves the contour blocks to the
+        # main loop, which reads the arc a third time.
+        warnings = self.warnings(self.PROGRAM.replace("G71 U1.5", "G71 U0"))
+        self.assertEqual([w for w in warnings if w["code"] == "ARC_R_TOO_SMALL"],
+                         [self.TOO_SMALL])
+        self.assertIn("CYCLE_NO_DEPTH", [w["code"] for w in warnings])
+
+    def test_an_arc_without_a_centre_in_a_g73_contour(self):
+        warnings = self.warnings("\n".join([
+            "G00 X40. Z2.",
+            "G73 U3. W0. R3",
+            "G73 P10 Q20 U0.4 W0.1 F0.2",
+            "N10 G00 X20.",
+            "G01 Z-10.",
+            "N20 G02 X30. Z-15.",
+        ]))
+        self.assertEqual([(w["line"], w["code"]) for w in warnings], [(6, "ARC_NO_CENTER")])
+
+    def test_a_good_contour_reports_nothing(self):
+        # R10 is above half the chord.
+        self.assertEqual(self.warnings(self.PROGRAM.replace("R1.", "R10.")), [])
+
+    def test_the_same_warning_is_recorded_once(self):
+        parser = GCodeParser()
+        parser._warn(3, "ARC_NO_CENTER", "no centre")
+        parser._warn(3, "ARC_NO_CENTER", "no centre")
+        parser._warn(4, "ARC_NO_CENTER", "no centre")
+        self.assertEqual([w["line"] for w in parser.warnings], [3, 4])
