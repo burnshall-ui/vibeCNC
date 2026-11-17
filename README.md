@@ -207,6 +207,31 @@ ai:
 requests to it fail. `ai.system_prompt` and `ai.generate_prompt` set what a review and
 a generation are told to do.
 
+### Measuring a model: the review eval
+
+Does a model find what the linter finds? `evals/review_eval.py` puts one known fault
+into a copy of your program: G40 taken out of the header, the G50 before G96 removed,
+no retract before M30, F0 on a G71, a decimal point in P/Q, and so on, eleven kinds
+in all. It then sends exactly what **AI ANALYZE** sends and checks whether the answer
+names the fault at the right block:
+
+```bash
+python3 -m evals.review_eval                 # lists the cases, sends nothing
+python3 -m evals.review_eval --run           # asks the model config.yaml names
+python3 -m evals.review_eval --run --model claude-haiku-5-5 --repeat 3
+python3 -m evals.review_eval --rescore _tmp/review_eval/<file>.jsonl
+```
+
+By default it reads `programs/*.nc`; pass files to use others
+(`tests/fixtures/reference.nc` adds compensation and arcs outside a cycle). The linter
+is the ground truth. A fault is used only where the linter reports it on the copy, so the eval
+measures nothing the linter cannot see. Each program is also sent once unchanged, to
+count how much a model reports on a program the linter finds clean. Every answer is
+saved to `_tmp/review_eval/`, so `--rescore` can score them again without paying for
+them twice. A failed call (no credits, wrong key) stops the run. The scoring looks for
+the block's N number or line number and a word for the fault in the same item of the
+answer. It is a heuristic, so read the saved answers before trusting a number.
+
 ### Machine Settings
 ```yaml
 machine:
@@ -276,6 +301,7 @@ vibe_cnc/
 │
 ├── vibe_cnc/
 │   ├── claude_client.py        # AI client (Claude + Ollama)
+│   ├── analysis_prompt.py      # What AI ANALYZE sends (shared with the eval)
 │   ├── gcode_highlighter.py    # Syntax highlighting + editor
 │   ├── gcode_plotter.py        # 2D visualization + live drawing
 │   ├── lint_engine.py          # Policy enforcement
@@ -287,6 +313,9 @@ vibe_cnc/
 ├── tools/
 │   ├── tools.json              # Tool database
 │   └── macros.db               # SQLite macro storage
+│
+├── evals/
+│   └── review_eval.py          # Does a model find the faults the linter knows?
 │
 └── programs/                   # Sample G-Code programs
 ```

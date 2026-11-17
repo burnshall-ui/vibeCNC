@@ -1,5 +1,5 @@
 # vibe_cnc.py — Main program (UI + Wiring) — Vibe CNC
-import os, sys, json, re
+import os, sys, re
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QSize, QTimer, QSettings, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
@@ -16,6 +16,7 @@ from vibe_cnc.tool_model import ToolModel, load_tools_json
 from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
 from vibe_cnc.claude_client import AIClient
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
@@ -1122,33 +1123,12 @@ class Main(QMainWindow):
         mode = self.cfg.data['ai'].get('mode', 'claude')
         # Build context
         selected = self.editor.textCursor().selectedText().replace('\u2029', '\n')
-        snippet = selected if selected.strip() else code[:8000]
-        tools_json = load_tools_json()
-        policies_path = os.path.join(HERE, "policies.md")
-        if os.path.exists(policies_path):
-            with open(policies_path, "r", encoding="utf-8") as f:
-                policies = f.read()
-        else:
-            policies = "No policies found."
-
-        format_rules = """
-IMPORTANT - Formatting:
-- Use HTML tags for structure (displayed in HTML widget)
-- Headings: <b>Heading</b>
-- Paragraphs: Double line breaks <br><br>
-- Lists: Bullet points with • or numbered (1., 2., ...)
-- Code blocks: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>code</pre>
-- NO Markdown (**, ##, etc.) - HTML only!
-
-Example good response:
-<b>Analysis Result:</b><br><br>
-• Line 5: G21 missing in header<br>
-• Line 12: Set G40 before tool change<br><br>
-<b>Recommended Fixes:</b><br>
-1. Extend header with G21<br>
-2. Insert G40 before T-code
-"""
-        prompt = f"Machine: FANUC 0i-TF, Material: 42CrMo4\nPolicies:\n{policies}\nTools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\nCode:\n```\n{snippet}\n```\n\nTask: List rule violations (line/rule/fix). Optional unified diff. No cosmetic changes.\n\n{format_rules}"
+        snippet = selected if selected.strip() else code[:MAX_CODE_CHARS]
+        # The same function builds the prompt for evals/review_eval.py, so
+        # what the eval measures is what this button sends.
+        prompt = build_analysis_prompt(snippet,
+                                       read_policies(os.path.join(HERE, "policies.md")),
+                                       load_tools_json())
         ai_fn = self.ai.ask_claude if mode == 'claude' else self.ai.ask_ollama
         role = "Claude" if mode == 'claude' else "LLM"
         self._start_ai_task("⚙️ AI analysis running...", ai_fn, (prompt, self.ai.review_prompt()), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
