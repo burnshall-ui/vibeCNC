@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSpinBox, QMessageBox, QFileDialog
 )
 
-from vibe_cnc.claude_client import AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL
+from vibe_cnc.claude_client import AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, backend_of
 
 
 class SettingsDialog(QDialog):
@@ -58,8 +58,11 @@ class SettingsDialog(QDialog):
 
         self.ai_mode_combo = QComboBox()
         self.ai_mode_combo.addItems(["claude", "ollama"])
-        current_mode = self.cfg.data.get('ai', {}).get('mode', 'ollama')
-        self.ai_mode_combo.setCurrentText(current_mode)
+        # As the client reads it: a missing mode is Claude, "anthropic" too.
+        # A missing one was taken for Ollama, and saving then switched the app
+        # to Ollama; "anthropic" was shown as "claude" only because that is the
+        # first entry.
+        self.ai_mode_combo.setCurrentText(backend_of(self.cfg.data.get('ai', {})))
         ai_layout.addRow("AI Mode:", self.ai_mode_combo)
 
         self.ai_offline_check = QCheckBox("Offline Mode (no API calls)")

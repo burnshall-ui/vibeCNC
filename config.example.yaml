@@ -52,7 +52,7 @@ policies:
   require_origin: G54
 
 ai:
-  # 'ollama' or 'anthropic'. Set offline: true to run with no backend at all —
+  # 'claude' or 'ollama'. Set offline: true to run with no backend at all —
   # editor, plotter, simulation, lint engine and the libraries all work without.
   mode: ollama
   offline: false

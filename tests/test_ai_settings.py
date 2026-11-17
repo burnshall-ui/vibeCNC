@@ -77,6 +77,31 @@ class TestConnectionTests(unittest.TestCase):
 
         self.assertIsNone(QApplication.overrideCursor())
 
+    def test_the_dialog_shows_the_backend_the_app_will_ask(self):
+        for mode, shown in (("anthropic", "claude"), ("Ollama", "ollama"), ("ollama", "ollama")):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.dialog(mode).ai_mode_combo.currentText(), shown)
+
+    def test_a_config_without_a_mode_is_shown_as_claude(self):
+        # The client takes a missing mode for Claude; the dialog took it for
+        # Ollama, and saving then switched the app to Ollama.
+        dialog = self.dialog("claude")
+        del dialog.cfg.data["ai"]["mode"]
+        fresh = SettingsDialog(dialog.cfg)
+        self.addCleanup(fresh.deleteLater)
+
+        self.assertEqual(fresh.ai_mode_combo.currentText(), "claude")
+
+    def test_anthropic_is_tested_as_claude(self):
+        dialog = self.dialog("anthropic")
+        check_claude = mock.Mock(return_value=(True, "ok"))
+        check_ollama = mock.Mock()
+
+        self.press(dialog, check_claude=check_claude, check_ollama=check_ollama)
+
+        check_claude.assert_called_once()
+        check_ollama.assert_not_called()
+
     def test_the_dialog_offers_the_current_models_when_the_config_names_none(self):
         data = {"machine": {"chuck_z_limit": -5.0, "chuck_diameter": None},
                 "ai": {"mode": "claude", "offline": False, "anthropic": {}, "ollama": {}},

@@ -564,9 +564,9 @@ def load_programs(paths: List[str]) -> Dict[str, str]:
 
 
 def _model_of(settings) -> Tuple[str, str]:
-    from vibe_cnc.claude_client import DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL
+    from vibe_cnc.claude_client import DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, backend_of
     ai = settings.data.get("ai") or {}
-    mode = ai.get("mode", "claude")
+    mode = backend_of(ai)
     if mode == "claude":
         return mode, ((ai.get("anthropic") or {}).get("model") or DEFAULT_CLAUDE_MODEL).strip()
     return mode, ((ai.get("ollama") or {}).get("model") or DEFAULT_OLLAMA_MODEL).strip()
@@ -657,7 +657,8 @@ def main(argv=None) -> int:
     if args.mode:
         ai["mode"] = args.mode          # in memory only; config.yaml is not written
     if args.model:
-        section = "anthropic" if ai.get("mode", "claude") == "claude" else "ollama"
+        from vibe_cnc.claude_client import backend_of
+        section = "anthropic" if backend_of(ai) == "claude" else "ollama"
         ai.setdefault(section, {})["model"] = args.model
     mode, model = _model_of(settings)
 

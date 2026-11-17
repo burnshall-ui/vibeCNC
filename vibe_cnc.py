@@ -17,7 +17,7 @@ from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
-from vibe_cnc.claude_client import AIClient
+from vibe_cnc.claude_client import AIClient, backend_of
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
 from vibe_cnc.gcode_completer import install_completer
@@ -1120,7 +1120,6 @@ class Main(QMainWindow):
             self.status.showMessage("⚠️ Offline Mode", 3000)
             return
 
-        mode = self.cfg.data['ai'].get('mode', 'claude')
         # Build context
         selected = self.editor.textCursor().selectedText().replace('\u2029', '\n')
         snippet = selected if selected.strip() else code[:MAX_CODE_CHARS]
@@ -1129,9 +1128,10 @@ class Main(QMainWindow):
         prompt = build_analysis_prompt(snippet,
                                        read_policies(os.path.join(HERE, "policies.md")),
                                        load_tools_json())
-        ai_fn = self.ai.ask_claude if mode == 'claude' else self.ai.ask_ollama
-        role = "Claude" if mode == 'claude' else "LLM"
-        self._start_ai_task("⚙️ AI analysis running...", ai_fn, (prompt, self.ai.review_prompt()), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
+        # ask() picks the backend, as for a generation. Choosing it here sent
+        # every mode but "claude" to Ollama, "anthropic" included.
+        role = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"
+        self._start_ai_task("⚙️ AI analysis running...", self.ai.ask, (prompt, self.ai.review_prompt()), lambda ok, resp, role=role: self._handle_analyze_response(ok, resp, role))
 
     def action_generate(self):
         """KI: GEN-CODE Button"""
@@ -1172,8 +1172,7 @@ G71 P10 Q20 U0.4 W0.1 D500 F0.25
 """
         enhanced_prompt = user + format_rules
 
-        mode = self.cfg.data['ai'].get('mode', 'claude')
-        who = "Claude" if mode == 'claude' else "LLM"
+        who = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"
         self._start_ai_task("⚙️ AI generating code...", self.ai.ask, (enhanced_prompt, self.ai.generate_prompt()), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
 
     # --- Settings ---

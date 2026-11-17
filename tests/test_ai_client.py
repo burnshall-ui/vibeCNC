@@ -22,7 +22,7 @@ import yaml
 from vibe_cnc import claude_client
 from vibe_cnc.claude_client import (
     AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_GENERATE_PROMPT, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_REVIEW_PROMPT, MAX_OUTPUT_TOKENS_WITHOUT_STREAMING,
+    DEFAULT_REVIEW_PROMPT, MAX_OUTPUT_TOKENS_WITHOUT_STREAMING, backend_of,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -436,6 +436,37 @@ class PromptTests(unittest.TestCase):
                     client.ask("prompt", "instructions")
 
                 called.assert_called_once_with("prompt", "instructions")
+
+    def test_anthropic_is_claude_too(self):
+        # The template and AGENTS.md offered "anthropic"; it went to Ollama.
+        client = AIClient(settings(mode="anthropic"))
+        with mock.patch.object(client, "ask_claude", return_value=(True, "x")) as claude, \
+                mock.patch.object(client, "ask_ollama") as ollama:
+            client.ask("prompt", "instructions")
+
+        claude.assert_called_once_with("prompt", "instructions")
+        ollama.assert_not_called()
+
+    def test_an_unknown_mode_is_said_not_guessed(self):
+        client = AIClient(settings(mode="gpt"))
+        with mock.patch.object(client, "ask_claude") as claude, \
+                mock.patch.object(client, "ask_ollama") as ollama:
+            ok, message = client.ask("prompt")
+
+        self.assertFalse(ok)
+        self.assertIn("ai.mode 'gpt' is not known", message)
+        claude.assert_not_called()
+        ollama.assert_not_called()
+
+    def test_the_backend_a_mode_names(self):
+        for ai, backend in (({}, "claude"), ({"mode": None}, "claude"),
+                            ({"mode": "claude"}, "claude"), ({"mode": " Claude "}, "claude"),
+                            ({"mode": "anthropic"}, "claude"), ({"mode": "ANTHROPIC"}, "claude"),
+                            ({"mode": "ollama"}, "ollama"), ({"mode": "Ollama"}, "ollama"),
+                            ({"mode": "gpt"}, "gpt")):
+            with self.subTest(ai=ai):
+                self.assertEqual(backend_of(ai), backend)
+        self.assertEqual(backend_of(None), "claude")
 
     def test_the_shipped_template_agrees_with_the_built_in_defaults(self):
         with open(os.path.join(ROOT, "config.example.yaml"), encoding="utf-8") as handle:

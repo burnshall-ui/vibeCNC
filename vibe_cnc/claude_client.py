@@ -38,6 +38,19 @@ DEFAULT_GENERATE_PROMPT = (
 )
 
 
+def backend_of(ai: Optional[dict]) -> str:
+    """The backend `ai.mode` names: "claude", "ollama", or the unknown word itself.
+
+    Every place that picks a backend asks this, so they cannot disagree. They
+    did: the main window sent anything but "claude" to Ollama, the settings
+    dialog took a missing mode for "ollama" and the client for "claude".
+    "anthropic" means Claude. config.example.yaml and AGENTS.md offered it,
+    and a config that followed them was sent to Ollama without a word.
+    """
+    mode = str((ai or {}).get("mode") or "claude").strip().lower()
+    return "claude" if mode == "anthropic" else mode
+
+
 def _anthropic():
     """The SDK, imported when first needed.
 
@@ -93,10 +106,14 @@ class AIClient:
     # ---- dispatch --------------------------------------------------------------
 
     def ask(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
-        """Main ask method - delegates to mode-specific handler"""
-        if self._ai().get("mode", "claude") == "claude":
+        """Asks the backend ai.mode names. An unknown mode is said, not guessed."""
+        backend = backend_of(self._ai())
+        if backend == "claude":
             return self.ask_claude(prompt, system)
-        return self.ask_ollama(prompt, system)
+        if backend == "ollama":
+            return self.ask_ollama(prompt, system)
+        return (False, f"❌ config.yaml: ai.mode '{html.escape(backend)}' is not known. "
+                       "Use claude or ollama (Settings → AI).")
 
     # ---- Claude (Anthropic SDK) --------------------------------------------------
 
