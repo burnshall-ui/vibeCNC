@@ -312,6 +312,56 @@ class LintEngineNoseDirectionTests(unittest.TestCase):
         self.assertIn("insert_radius_mm", findings[0]["message"])
 
 
+class LintEngineCycleDecimalPointTests(unittest.TestCase):
+    """P and Q of G70-G76 take no decimal point; the parser would draw them anyway."""
+
+    def _findings(self, code):
+        return [f for f in rules(LintEngine(make_cfg()).run_all(code), "G7x")
+                if "decimal point" in f["message"]]
+
+    def test_a_pointed_peck_depth_in_a_groove_is_reported(self):
+        findings = self._findings("G00 X32. Z-10.\nG75 R0.5\nG75 X26. P1.5 F0.05")
+
+        self.assertEqual([f["line"] for f in findings], [3])
+        self.assertIn("G75: P1.5", findings[0]["message"])
+        self.assertIn("P1500 = 1.5 mm", findings[0]["message"])
+
+    def test_the_same_groove_without_points_is_not(self):
+        self.assertEqual(self._findings("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05"), [])
+
+    def test_a_point_on_r_is_fine(self):
+        # R is the return, the relief or the allowance: millimetres with a point.
+        self.assertEqual(self._findings("G76 P010060 Q100 R0.05\nG76 X17.4 Z-30. R1.5 P1300 Q400 F2."), [])
+
+    def test_every_pointed_word_of_a_thread_is_reported(self):
+        # Q. at the end and .4 without a leading digit both count.
+        findings = self._findings("G76 P010060 Q100. R0.05\nG76 X17.4 Z-30. P1300 Q.4 F2.")
+
+        self.assertEqual([(f["line"], f["message"].split(" has")[0]) for f in findings],
+                         [(1, "G76: Q100."), (2, "G76: Q.4")])
+
+    def test_block_numbers_of_a_roughing_cycle_are_reported_as_block_numbers(self):
+        findings = self._findings("G71 U1.5 R0.5\nG71 P100. Q200 U0.4 W0.1 F0.25")
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("G71: P100.", findings[0]["message"])
+        self.assertIn("block numbers", findings[0]["message"])
+
+    def test_a_block_written_without_spaces_is_read(self):
+        findings = self._findings("N10G75X26.P1.5F0.05")
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("G75: P1.5", findings[0]["message"])
+
+    def test_a_point_inside_a_comment_is_not_code(self):
+        self.assertEqual(self._findings("G75 X26. P1500 F0.05 (NOT P1.5)"), [])
+
+    def test_other_g_codes_are_left_alone(self):
+        # G7 with a further digit is not a cycle, and a non-cycle block is not
+        # this rule's business.
+        self.assertEqual(self._findings("G700 P1.5\nG01 X20. Q1.5"), [])
+
+
 class LintEngineCycleTests(unittest.TestCase):
     """VC-13/VC-15: a cycle that cannot be expanded says why."""
 

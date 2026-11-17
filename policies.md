@@ -17,6 +17,9 @@
 ## Cycles & parameters
 - G7x cycles: no negative or zero depths of cut or feeds; keep value ranges plausible.
 - G76 threading: sensible number of passes and final depth; warn on extreme deviations.
+- `G70`–`G76`: `P` and `Q` are written **without a decimal point**. In G70–G73 they are
+  block numbers (`P100`); in G74–G76 they are amounts in 0.001 mm (`P1500` = 1.5 mm,
+  `Q400` = 0.4 mm). The control rejects a decimal point there with an alarm.
 - `G4` dwell: ≤ 5 s without a comment, otherwise document it.
 
 ## Safe sequence

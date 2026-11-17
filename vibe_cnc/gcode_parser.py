@@ -696,6 +696,9 @@ class GCodeParser:
         is 1.226 mm. G76 is the cycle where it matters: its depths are
         conventionally written as bare integers.
 
+        A real control rejects a point in P and Q with an alarm; it is drawn
+        as the millimetres that were meant, and the lint engine reports it.
+
         The point may come last, Fanuc style: Q3. is 3 mm. The pattern every
         other word is read with drops a trailing point -- harmless for a value,
         but here the point is what decides the unit, and Q3. became 0.003.

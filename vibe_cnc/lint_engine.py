@@ -98,6 +98,7 @@ class LintEngine:
             if re.search(r'\bG76\b', ln):
                 if not re.search(r'\b[FRS]\d', ln):
                     finds.append(self._f(i+1, "G76", "Threading: Check F/S/R parameters (heuristic)."))
+            finds.extend(self._cycle_decimal_points(i+1, ln))
 
         # 6) G41/G42 – simple checks (Fanuc TNR)
         comp_active = False
@@ -216,6 +217,37 @@ class LintEngine:
             return float(m.group(1))
         except ValueError:      # a bare "F" with no number behind it
             return None
+
+    # A G70-G76 block, the cycle number captured; not G700. A digit may come
+    # before the G -- N10G75X26. is a legal block without spaces.
+    _CYCLE_BLOCK = re.compile(r'(?<![A-Z])G7([0-6])(?!\d)', re.IGNORECASE)
+    # A P or Q word written with a decimal point: P1.5, Q3., Q.4.
+    _POINTED_PQ = re.compile(r'(?<![A-Z])([PQ])([-+]?(?:\d+\.\d*|\.\d+))', re.IGNORECASE)
+
+    def _cycle_decimal_points(self, line_no: int, line: str) -> List[Dict]:
+        """P and Q of the cycles G70-G76 take no decimal point.
+
+        In G70-G73 they are block numbers. In G74-G76 they are amounts in the
+        least input increment, 0.001 mm: P1500 is 1.5 mm. A Fanuc control
+        rejects a point there with an alarm; the parser draws P1.5 as the
+        1.5 mm that was meant, so without this the plot looked fine for a
+        program the machine will not run. Taken from training material and
+        forum posts that describe the Fanuc format, not from the manual.
+        """
+        code = self._strip_comments(line)
+        cycle = self._CYCLE_BLOCK.search(code)
+        if not cycle:
+            return []
+        name = f"G7{cycle.group(1)}"
+        if int(cycle.group(1)) <= 3:
+            why = "they name block numbers (N100 → P100)"
+        else:
+            why = "they are written in 0.001 mm (P1500 = 1.5 mm)"
+        return [self._f(line_no, "G7x",
+                        f"{name}: {m.group(1).upper()}{m.group(2)} has a decimal point. "
+                        f"P and Q of this cycle take none — {why}; "
+                        "the control stops with an alarm.")
+                for m in self._POINTED_PQ.finditer(code)]
 
     @staticmethod
     def _dedupe(finds: List[Dict]) -> List[Dict]:
