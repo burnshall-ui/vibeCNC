@@ -5,14 +5,21 @@ set -e
 
 cd "$(dirname "$0")"
 
+# Use an existing .venv (what editors and most tools create) before falling
+# back to venv, so a second environment is not built next to the first one.
+VENV=venv
+if [ -d ".venv" ]; then
+    VENV=.venv
+fi
+
 # Create the virtual environment if it does not exist
-if [ ! -d "venv" ]; then
+if [ ! -d "$VENV" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv venv
+    python3 -m venv "$VENV"
 fi
 
 # Activate
-source venv/bin/activate
+source "$VENV/bin/activate"
 
 # Install dependencies
 echo "Installing dependencies..."
