@@ -52,8 +52,9 @@ policies:
   require_origin: G54
 
 ai:
-  # 'claude' or 'ollama'. Set offline: true to run with no backend at all —
-  # editor, plotter, simulation, lint engine and the libraries all work without.
+  # 'claude', 'ollama' or 'openai' (any server that speaks the OpenAI API, see
+  # below). Set offline: true to run with no backend at all — editor, plotter,
+  # simulation, lint engine and the libraries all work without.
   mode: ollama
   offline: false
 
@@ -98,3 +99,24 @@ ai:
     # think: it would reject the field.
     think: false
     timeout_s: 300
+
+  openai:
+    # Any server that speaks the OpenAI Chat Completions API. The address is
+    # the API root, as a rule ending in /v1:
+    #   OpenAI          https://api.openai.com/v1
+    #   LM Studio       http://localhost:1234/v1
+    #   llama.cpp       http://localhost:8080/v1   (llama-server)
+    #   Ollama          http://localhost:11434/v1  (the native mode above knows more)
+    #   OpenRouter      https://openrouter.ai/api/v1
+    base_url: https://api.openai.com/v1
+    # As the server names it. There is no default; Settings → AI → Test
+    # connection lists what the server offers.
+    model: ''
+    # The variable that holds the key. A local server usually needs none:
+    # leave the variable unset and no key is sent.
+    api_key_env: OPENAI_API_KEY
+    timeout_s: 180
+    # Neither of these is sent unless set; a server that does not know one may
+    # reject the request for it.
+    # max_output_tokens: 16000     # sent as max_completion_tokens
+    # reasoning_effort: medium     # OpenAI reasoning models: low, medium, high, ...

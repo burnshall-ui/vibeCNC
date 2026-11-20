@@ -564,12 +564,14 @@ def load_programs(paths: List[str]) -> Dict[str, str]:
 
 
 def _model_of(settings) -> Tuple[str, str]:
-    from vibe_cnc.claude_client import DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, backend_of
+    from vibe_cnc.claude_client import (DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, SECTION_OF,
+                                        backend_of)
     ai = settings.data.get("ai") or {}
     mode = backend_of(ai)
-    if mode == "claude":
-        return mode, ((ai.get("anthropic") or {}).get("model") or DEFAULT_CLAUDE_MODEL).strip()
-    return mode, ((ai.get("ollama") or {}).get("model") or DEFAULT_OLLAMA_MODEL).strip()
+    # The OpenAI-compatible backend has no default model; an unknown mode none either.
+    default = {"claude": DEFAULT_CLAUDE_MODEL, "ollama": DEFAULT_OLLAMA_MODEL}.get(mode, "")
+    section = ai.get(SECTION_OF.get(mode, "")) or {}
+    return mode, str(section.get("model") or default).strip()
 
 
 def run(cases, client, mode: str, model: str, repeat: int, out_path: str,
@@ -617,7 +619,7 @@ def main(argv=None) -> int:
     parser.add_argument("programs", nargs="*",
                         help="G-code files (default: programs/*.nc)")
     parser.add_argument("--run", action="store_true", help="ask the model; costs credits")
-    parser.add_argument("--mode", choices=("claude", "ollama"), help="instead of ai.mode")
+    parser.add_argument("--mode", choices=("claude", "ollama", "openai"), help="instead of ai.mode")
     parser.add_argument("--model", help="instead of the model in config.yaml")
     parser.add_argument("--faults", help="comma-separated, from: " + ", ".join(FAULTS_BY_NAME))
     parser.add_argument("--no-clean", action="store_true",
@@ -657,9 +659,10 @@ def main(argv=None) -> int:
     if args.mode:
         ai["mode"] = args.mode          # in memory only; config.yaml is not written
     if args.model:
-        from vibe_cnc.claude_client import backend_of
-        section = "anthropic" if backend_of(ai) == "claude" else "ollama"
-        ai.setdefault(section, {})["model"] = args.model
+        from vibe_cnc.claude_client import SECTION_OF, backend_of
+        if backend_of(ai) not in SECTION_OF:
+            parser.error(f"ai.mode '{backend_of(ai)}' is not known; use --mode")
+        ai.setdefault(SECTION_OF[backend_of(ai)], {})["model"] = args.model
     mode, model = _model_of(settings)
 
     cases, left_out = build_cases(load_programs(paths), LintEngine(settings), faults)
@@ -678,9 +681,11 @@ def main(argv=None) -> int:
         if args.show_prompt:
             print(f"\n--- prompt of {cases[0].program} {cases[0].fault} ---\n{prompts[0]}")
         calls = len(cases) * args.repeat
-        print(f"\nNothing was sent. --run asks {model} ({mode}) {calls} time(s).")
+        print(f"\nNothing was sent. --run asks {model or '(no model set)'} ({mode}) {calls} time(s).")
         return 0
 
+    if not model:
+        parser.error(f"no model for {mode}: set it in config.yaml (Settings → AI) or pass --model")
     out_path = args.out or os.path.join(
         OUT_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-{re.sub(r'[^A-Za-z0-9.-]+', '_', model)}.jsonl")
     print(f"Asking {model} ({mode}) {len(cases) * args.repeat} time(s); answers go to {out_path}")

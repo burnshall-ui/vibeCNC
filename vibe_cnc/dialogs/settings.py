@@ -9,7 +9,9 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSpinBox, QMessageBox, QFileDialog
 )
 
-from vibe_cnc.claude_client import AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, backend_of
+from vibe_cnc.claude_client import (
+    AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, backend_of,
+)
 
 
 class SettingsDialog(QDialog):
@@ -57,7 +59,10 @@ class SettingsDialog(QDialog):
         ai_layout = QFormLayout(ai_tab)
 
         self.ai_mode_combo = QComboBox()
-        self.ai_mode_combo.addItems(["claude", "ollama"])
+        self.ai_mode_combo.addItems(list(BACKENDS))
+        self.ai_mode_combo.setToolTip("claude: Anthropic's API. ollama: an Ollama server. openai: any "
+                                      "server that speaks the OpenAI API (OpenAI, LM Studio, "
+                                      "llama.cpp, vLLM, OpenRouter, ...).")
         # As the client reads it: a missing mode is Claude, "anthropic" too.
         # A missing one was taken for Ollama, and saving then switched the app
         # to Ollama; "anthropic" was shown as "claude" only because that is the
@@ -81,11 +86,28 @@ class SettingsDialog(QDialog):
         )
         ai_layout.addRow("Ollama Model:", self.ollama_model_input)
 
-        # Asks the Models API (Claude) or the tag list (Ollama) about the model
-        # typed above. Nothing is run and nothing is billed.
+        # The address matters here as it does not for the others: it picks
+        # the service. No model is filled in for it -- what a server offers
+        # depends on the server, and Test connection lists it.
+        openai = self.cfg.data.get('ai', {}).get('openai') or {}
+        self.openai_url_input = QLineEdit()
+        self.openai_url_input.setText(openai.get('base_url') or DEFAULT_OPENAI_BASE_URL)
+        self.openai_url_input.setToolTip("The API root, usually ending in /v1. LM Studio: "
+                                         "http://localhost:1234/v1, llama.cpp: http://localhost:8080/v1")
+        ai_layout.addRow("OpenAI-compatible URL:", self.openai_url_input)
+
+        self.openai_model_input = QLineEdit()
+        self.openai_model_input.setText(openai.get('model') or "")
+        self.openai_model_input.setPlaceholderText("as the server names it -- Test connection lists them")
+        ai_layout.addRow("OpenAI-compatible Model:", self.openai_model_input)
+
+        # Asks the Models API (Claude), the tag list (Ollama) or the model
+        # list (OpenAI-compatible) about the model typed above. Nothing is run
+        # and nothing is billed.
         self.btn_test_ai = QPushButton("Test connection")
         self.btn_test_ai.setToolTip("Check the selected AI mode: is there a working key (Claude) or a "
-                                    "running server (Ollama), and can it use the model typed above?")
+                                    "running server (Ollama, OpenAI-compatible), and does it offer "
+                                    "the model typed above?")
         self.btn_test_ai.clicked.connect(self._test_ai)
         ai_layout.addRow("", self.btn_test_ai)
 
@@ -145,13 +167,17 @@ class SettingsDialog(QDialog):
     def _test_ai(self):
         """Tests the AI mode and model as they stand in the dialog, saved or not."""
         client = AIClient(self.cfg)
-        if self.ai_mode_combo.currentText() == "claude":
-            check, model = client.check_claude, self.claude_model_input.text().strip()
+        mode = self.ai_mode_combo.currentText()
+        if mode == "claude":
+            check, args = client.check_claude, (self.claude_model_input.text().strip(),)
+        elif mode == "openai":
+            check, args = client.check_openai, (self.openai_model_input.text().strip(),
+                                                self.openai_url_input.text().strip())
         else:
-            check, model = client.check_ollama, self.ollama_model_input.text().strip()
+            check, args = client.check_ollama, (self.ollama_model_input.text().strip(),)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            ok, message = check(model)
+            ok, message = check(*args)
         finally:
             QApplication.restoreOverrideCursor()
         # The messages are HTML, like the rest of the chat.
@@ -169,10 +195,15 @@ class SettingsDialog(QDialog):
         self.cfg.data['machine']['chuck_z_limit'] = self.chuck_z_input.value()
         diameter = self.chuck_diameter_input.value()
         self.cfg.data['machine']['chuck_diameter'] = diameter if diameter > 0 else None
-        self.cfg.data['ai']['mode'] = self.ai_mode_combo.currentText()
-        self.cfg.data['ai']['offline'] = self.ai_offline_check.isChecked()
-        self.cfg.data['ai']['anthropic']['model'] = self.claude_model_input.text().strip()
-        self.cfg.data['ai']['ollama']['model'] = self.ollama_model_input.text().strip()
+        ai = self.cfg.data.setdefault('ai', {})
+        ai['mode'] = self.ai_mode_combo.currentText()
+        ai['offline'] = self.ai_offline_check.isChecked()
+        # A config from before a backend existed has no section for it.
+        ai.setdefault('anthropic', {})['model'] = self.claude_model_input.text().strip()
+        ai.setdefault('ollama', {})['model'] = self.ollama_model_input.text().strip()
+        openai = ai.setdefault('openai', {})
+        openai['base_url'] = self.openai_url_input.text().strip() or DEFAULT_OPENAI_BASE_URL
+        openai['model'] = self.openai_model_input.text().strip()
         self.cfg.data['paths']['camotics_exe'] = self.camotics_path_input.text().strip()
         self.cfg.data['paths']['sim_share'] = self.vm_share_input.text().strip()
         self.cfg.data['ui']['font_base_pt'] = self.font_size_input.value()

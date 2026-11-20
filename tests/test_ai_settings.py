@@ -12,7 +12,8 @@ from unittest import mock
 import yaml
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from vibe_cnc.claude_client import AIClient
+from vibe_cnc.claude_client import AIClient, BACKENDS
+from vibe_cnc.dialogs import settings as settings_module
 from vibe_cnc.dialogs.settings import SettingsDialog
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -111,6 +112,62 @@ class TestConnectionTests(unittest.TestCase):
 
         self.assertEqual(dialog.claude_model_input.text(), "claude-sonnet-5-5")
         self.assertEqual(dialog.ollama_model_input.text(), "qwen3.8:27b")
+        # No section at all: a config from before the backend existed.
+        self.assertEqual(dialog.openai_url_input.text(), "https://api.openai.com/v1")
+        self.assertEqual(dialog.openai_model_input.text(), "")
+
+    def test_every_backend_can_be_chosen(self):
+        combo = self.dialog("claude").ai_mode_combo
+
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], list(BACKENDS))
+
+    def test_openai_is_tested_with_the_model_and_the_address_typed_in_the_dialog(self):
+        dialog = self.dialog("openai")
+        dialog.openai_url_input.setText(" http://localhost:1234/v1 ")
+        dialog.openai_model_input.setText("qwen/qwen3-4b")
+        check_openai = mock.Mock(return_value=(True, "✅ localhost:1234 answers."))
+        check_claude, check_ollama = mock.Mock(), mock.Mock()
+
+        info, _warning = self.press(dialog, check_openai=check_openai, check_claude=check_claude,
+                                    check_ollama=check_ollama)
+
+        check_openai.assert_called_once_with("qwen/qwen3-4b", "http://localhost:1234/v1")
+        check_claude.assert_not_called()
+        check_ollama.assert_not_called()
+        info.assert_called_once()
+
+    def save(self, dialog):
+        """Saves without touching the real config.yaml; returns what would be written."""
+        with mock.patch.object(settings_module, "open", mock.mock_open(), create=True), \
+                mock.patch.object(settings_module.yaml, "dump") as dump, \
+                mock.patch.object(QMessageBox, "information"), \
+                mock.patch.object(QMessageBox, "critical") as critical:
+            dialog.save_settings()
+        critical.assert_not_called()
+        return dump.call_args.args[0]
+
+    def test_saving_openai_writes_its_section_into_a_config_that_had_none(self):
+        dialog = self.dialog("claude")
+        del dialog.cfg.data["ai"]["openai"]
+        fresh = SettingsDialog(dialog.cfg)
+        self.addCleanup(fresh.deleteLater)
+        fresh.ai_mode_combo.setCurrentText("openai")
+        fresh.openai_url_input.setText("http://localhost:1234/v1")
+        fresh.openai_model_input.setText(" qwen/qwen3-4b ")
+
+        written = self.save(fresh)
+
+        self.assertEqual(written["ai"]["mode"], "openai")
+        self.assertEqual(written["ai"]["openai"]["base_url"], "http://localhost:1234/v1")
+        self.assertEqual(written["ai"]["openai"]["model"], "qwen/qwen3-4b")
+
+    def test_an_emptied_address_is_saved_as_openai_s(self):
+        dialog = self.dialog("openai")
+        dialog.openai_url_input.setText("  ")
+
+        written = self.save(dialog)
+
+        self.assertEqual(written["ai"]["openai"]["base_url"], "https://api.openai.com/v1")
 
 
 if __name__ == "__main__":

@@ -325,6 +325,19 @@ class AssistBoxKeyTests(PanelCase):
         self.assertTrue(self.wait_for_chat(win, "CLAUDE-REPLY"))
         self.assertEqual(calls, ["claude"])
 
+    def test_a_review_in_openai_mode_goes_to_the_openai_compatible_server(self):
+        win = self.window()
+        win.cfg.data["ai"].update({"offline": False, "mode": "openai"})
+        calls = []
+        win.ai.ask_openai = lambda prompt, system=None: calls.append("openai") or (True, "OPENAI-REPLY")
+        win.ai.ask_claude = lambda prompt, system=None: calls.append("claude") or (True, "CLAUDE-REPLY")
+        win.ai.ask_ollama = lambda prompt, system=None: calls.append("ollama") or (True, "OLLAMA-REPLY")
+
+        win.action_analyze()
+
+        self.assertTrue(self.wait_for_chat(win, "OPENAI-REPLY"))
+        self.assertEqual(calls, ["openai"])
+
     def test_a_generation_is_sent_with_the_generation_instructions_not_the_review_ones(self):
         # It used to go out with the review prompt, so asking for G-code was
         # answered with a list of rule violations.

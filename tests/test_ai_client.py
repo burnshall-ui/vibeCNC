@@ -1,4 +1,5 @@
-"""The AI backends: Claude through the Anthropic SDK, Ollama over HTTP.
+"""The AI backends: Claude through the Anthropic SDK, Ollama and any
+OpenAI-compatible server over HTTP.
 
 Claude is tested against the real SDK with a transport that answers like the
 API and records what it was sent, so the request on the wire is what is checked,
@@ -21,8 +22,9 @@ import yaml
 
 from vibe_cnc import claude_client
 from vibe_cnc.claude_client import (
-    AIClient, DEFAULT_CLAUDE_MODEL, DEFAULT_GENERATE_PROMPT, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_REVIEW_PROMPT, MAX_OUTPUT_TOKENS_WITHOUT_STREAMING, backend_of,
+    AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_GENERATE_PROMPT, DEFAULT_OLLAMA_MODEL,
+    DEFAULT_OPENAI_BASE_URL, DEFAULT_REVIEW_PROMPT, MAX_OUTPUT_TOKENS_WITHOUT_STREAMING, SECTION_OF,
+    backend_of,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -429,7 +431,8 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(AIClient(settings(generate_prompt="G")).generate_prompt(), "G")
 
     def test_ask_hands_the_instructions_to_whichever_backend_is_chosen(self):
-        for mode, backend in (("claude", "ask_claude"), ("ollama", "ask_ollama")):
+        for mode, backend in (("claude", "ask_claude"), ("ollama", "ask_ollama"),
+                              ("openai", "ask_openai")):
             with self.subTest(mode=mode):
                 client = AIClient(settings(mode=mode))
                 with mock.patch.object(client, backend, return_value=(True, "x")) as called:
@@ -450,19 +453,23 @@ class PromptTests(unittest.TestCase):
     def test_an_unknown_mode_is_said_not_guessed(self):
         client = AIClient(settings(mode="gpt"))
         with mock.patch.object(client, "ask_claude") as claude, \
-                mock.patch.object(client, "ask_ollama") as ollama:
+                mock.patch.object(client, "ask_ollama") as ollama, \
+                mock.patch.object(client, "ask_openai") as openai:
             ok, message = client.ask("prompt")
 
         self.assertFalse(ok)
         self.assertIn("ai.mode 'gpt' is not known", message)
+        self.assertIn("openai", message)
         claude.assert_not_called()
         ollama.assert_not_called()
+        openai.assert_not_called()
 
     def test_the_backend_a_mode_names(self):
         for ai, backend in (({}, "claude"), ({"mode": None}, "claude"),
                             ({"mode": "claude"}, "claude"), ({"mode": " Claude "}, "claude"),
                             ({"mode": "anthropic"}, "claude"), ({"mode": "ANTHROPIC"}, "claude"),
                             ({"mode": "ollama"}, "ollama"), ({"mode": "Ollama"}, "ollama"),
+                            ({"mode": "openai"}, "openai"), ({"mode": " OpenAI"}, "openai"),
                             ({"mode": "gpt"}, "gpt")):
             with self.subTest(ai=ai):
                 self.assertEqual(backend_of(ai), backend)
@@ -477,6 +484,17 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(ai["ollama"]["model"], DEFAULT_OLLAMA_MODEL)
         self.assertLessEqual(ai["anthropic"]["max_output_tokens"], MAX_OUTPUT_TOKENS_WITHOUT_STREAMING)
         self.assertIn(ai["anthropic"]["effort"], ("low", "medium", "high", "xhigh", "max"))
+        self.assertEqual(ai["openai"]["base_url"], DEFAULT_OPENAI_BASE_URL)
+        # No model is guessed for a server nobody knows yet.
+        self.assertEqual(ai["openai"]["model"], "")
+
+    def test_every_backend_has_a_section_in_the_template(self):
+        with open(os.path.join(ROOT, "config.example.yaml"), encoding="utf-8") as handle:
+            ai = yaml.safe_load(handle)["ai"]
+
+        self.assertEqual(set(SECTION_OF), set(BACKENDS))
+        for backend in BACKENDS:
+            self.assertIn(SECTION_OF[backend], ai, backend)
 
 
 def ollama_answer(content="Line 5: G21 missing", **message):
@@ -651,6 +669,397 @@ class OllamaCheckTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("nas.local:11434", text)
+
+
+# ---- OpenAI-compatible --------------------------------------------------------------
+
+def http(status, body=None, text=None, headers=None):
+    """A real requests.Response, so headers are read as requests reads them."""
+    response = requests.models.Response()
+    response.status_code = status
+    response._content = (json.dumps(body) if body is not None else (text or "")).encode("utf-8")
+    response.encoding = "utf-8"
+    response.headers.update(headers or {})
+    return response
+
+
+def completion(content="Line 5: G21 missing", finish="stop", **message):
+    return http(200, {"id": "chatcmpl-1", "object": "chat.completion", "model": "m",
+                      "choices": [{"index": 0, "finish_reason": finish,
+                                   "message": dict({"role": "assistant", "content": content},
+                                                   **message)}]})
+
+
+def openai_failure(status, text="boom", code=None, kind="invalid_request_error", headers=None):
+    return http(status, {"error": {"message": text, "type": kind, "param": None, "code": code}},
+                headers=headers)
+
+
+class OpenAICase(unittest.TestCase):
+    URL = "http://localhost:1234/v1"
+
+    def ask(self, response, system=None, env=None, **openai):
+        section = dict({"base_url": self.URL, "model": "qwen/qwen3-4b"}, **openai)
+        client = AIClient(settings(mode="openai", openai=section))
+        effect = response if isinstance(response, Exception) else [response]
+        environment = {"OPENAI_API_KEY": ""}
+        environment.update(env or {})
+        with mock.patch.object(claude_client.requests, "post", side_effect=effect) as post, \
+                mock.patch.dict(os.environ, environment):
+            result = client.ask_openai("Review this", system)
+        return result, post
+
+    @staticmethod
+    def sent(post):
+        return post.call_args.kwargs["json"]
+
+
+class OpenAIRequestTests(OpenAICase):
+    def test_it_posts_a_chat_completion_to_the_api_root(self):
+        _result, post = self.ask(completion())
+
+        self.assertEqual(post.call_args.args[0], "http://localhost:1234/v1/chat/completions")
+        self.assertEqual(self.sent(post)["model"], "qwen/qwen3-4b")
+        self.assertIs(self.sent(post)["stream"], False)
+
+    def test_the_instructions_come_before_the_prompt(self):
+        _result, post = self.ask(completion(), system="Be strict.")
+
+        self.assertEqual(self.sent(post)["messages"], [
+            {"role": "system", "content": "Be strict."},
+            {"role": "user", "content": "Review this"},
+        ])
+
+    def test_without_instructions_there_is_no_system_message(self):
+        _result, post = self.ask(completion())
+
+        self.assertEqual([m["role"] for m in self.sent(post)["messages"]], ["user"])
+
+    def test_a_whole_endpoint_is_cut_back_to_the_root(self):
+        for given in ("http://localhost:1234/v1/chat/completions", "http://localhost:1234/v1/",
+                      " http://localhost:1234/v1/models "):
+            with self.subTest(given=given):
+                _result, post = self.ask(completion(), base_url=given)
+
+                self.assertEqual(post.call_args.args[0], "http://localhost:1234/v1/chat/completions")
+
+    def test_without_an_address_it_is_openai(self):
+        client = AIClient(settings(mode="openai", openai={"model": "some-model"}))
+        with mock.patch.object(claude_client.requests, "post", return_value=completion()) as post, \
+                mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+            client.ask_openai("x")
+
+        self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/chat/completions")
+
+    def test_the_key_is_sent_from_the_configured_variable(self):
+        _result, post = self.ask(completion(), api_key_env="LMS_KEY", env={"LMS_KEY": " sk-lms "})
+
+        self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer sk-lms"})
+
+    def test_without_a_key_no_authorization_is_sent(self):
+        # A local server needs none, and an empty "Bearer " can be refused.
+        _result, post = self.ask(completion())
+
+        self.assertEqual(post.call_args.kwargs["headers"], {})
+
+    def test_the_optional_fields_are_only_sent_when_configured(self):
+        _result, post = self.ask(completion())
+        for field in ("max_completion_tokens", "max_tokens", "reasoning_effort"):
+            self.assertNotIn(field, self.sent(post))
+
+        _result, post = self.ask(completion(), max_output_tokens=4000, reasoning_effort="low")
+        self.assertEqual(self.sent(post)["max_completion_tokens"], 4000)
+        self.assertEqual(self.sent(post)["reasoning_effort"], "low")
+        # The old name is refused by OpenAI's reasoning models.
+        self.assertNotIn("max_tokens", self.sent(post))
+
+    def test_no_sampling_parameters_are_sent(self):
+        _result, post = self.ask(completion())
+
+        self.assertEqual(set(self.sent(post)), {"model", "messages", "stream"})
+
+    def test_the_timeout_comes_from_the_config(self):
+        _result, post = self.ask(completion(), timeout_s=45)
+
+        self.assertEqual(post.call_args.kwargs["timeout"], 45.0)
+
+    def test_without_a_model_nothing_is_sent_and_it_says_where_to_set_one(self):
+        (ok, text), post = self.ask(completion(), model="  ")
+
+        self.assertFalse(ok)
+        self.assertIn("ai.openai.model", text)
+        self.assertIn("Test connection", text)
+        post.assert_not_called()
+
+    def test_a_number_that_is_not_one_is_a_config_error(self):
+        (ok, text), post = self.ask(completion(), max_output_tokens="lots")
+
+        self.assertFalse(ok)
+        self.assertIn("Config error", text)
+        post.assert_not_called()
+
+
+class OpenAIAnswerTests(OpenAICase):
+    def test_the_answer_text_is_returned(self):
+        result, _post = self.ask(completion("Line 5: G21 missing"))
+
+        self.assertEqual(result, (True, "Line 5: G21 missing"))
+
+    def test_the_thinking_beside_the_answer_is_not_shown(self):
+        result, _post = self.ask(completion("Line 5", reasoning_content="Let me think..."))
+
+        self.assertEqual(result, (True, "Line 5"))
+
+    def test_text_in_parts_is_joined(self):
+        result, _post = self.ask(completion([{"type": "text", "text": "Line 5: "},
+                                             {"type": "text", "text": "G21 missing"}]))
+
+        self.assertEqual(result, (True, "Line 5: G21 missing"))
+
+    def test_an_answer_cut_off_at_the_limit_says_so(self):
+        (ok, text), _post = self.ask(completion("Line 5: G2", finish="length"))
+
+        self.assertTrue(ok)
+        self.assertTrue(text.startswith("Line 5: G2"))
+        self.assertIn("cut off", text)
+        self.assertIn("ai.openai.max_output_tokens", text)
+
+    def test_a_limit_used_up_by_reasoning_says_so(self):
+        (ok, text), _post = self.ask(completion(None, finish="length", reasoning="Hmm..."))
+
+        self.assertFalse(ok)
+        self.assertIn("still reasoning", text)
+        self.assertIn("max_output_tokens", text)
+
+    def test_an_answer_that_was_only_reasoning_says_so(self):
+        (ok, text), _post = self.ask(completion("", reasoning_content="Hmm, let me see..."))
+
+        self.assertFalse(ok)
+        self.assertIn("only reasoned", text)
+
+    def test_a_refusal_is_reported_with_what_the_model_said(self):
+        (ok, text), _post = self.ask(completion(None, refusal="I can't help with <that>."))
+
+        self.assertFalse(ok)
+        self.assertIn("declined", text)
+        self.assertIn("&lt;that&gt;", text)
+
+    def test_a_content_filter_is_reported(self):
+        (ok, text), _post = self.ask(completion("", finish="content_filter"))
+
+        self.assertFalse(ok)
+        self.assertIn("content filter", text)
+
+    def test_an_empty_answer_is_not_reported_as_success(self):
+        (ok, text), _post = self.ask(completion(""))
+
+        self.assertFalse(ok)
+        self.assertIn("no text", text)
+
+    def test_an_answer_without_choices_is_not_taken_for_one(self):
+        (ok, text), _post = self.ask(http(200, {"object": "list", "data": []}))
+
+        self.assertFalse(ok)
+        self.assertIn("no choices", text)
+
+    def test_a_page_that_is_not_json_points_at_the_address(self):
+        (ok, text), _post = self.ask(http(200, text="<html>LM Studio</html>"))
+
+        self.assertFalse(ok)
+        self.assertIn("/v1", text)
+
+
+class OpenAIErrorTests(OpenAICase):
+    def test_a_missing_key_says_which_variable_to_set(self):
+        (ok, text), _post = self.ask(openai_failure(401, "Missing bearer authentication"),
+                                     api_key_env="OPENROUTER_API_KEY")
+
+        self.assertFalse(ok)
+        self.assertIn("OPENROUTER_API_KEY is not set", text)
+
+    def test_a_wrong_key_says_it_was_rejected(self):
+        (ok, text), _post = self.ask(openai_failure(401, "Incorrect API key provided"),
+                                     env={"OPENAI_API_KEY": "sk-wrong"})
+
+        self.assertFalse(ok)
+        self.assertIn("rejected", text)
+        self.assertIn("OPENAI_API_KEY", text)
+
+    def test_an_unknown_model_names_itself(self):
+        (ok, text), _post = self.ask(openai_failure(
+            404, "The model `gpt-9` does not exist or you do not have access to it.",
+            code="model_not_found"), model="gpt-9")
+
+        self.assertFalse(ok)
+        self.assertIn("model 'gpt-9' was not found", text)
+        self.assertIn("Test connection", text)
+
+    def test_a_server_message_without_a_full_stop_does_not_run_into_the_next_sentence(self):
+        (_ok, text), _post = self.ask(openai_failure(404, "model nope not found"), model="nope")
+
+        self.assertIn("model nope not found. Test connection", text)
+
+    def test_a_wrong_address_says_what_the_root_looks_like(self):
+        (ok, text), _post = self.ask(http(404, text="File Not Found"), base_url="http://localhost:8080")
+
+        self.assertFalse(ok)
+        self.assertIn("nothing found", text)
+        self.assertIn("/v1", text)
+
+    def test_an_account_without_credit_is_told_so(self):
+        (ok, text), _post = self.ask(openai_failure(
+            429, "You exceeded your current quota, please check your plan and billing details.",
+            code="insufficient_quota", kind="insufficient_quota"))
+
+        self.assertFalse(ok)
+        self.assertIn("no quota or credit", text)
+        self.assertIn("billing", text)
+
+    def test_a_rate_limit_says_how_long_to_wait(self):
+        (ok, text), _post = self.ask(openai_failure(429, "Rate limit reached", code="rate_limit_exceeded",
+                                                    headers={"Retry-After": "20"}))
+
+        self.assertFalse(ok)
+        self.assertIn("rate limit", text)
+        self.assertIn("20 s", text)
+
+    def test_a_rejected_optional_field_says_to_remove_it(self):
+        (ok, text), _post = self.ask(openai_failure(400, "Unrecognized request argument: reasoning_effort"),
+                                     reasoning_effort="high")
+
+        self.assertFalse(ok)
+        self.assertIn("Unrecognized request argument", text)
+        self.assertIn("ai.openai.reasoning_effort", text)
+
+    def test_a_bad_request_without_optional_fields_gives_no_such_hint(self):
+        (ok, text), _post = self.ask(openai_failure(400, "messages is required"))
+
+        self.assertFalse(ok)
+        self.assertNotIn("remove it", text)
+
+    def test_a_server_error_shows_its_status_and_what_it_said(self):
+        (ok, text), _post = self.ask(openai_failure(503, "Model is loading", kind="server_error"))
+
+        self.assertFalse(ok)
+        self.assertIn("503", text)
+        self.assertIn("Model is loading", text)
+
+    def test_the_messages_of_other_servers_are_read_too(self):
+        for response, said in ((http(500, {"error": "model crashed"}), "model crashed"),
+                               (http(422, {"detail": "field required"}), "field required"),
+                               (http(502, text="Bad Gateway"), "Bad Gateway")):
+            with self.subTest(said=said):
+                (ok, text), _post = self.ask(response)
+
+                self.assertFalse(ok)
+                self.assertIn(said, text)
+
+    def test_the_request_id_is_shown_so_it_can_be_reported(self):
+        (_ok, text), _post = self.ask(openai_failure(500, "boom", headers={"X-Request-Id": "req_abc"}))
+
+        self.assertIn("req_abc", text)
+
+    def test_markup_in_a_server_message_cannot_reach_the_chat(self):
+        (_ok, text), _post = self.ask(openai_failure(400, "<b>bad</b>"))
+
+        self.assertNotIn("<b>", text)
+        self.assertIn("&lt;b&gt;", text)
+
+    def test_a_server_that_is_not_running_is_named(self):
+        (ok, text), _post = self.ask(requests.exceptions.ConnectionError())
+
+        self.assertFalse(ok)
+        self.assertIn("localhost:1234", text)
+        self.assertIn("ai.openai.base_url", text)
+
+    def test_a_timeout_names_the_limit_and_the_setting(self):
+        (ok, text), _post = self.ask(requests.exceptions.Timeout(), timeout_s=45)
+
+        self.assertFalse(ok)
+        self.assertIn("45", text)
+        self.assertIn("ai.openai.timeout_s", text)
+
+
+class OpenAICheckTests(unittest.TestCase):
+    def check(self, response, model=None, base_url=None, env=None, **openai):
+        client = AIClient(settings(openai=dict({"base_url": "http://nas.local:1234/v1",
+                                                 "model": "saved-model"}, **openai)))
+        effect = response if isinstance(response, Exception) else None
+        environment = {"OPENAI_API_KEY": ""}
+        environment.update(env or {})
+        with mock.patch.object(claude_client.requests, "get",
+                               side_effect=effect, return_value=response) as get, \
+                mock.patch.dict(os.environ, environment):
+            return client.check_openai(model, base_url), get
+
+    @staticmethod
+    def models(*ids):
+        return http(200, {"object": "list", "data": [{"id": i, "object": "model"} for i in ids]})
+
+    def test_it_asks_the_model_list_of_the_server_with_the_key(self):
+        _result, get = self.check(self.models("saved-model"), env={"OPENAI_API_KEY": "sk-x"})
+
+        self.assertEqual(get.call_args.args[0], "http://nas.local:1234/v1/models")
+        self.assertEqual(get.call_args.kwargs["headers"], {"Authorization": "Bearer sk-x"})
+
+    def test_it_checks_what_is_typed_not_what_is_saved(self):
+        (ok, _text), get = self.check(self.models("typed-model"), model="typed-model",
+                                      base_url="http://other:8080/v1/")
+
+        self.assertTrue(ok)
+        self.assertEqual(get.call_args.args[0], "http://other:8080/v1/models")
+
+    def test_an_offered_model_is_confirmed_without_claiming_more(self):
+        (ok, text), _get = self.check(self.models("a", "saved-model"))
+
+        self.assertTrue(ok)
+        self.assertIn("offers model 'saved-model'", text)
+        self.assertIn("quota", text)
+
+    def test_a_model_that_is_not_offered_says_what_is(self):
+        (ok, text), _get = self.check(self.models("llama-3.2-3b", "qwen3-4b"), model="gpt-9")
+
+        self.assertFalse(ok)
+        self.assertIn("does not offer model 'gpt-9'", text)
+        self.assertIn("llama-3.2-3b, qwen3-4b", text)
+
+    def test_without_a_model_it_lists_what_there_is(self):
+        (ok, text), _get = self.check(self.models("qwen3-4b"), model="")
+
+        self.assertFalse(ok)
+        self.assertIn("no model is entered", text)
+        self.assertIn("qwen3-4b", text)
+
+    def test_a_long_list_is_cut_short_and_counted(self):
+        (_ok, text), _get = self.check(self.models(*(f"m{n}" for n in range(300))), model="x")
+
+        self.assertIn("m19", text)
+        self.assertNotIn("m20,", text)
+        self.assertIn("300 in all", text)
+
+    def test_a_wrong_address_says_what_the_root_looks_like(self):
+        (ok, text), _get = self.check(http(404, text="Not Found"), base_url="http://nas.local:1234")
+
+        self.assertFalse(ok)
+        self.assertIn("/v1", text)
+
+    def test_a_key_the_server_wants_is_asked_for(self):
+        (ok, text), _get = self.check(openai_failure(401, "Missing bearer authentication"))
+
+        self.assertFalse(ok)
+        self.assertIn("OPENAI_API_KEY is not set", text)
+
+    def test_a_server_that_does_not_answer_is_named(self):
+        (ok, text), _get = self.check(requests.exceptions.ConnectionError())
+
+        self.assertFalse(ok)
+        self.assertIn("nas.local:1234", text)
+
+    def test_an_answer_that_is_not_a_model_list_is_not_taken_for_one(self):
+        (ok, text), _get = self.check(http(200, text="<html>router login</html>"))
+
+        self.assertFalse(ok)
+        self.assertIn("not with a model list", text)
 
 
 if __name__ == "__main__":

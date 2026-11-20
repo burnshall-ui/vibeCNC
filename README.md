@@ -41,7 +41,7 @@
 - **Canned Cycles** - G71/G72 roughing, G73 pattern repeating, G70 finishing (drawn in cyan), G76 and G92 threading (drawn in yellow), G75 grooving and G74 face grooving or peck drilling are expanded into the moves they make and played back one at a time; every cycle from G70 to G76 is drawn. G73 cuts the contour between P and Q R times, each pass a copy of it shifted along the axes: the first by the relief U/W of its first block (U a radius) plus the allowance, the last by the allowance alone, the ones between evenly spaced, each pass starting from and returning straight to the start point — that spacing is the usual reading of the cycle and is not confirmed by any source this was built from. G75 pecks in X (P, a radius) with a return after each peck (R of its first block), steps along Z (Q) and makes the last step short so the groove ends on the programmed Z; G74 is the same turned through 90 degrees, pecking along Z (Q) and stepping in X (P, a radius), and without X it drills a deep hole on the centre line; the relief at the bottom (R of the second block) is not drawn, because the sources it was built from disagree about its direction, and the width of the grooving tool is not drawn either. G76 follows the control's usual depth schedule (shallower passes, a minimum cut, finishing passes at full depth) and feeds straight in rather than along the flank. A decimal point in P or Q of G70–G76 (`P1.5` instead of `P1500`) is drawn as meant, and the linter reports it, because the control rejects it with an alarm
 
 ###  AI-Powered Assistance
-- **Dual AI Support** - Works with both Claude (cloud) and Ollama (local)
+- **Three AI Backends** - Claude (cloud), Ollama (local), or any server that speaks the OpenAI API (OpenAI, LM Studio, llama.cpp, vLLM, OpenRouter)
 - **Smart Code Review** - Analyzes G-Code for policy violations and safety issues
 - **Code Generation** - Generate G-Code snippets from natural language
 - **Context-Aware** - Understands your tooling, material, and machine configuration
@@ -130,6 +130,26 @@ the first analysis ("Your credit balance is too low"). API credits are bought in
 Anthropic Console and are separate from a claude.ai subscription. The default model is
 `claude-sonnet-5-5`; the Claude SDK (`anthropic`) is installed with `requirements.txt`.
 
+### For an OpenAI-compatible server
+
+`ai.mode: openai` talks to anything that speaks the OpenAI Chat Completions API:
+OpenAI itself, or a local server such as LM Studio or llama.cpp's `llama-server`,
+vLLM, OpenRouter, or Ollama's `/v1` address. No extra package is needed.
+
+```bash
+# Only if the server wants a key (OpenAI, OpenRouter). A local server needs none.
+export OPENAI_API_KEY="sk-..."            # macOS / Linux: put it in your shell profile
+setx OPENAI_API_KEY "sk-..."              # Windows
+```
+
+In **Settings → AI** choose `openai`, enter the server's address (the API root,
+as a rule ending in `/v1`, for example `http://localhost:1234/v1` for LM Studio)
+and press **Test connection**: with no model entered it lists the models the
+server offers. There is no default model, because what a server offers depends on
+the server. Like the Claude test it does not run the model, so it cannot see a
+credit balance or quota; on OpenAI an empty account shows up on the first analysis
+as "no quota or credit left (429)".
+
 ---
 
 ##  Usage
@@ -187,7 +207,7 @@ ui:
 ### AI Settings
 ```yaml
 ai:
-  mode: "ollama"            # "claude" or "ollama"
+  mode: "ollama"            # "claude", "ollama" or "openai"
   offline: false            # true = no AI calls
 
   ollama:
@@ -201,6 +221,13 @@ ai:
     api_key_env: "ANTHROPIC_API_KEY"
     max_output_tokens: 16000   # thinking counts too; about 21000 is the most without streaming
     effort: "medium"           # low | medium | high | xhigh | max; empty for models without it
+
+  openai:                      # any OpenAI-compatible server
+    base_url: "https://api.openai.com/v1"   # LM Studio: http://localhost:1234/v1
+    model: ""                  # as the server names it; Test connection lists them
+    api_key_env: "OPENAI_API_KEY"           # leave the variable unset for a local server
+    # max_output_tokens: 16000   # sent as max_completion_tokens, only when set
+    # reasoning_effort: medium   # only when set
 ```
 
 `claude-sonnet-4-20250514`, the earlier default, was retired on 2026-06-15 and
@@ -300,7 +327,7 @@ vibe_cnc/
 ├── requirements.txt            # Python dependencies
 │
 ├── vibe_cnc/
-│   ├── claude_client.py        # AI client (Claude + Ollama)
+│   ├── claude_client.py        # AI client (Claude, Ollama, OpenAI-compatible)
 │   ├── analysis_prompt.py      # What AI ANALYZE sends (shared with the eval)
 │   ├── gcode_highlighter.py    # Syntax highlighting + editor
 │   ├── gcode_plotter.py        # 2D visualization + live drawing
@@ -327,7 +354,7 @@ vibe_cnc/
 ###  Completed
 - [x] Live simulation with progressive drawing
 - [x] Real-time position tracking
-- [x] Dual AI support (Claude + Ollama)
+- [x] AI support: Claude, Ollama and OpenAI-compatible servers
 - [x] Interactive 2D plotter
 - [x] Tool and macro libraries with in-app editors
 - [x] Fanuc-style controls
