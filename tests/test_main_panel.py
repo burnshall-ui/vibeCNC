@@ -10,11 +10,14 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
+
+from vibe_cnc import ai_client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROGRAM = "G00 X10. Z2.\nG01 Z-5. F0.2\nG00 X50.\nM30"
@@ -41,9 +44,21 @@ class PanelCase(unittest.TestCase):
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                           cls.settings_dir.name)
         cls.module = load_main_module()
+        # No test here may reach a server. The window reads the operator's own
+        # config.yaml, whose backend may be a paid one; a test that stubbed the
+        # wrong method once sent a request to it.
+        def offline(*_args, **_kwargs):
+            raise AssertionError("a test reached for the network")
+        cls.offline = [mock.patch.object(ai_client.requests, "post", side_effect=offline),
+                       mock.patch.object(ai_client.requests, "get", side_effect=offline),
+                       mock.patch.object(ai_client, "_anthropic", side_effect=offline)]
+        for patch in cls.offline:
+            patch.start()
 
     @classmethod
     def tearDownClass(cls):
+        for patch in cls.offline:
+            patch.stop()
         QSettings.setDefaultFormat(cls.previous_format)
         cls.settings_dir.cleanup()
 
@@ -305,7 +320,7 @@ class AssistBoxKeyTests(PanelCase):
         win = self.window()
         win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
         calls = []
-        win.ai.ask_ollama = lambda prompt, system=None: calls.append((prompt, system)) or (True, "REVIEW-REPLY")
+        win.ai.chat_ollama = lambda messages, system=None: calls.append((messages, system)) or (True, "REVIEW-REPLY")
 
         win.action_analyze()
 
@@ -318,8 +333,8 @@ class AssistBoxKeyTests(PanelCase):
         win = self.window()
         win.cfg.data["ai"].update({"offline": False, "mode": "anthropic"})
         calls = []
-        win.ai.ask_claude = lambda prompt, system=None: calls.append("claude") or (True, "CLAUDE-REPLY")
-        win.ai.ask_ollama = lambda prompt, system=None: calls.append("ollama") or (True, "OLLAMA-REPLY")
+        win.ai.chat_claude = lambda messages, system=None: calls.append("claude") or (True, "CLAUDE-REPLY")
+        win.ai.chat_ollama = lambda messages, system=None: calls.append("ollama") or (True, "OLLAMA-REPLY")
 
         win.action_analyze()
 
@@ -330,9 +345,9 @@ class AssistBoxKeyTests(PanelCase):
         win = self.window()
         win.cfg.data["ai"].update({"offline": False, "mode": "openai"})
         calls = []
-        win.ai.ask_openai = lambda prompt, system=None: calls.append("openai") or (True, "OPENAI-REPLY")
-        win.ai.ask_claude = lambda prompt, system=None: calls.append("claude") or (True, "CLAUDE-REPLY")
-        win.ai.ask_ollama = lambda prompt, system=None: calls.append("ollama") or (True, "OLLAMA-REPLY")
+        win.ai.chat_openai = lambda messages, system=None: calls.append("openai") or (True, "OPENAI-REPLY")
+        win.ai.chat_claude = lambda messages, system=None: calls.append("claude") or (True, "CLAUDE-REPLY")
+        win.ai.chat_ollama = lambda messages, system=None: calls.append("ollama") or (True, "OLLAMA-REPLY")
 
         win.action_analyze()
 
@@ -346,13 +361,13 @@ class AssistBoxKeyTests(PanelCase):
         win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
         win.input.setText("Write a G71 for T1")
         calls = []
-        win.ai.ask = lambda prompt, system=None: calls.append((prompt, system)) or (True, "GENERATE-REPLY")
+        win.ai.chat = lambda messages, system=None: calls.append((messages, system)) or (True, "GENERATE-REPLY")
 
         win.action_generate()
 
         self.assertTrue(self.wait_for_chat(win, "GENERATE-REPLY"))
-        prompt, system = calls[0]
-        self.assertIn("Write a G71 for T1", prompt)
+        messages, system = calls[0]
+        self.assertIn("Write a G71 for T1", messages[0]["content"])
         self.assertEqual(system, win.ai.generate_prompt())
         self.assertNotEqual(system, win.ai.review_prompt())
 
@@ -364,7 +379,8 @@ class AssistBoxKeyTests(PanelCase):
         win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
         win.input.setText("Write a G71 for T1")
         calls = []
-        win.ai.ask = lambda prompt, system=None: calls.append(prompt) or (True, "GENERATE-REPLY")
+        win.ai.chat = (lambda messages, system=None:
+                       calls.append(messages[0]["content"]) or (True, "GENERATE-REPLY"))
 
         win.action_generate()
 

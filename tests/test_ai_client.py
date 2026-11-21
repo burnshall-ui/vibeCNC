@@ -431,30 +431,43 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(AIClient(settings(generate_prompt="G")).generate_prompt(), "G")
 
     def test_ask_hands_the_instructions_to_whichever_backend_is_chosen(self):
-        for mode, backend in (("claude", "ask_claude"), ("ollama", "ask_ollama"),
-                              ("openai", "ask_openai")):
+        for mode, backend in (("claude", "chat_claude"), ("ollama", "chat_ollama"),
+                              ("openai", "chat_openai")):
             with self.subTest(mode=mode):
                 client = AIClient(settings(mode=mode))
                 with mock.patch.object(client, backend, return_value=(True, "x")) as called:
                     client.ask("prompt", "instructions")
 
-                called.assert_called_once_with("prompt", "instructions")
+                called.assert_called_once_with([{"role": "user", "content": "prompt"}],
+                                               "instructions")
+
+    def test_a_conversation_goes_to_whichever_backend_is_chosen(self):
+        conversation = [ai_client.user("Write a G76"), ai_client.assistant("G76 Q0.4 ..."),
+                        ai_client.user("Line 2: no decimal point in Q.")]
+        for mode, backend in (("claude", "chat_claude"), ("ollama", "chat_ollama"),
+                              ("openai", "chat_openai")):
+            with self.subTest(mode=mode):
+                client = AIClient(settings(mode=mode))
+                with mock.patch.object(client, backend, return_value=(True, "x")) as called:
+                    self.assertEqual(client.chat(conversation, "instructions"), (True, "x"))
+
+                called.assert_called_once_with(conversation, "instructions")
 
     def test_anthropic_is_claude_too(self):
         # The template and AGENTS.md offered "anthropic"; it went to Ollama.
         client = AIClient(settings(mode="anthropic"))
-        with mock.patch.object(client, "ask_claude", return_value=(True, "x")) as claude, \
-                mock.patch.object(client, "ask_ollama") as ollama:
+        with mock.patch.object(client, "chat_claude", return_value=(True, "x")) as claude, \
+                mock.patch.object(client, "chat_ollama") as ollama:
             client.ask("prompt", "instructions")
 
-        claude.assert_called_once_with("prompt", "instructions")
+        claude.assert_called_once_with([{"role": "user", "content": "prompt"}], "instructions")
         ollama.assert_not_called()
 
     def test_an_unknown_mode_is_said_not_guessed(self):
         client = AIClient(settings(mode="gpt"))
-        with mock.patch.object(client, "ask_claude") as claude, \
-                mock.patch.object(client, "ask_ollama") as ollama, \
-                mock.patch.object(client, "ask_openai") as openai:
+        with mock.patch.object(client, "chat_claude") as claude, \
+                mock.patch.object(client, "chat_ollama") as ollama, \
+                mock.patch.object(client, "chat_openai") as openai:
             ok, message = client.ask("prompt")
 
         self.assertFalse(ok)
@@ -1119,6 +1132,106 @@ class OpenAICheckTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("not with a model list", text)
+
+
+# ---- Conversations over several turns ------------------------------------------------
+
+CONVERSATION = [
+    {"role": "user", "content": "Write a G76 for M20x2.5."},
+    {"role": "assistant", "content": "G76 P020060 Q0.4 R0.05"},
+    {"role": "user", "content": "Line 1: Q takes no decimal point. Write Q400."},
+]
+
+MALFORMED = {
+    "empty": [],
+    "starts with the model": [{"role": "assistant", "content": "G00 X0"}],
+    "ends on the model": CONVERSATION[:2],
+    "two user turns in a row": [CONVERSATION[0], CONVERSATION[2]],
+    "a system turn inside": [{"role": "system", "content": "Be strict."}, CONVERSATION[0]],
+    "content not text": [{"role": "user", "content": ["G00"]}],
+    "not a dict": ["G00 X0"],
+}
+
+
+class ConversationTests(ClaudeCase):
+    """chat() sends the whole conversation, every turn in order, to each backend."""
+
+    def chat_ollama(self, messages, system=None):
+        client = AIClient(settings(mode="ollama", ollama={"base_url": OllamaTests.URL}))
+        with mock.patch.object(ai_client.requests, "post", side_effect=[ollama_answer("Q400")]) as post:
+            result = client.chat_ollama(messages, system)
+        return result, post
+
+    def chat_openai(self, messages, system=None):
+        client = AIClient(settings(mode="openai", openai={"base_url": OpenAICase.URL, "model": "m"}))
+        with mock.patch.object(ai_client.requests, "post", side_effect=[completion("Q400")]) as post, \
+                mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            result = client.chat_openai(messages, system)
+        return result, post
+
+    def test_claude_gets_every_turn_and_the_instructions_beside_them(self):
+        api = FakeApi(message("Q400"))
+
+        (ok, text), _built = self.run_claude(api, lambda c: c.chat_claude(CONVERSATION, "Be strict."))
+
+        self.assertEqual((ok, text), (True, "Q400"))
+        self.assertEqual(api.body()["messages"], CONVERSATION)
+        self.assertEqual(api.body()["system"], "Be strict.")
+
+    def test_ollama_gets_the_instructions_first_then_every_turn(self):
+        (ok, text), post = self.chat_ollama(CONVERSATION, "Be strict.")
+
+        self.assertEqual((ok, text), (True, "Q400"))
+        self.assertEqual(post.call_args.kwargs["json"]["messages"],
+                         [{"role": "system", "content": "Be strict."}] + CONVERSATION)
+
+    def test_a_chat_completions_server_gets_the_instructions_first_then_every_turn(self):
+        (ok, text), post = self.chat_openai(CONVERSATION, "Be strict.")
+
+        self.assertEqual((ok, text), (True, "Q400"))
+        self.assertEqual(post.call_args.kwargs["json"]["messages"],
+                         [{"role": "system", "content": "Be strict."}] + CONVERSATION)
+
+    def test_the_callers_conversation_is_left_as_it_was(self):
+        # The verifier keeps the history and appends to it; the instructions
+        # must not end up in it as a turn.
+        for chat in (self.chat_ollama, self.chat_openai):
+            with self.subTest(chat=chat.__name__):
+                conversation = [dict(turn) for turn in CONVERSATION]
+
+                chat(conversation, "Be strict.")
+
+                self.assertEqual(conversation, CONVERSATION)
+
+    def test_a_malformed_conversation_is_raised_and_nothing_is_sent(self):
+        for name, conversation in MALFORMED.items():
+            with self.subTest(conversation=name):
+                api = FakeApi(message())
+                with self.assertRaises(ValueError):
+                    self.run_claude(api, lambda c: c.chat_claude(conversation))
+                self.assertEqual(api.requests, [])
+
+                for backend in ("chat_ollama", "chat_openai"):
+                    client = AIClient(settings(ollama={"base_url": OllamaTests.URL},
+                                               openai={"base_url": OpenAICase.URL, "model": "m"}))
+                    with mock.patch.object(ai_client.requests, "post") as post, \
+                            self.assertRaises(ValueError):
+                        getattr(client, backend)(conversation)
+                    post.assert_not_called()
+
+    def test_an_unknown_mode_still_refuses_a_malformed_conversation(self):
+        with self.assertRaises(ValueError):
+            AIClient(settings(mode="gpt")).chat([])
+
+    def test_the_turn_helpers_build_what_chat_takes(self):
+        self.assertEqual(ai_client.turns([ai_client.user("a"), ai_client.assistant("b"),
+                                          ai_client.user("c")]),
+                         [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                          {"role": "user", "content": "c"}])
+
+    def test_a_turn_is_copied_without_what_the_backends_do_not_take(self):
+        self.assertEqual(ai_client.turns([{"role": "user", "content": "a", "name": "operator"}]),
+                         [{"role": "user", "content": "a"}])
 
 
 if __name__ == "__main__":

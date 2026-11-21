@@ -1,13 +1,17 @@
 # ai_client.py — the AI backends: Claude through the Anthropic SDK, Ollama
 # over HTTP, and any server that speaks the OpenAI Chat Completions API.
 #
-# Every ask_* and check_* returns (ok, text). When ok is False the text says
-# what to do about it, in words, rather than what the library threw: it is
-# shown to the operator in the chat.
+# Every chat_*, ask_* and check_* returns (ok, text). When ok is False the
+# text says what to do about it, in words, rather than what the library threw:
+# it is shown to the operator in the chat.
+#
+# A conversation is a list of {"role": "user" | "assistant", "content": str},
+# the operator's turns and the model's answers in order, ending on a user turn.
+# The instructions are not part of it; each backend puts them where it wants.
 import html
 import os
 import re
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 import requests
@@ -148,6 +152,52 @@ def is_variable_name(name: str) -> bool:
     return bool(_ENV_NAME.match(name or ""))
 
 
+Message = Dict[str, str]
+
+
+def user(content: str) -> Message:
+    return {"role": "user", "content": content}
+
+
+def assistant(content: str) -> Message:
+    return {"role": "assistant", "content": content}
+
+
+def turns(messages: Sequence[Message]) -> List[Message]:
+    """A copy of the conversation, checked; a ValueError if it is malformed.
+
+    A malformed conversation is a mistake in the code that built it, not in
+    the config, so it is raised rather than shown to the operator.
+
+    Turns alternate and the first and the last are the user's. Claude would
+    merge two user turns in a row, but the chat templates of many local models
+    (served by llama.cpp, LM Studio or Ollama) refuse roles that do not
+    alternate, and the last turn is the question to be answered.
+    """
+    copied = []
+    for index, message in enumerate(messages):
+        role = message.get("role") if isinstance(message, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            raise ValueError(f"turn {index}: needs role 'user' or 'assistant' and text content, "
+                             f"got {message!r}")
+        copied.append({"role": role, "content": content})
+    if not copied:
+        raise ValueError("a conversation needs at least one user turn")
+    if copied[0]["role"] != "user" or copied[-1]["role"] != "user":
+        raise ValueError("a conversation starts and ends on a user turn")
+    for index in range(1, len(copied)):
+        if copied[index]["role"] == copied[index - 1]["role"]:
+            raise ValueError(f"turns {index - 1} and {index} are both {copied[index]['role']!r}; "
+                             "user and assistant alternate")
+    return copied
+
+
+def _with_system(messages: List[Message], system: Optional[str]) -> List[Message]:
+    """Ollama and Chat Completions take the instructions as the first message."""
+    return ([{"role": "system", "content": system}] if system else []) + messages
+
+
 class AIClient:
     def __init__(self, settings):
         self.cfg = settings.data
@@ -172,17 +222,23 @@ class AIClient:
 
     # ---- dispatch --------------------------------------------------------------
 
-    def ask(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
-        """Asks the backend ai.mode names. An unknown mode is said, not guessed."""
+    def chat(self, messages: Sequence[Message], system: Optional[str] = None) -> Tuple[bool, str]:
+        """Continues a conversation with the backend ai.mode names: the answer
+        to its last turn. An unknown mode is said, not guessed."""
         backend = backend_of(self._ai())
         if backend == "claude":
-            return self.ask_claude(prompt, system)
+            return self.chat_claude(messages, system)
         if backend == "ollama":
-            return self.ask_ollama(prompt, system)
+            return self.chat_ollama(messages, system)
         if backend == "openai":
-            return self.ask_openai(prompt, system)
+            return self.chat_openai(messages, system)
+        turns(messages)     # a malformed conversation is a mistake whatever the mode
         return (False, f"❌ config.yaml: ai.mode '{html.escape(backend)}' is not known. "
                        "Use claude, ollama or openai (Settings → AI).")
+
+    def ask(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
+        """One question, no history."""
+        return self.chat([user(prompt)], system)
 
     # ---- Claude (Anthropic SDK) --------------------------------------------------
 
@@ -202,7 +258,12 @@ class AIClient:
         return sdk.Anthropic(**kwargs)
 
     def ask_claude(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
+        return self.chat_claude([user(prompt)], system)
+
+    def chat_claude(self, messages: Sequence[Message],
+                    system: Optional[str] = None) -> Tuple[bool, str]:
         """Ask Claude. The SDK retries rate limits, overload and 5xx by itself."""
+        conversation = turns(messages)
         try:
             sdk = _anthropic()
         except ImportError:
@@ -219,7 +280,7 @@ class AIClient:
             request = {
                 "model": model,
                 "max_tokens": max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": conversation,
             }
             if system:
                 request["system"] = system
@@ -333,7 +394,12 @@ class AIClient:
     # ---- Ollama (local) ------------------------------------------------------------
 
     def ask_ollama(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
-        """Ask Ollama API with comprehensive error handling"""
+        return self.chat_ollama([user(prompt)], system)
+
+    def chat_ollama(self, messages: Sequence[Message],
+                    system: Optional[str] = None) -> Tuple[bool, str]:
+        """Ask Ollama over /api/chat."""
+        conversation = turns(messages)
         try:
             o = self._section("ollama")
             base_url = o.get("base_url", "")
@@ -342,10 +408,7 @@ class AIClient:
 
             model = (o.get("model") or DEFAULT_OLLAMA_MODEL).strip()
             timeout = float(o.get("timeout_s") or 300)
-            messages = [{"role": "user", "content": prompt}]
-            if system:
-                messages.insert(0, {"role": "system", "content": system})
-            data = {"model": model, "messages": messages, "stream": False}
+            data = {"model": model, "messages": _with_system(conversation, system), "stream": False}
             # A model that thinks first answers slowly on a small machine, and
             # one that does not think rejects the field -- so it is only sent
             # when the config says so.
@@ -438,7 +501,12 @@ class AIClient:
         return {"Authorization": f"Bearer {key}"} if key else {}
 
     def ask_openai(self, prompt: str, system: Optional[str] = None) -> Tuple[bool, str]:
+        return self.chat_openai([user(prompt)], system)
+
+    def chat_openai(self, messages: Sequence[Message],
+                    system: Optional[str] = None) -> Tuple[bool, str]:
         """Ask a server that speaks the OpenAI Chat Completions API."""
+        conversation = turns(messages)
         section = self._section("openai")
         root = _openai_root(section.get("base_url"))
         who = urlsplit(root).netloc or root
@@ -452,10 +520,8 @@ class AIClient:
         headers = self._openai_headers(key_env)
         try:
             timeout = float(section.get("timeout_s") or 180)
-            messages = [{"role": "user", "content": prompt}]
-            if system:
-                messages.insert(0, {"role": "system", "content": system})
-            request = {"model": model, "messages": messages, "stream": False}
+            request = {"model": model, "messages": _with_system(conversation, system),
+                       "stream": False}
             # Neither is sent unless the config asks: a server that does not
             # know a field may reject the request for it.
             optional = []
