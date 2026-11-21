@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, QSize, QTimer, QSettings, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
 from PyQt6.QtGui import QFont, QAction, QKeySequence, QCloseEvent, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter,
     QTableView, QTextEdit, QLineEdit, QLabel, QPushButton,
     QHeaderView, QFileDialog, QAbstractItemView, QMessageBox, QStatusBar,
     QMenu, QGridLayout, QCheckBox
@@ -25,6 +25,7 @@ from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
 from vibe_cnc.gcode_completer import install_completer
 from vibe_cnc.fonts import mono_families, mono_css
+from vibe_cnc.fold_panel import FoldPanel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -64,7 +65,13 @@ class Main(QMainWindow):
         super().__init__()
         self.setWindowTitle("Vibe CNC")
         self.setMinimumSize(QSize(1100, 650))
-        self.settings = QSettings("VibeCNC", "VibeCNC")
+        # The constructor that takes the format. QSettings("VibeCNC", "VibeCNC")
+        # always uses the native store and ignores setDefaultFormat(), so the
+        # tests that point the default at a temporary directory still read --
+        # and once wrote -- the operator's own settings. In a normal run the
+        # default format is the native one, so this is the same store as before.
+        self.settings = QSettings(QSettings.defaultFormat(), QSettings.Scope.UserScope,
+                                  "VibeCNC", "VibeCNC")
         self.current_file = None
         self._ai_busy = False
 
@@ -141,21 +148,7 @@ class Main(QMainWindow):
         self.btnNewMacro.setObjectName("Softkey")
         macroPanelLayout.addWidget(self.btnNewMacro)
 
-        from PyQt6.QtWidgets import QStackedWidget
-        self.leftStack = QStackedWidget()
-        self.leftStack.addWidget(toolPanel)
-        self.leftStack.addWidget(macroPanel)
-
-        header = QWidget(); hb = QHBoxLayout(header); hb.setContentsMargins(0,0,0,0); hb.setSpacing(1)
-        self.btnTabTools = QPushButton("TOOLS"); self.btnTabTools.setObjectName("PanelTab"); self.btnTabTools.setCheckable(True); self.btnTabTools.setChecked(True)
-        self.btnTabMacros = QPushButton("MACROS"); self.btnTabMacros.setObjectName("PanelTab"); self.btnTabMacros.setCheckable(True)
-        hb.addWidget(self.btnTabTools); hb.addWidget(self.btnTabMacros)
-
-        leftBox = QWidget(); lv = QVBoxLayout(leftBox); lv.setContentsMargins(0,0,0,0); lv.setSpacing(0)
-        lv.addWidget(header); lv.addWidget(self.leftStack)
-        left = leftBox
-
-        # --- CENTER: Editor ---
+        # --- LEFT: Editor ---
         self.editor = GCodeEditor(self.cfg_colors)
         self.highlighter = GCodeHighlighter(self.editor.document(), self.cfg_colors)
         self.title_center = TitlePanel("PROGRAM (EDIT) — Vibe CNC", self.editor, self.cfg_colors)
@@ -163,7 +156,7 @@ class Main(QMainWindow):
         # --- Autocomplete: Install after Editor + Models ---
         self.completer = install_completer(self.editor, self.table.model(), self.macroTable.model())
 
-        # --- RIGHT: Chat ---
+        # --- Assist: chat ---
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
         self.input = QLineEdit(); self.input.setPlaceholderText("> Write G71 for T2, depth 5.0 ...")
         # What AI GENERATE is asked for: a whole program, or a piece that goes
@@ -178,9 +171,15 @@ class Main(QMainWindow):
                                    "Off: the answer is linted as a whole program.")
         rightBox = QWidget(); rv = QVBoxLayout(rightBox); rv.setContentsMargins(0,0,0,0); rv.setSpacing(6)
         rv.addWidget(self.chat); rv.addWidget(self.input); rv.addWidget(self.chkSnippet)
-        right = TitlePanel("Vibe CNC — ASSIST", rightBox, self.cfg_colors)
 
-        # --- BOTTOM: 2D Plotter ---
+        # --- Under the simulation: tools, macros and the assist, folding away ---
+        self.dock = FoldPanel()
+        self.dock.add_page("TOOLS", toolPanel)
+        self.dock.add_page("MACROS", macroPanel)
+        self.ASSIST_PAGE = self.dock.add_page("ASSIST", rightBox)
+        self.dock.show_page(0)
+
+        # --- RIGHT: 2D Plotter ---
         machine = self.cfg.data.get('machine', {})
         chuck_z = machine.get('chuck_z_limit', -5.0)
         chuck_diameter = machine.get('chuck_diameter')
@@ -188,10 +187,32 @@ class Main(QMainWindow):
                                           chuck_diameter=chuck_diameter)
         bottom = TitlePanel("SIMULATION", self.plotter, self.cfg_colors)
 
-        # --- SPLITTER ---
+        # --- SPLITTERS ---
+        # The program and the simulation side by side, each the full height:
+        # G-code lines are short and many, and the half section needs height
+        # far more than width. The panel under the simulation folds away.
+        self.vsplit = QSplitter(Qt.Orientation.Vertical)
+        self.vsplit.addWidget(bottom)
+        self.vsplit.addWidget(self.dock)
+        self.vsplit.setStretchFactor(0, 3)
+        self.vsplit.setStretchFactor(1, 1)
+        self.vsplit.setChildrenCollapsible(False)
         self.split = QSplitter(Qt.Orientation.Horizontal)
-        self.split.addWidget(left); self.split.addWidget(self.title_center); self.split.addWidget(right)
-        self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 2); self.split.setStretchFactor(2, 1)
+        self.split.addWidget(self.title_center)
+        self.split.addWidget(self.vsplit)
+        # 2 : 3 -- a comment line of sixty characters fits without scrolling.
+        # Stretch factors alone do not do it: the first split follows the
+        # widgets' size hints, and the plot's is large. setSizes shares out
+        # whatever width there is in these proportions; a saved layout,
+        # restored later, replaces it.
+        self.split.setStretchFactor(0, 2)
+        self.split.setStretchFactor(1, 3)
+        self.split.setSizes([2000, 3000])
+        self.vsplit.setSizes([3000, 1000])
+        # Height of the open panel, so unfolding brings it back as it was.
+        self._dock_height = None
+        self.vsplit.splitterMoved.connect(self._remember_dock_height)
+        self.dock.folded_changed.connect(self._dock_folded)
 
         # --- Operator panel: machine keys on top, program softkeys below ---
         # One grid, so both rows share the same six columns and line up. The
@@ -268,17 +289,10 @@ class Main(QMainWindow):
         self.setStatusBar(self.status)
         self.status.showMessage("Ready", 3000)
 
-        # --- Vertical Splitter (Top: Editor/Chat | Bottom: Plot) ---
-        self.vsplit = QSplitter(Qt.Orientation.Vertical)
-        self.vsplit.addWidget(self.split)
-        self.vsplit.addWidget(bottom)
-        self.vsplit.setStretchFactor(0, 3)  # Editor area: 75%
-        self.vsplit.setStretchFactor(1, 1)  # Plot area: 25%
-
         # --- Root ---
         root = QWidget(); v = QVBoxLayout(root)
         v.setContentsMargins(10,10,10,10); v.setSpacing(0)
-        v.addWidget(self.vsplit, stretch=1)
+        v.addWidget(self.split, stretch=1)
         v.addWidget(panel, stretch=0)  # machine keys on top, program softkeys below
         v.setContentsMargins(10,10,10,10)
         self.setCentralWidget(root)
@@ -328,13 +342,12 @@ class Main(QMainWindow):
         self.macroTable.customContextMenuRequested.connect(self.on_macro_right_click)
         self.macroTable.doubleClicked.connect(self.on_macro_double_click)
         self.btnNewMacro.clicked.connect(self.on_new_macro_clicked)
-        self.btnTabTools.clicked.connect(lambda: self._switch_left_tab(0))
-        self.btnTabMacros.clicked.connect(lambda: self._switch_left_tab(1))
         
         # --- Keyboard Shortcuts ---
         self.addAction(QAction(self, shortcut=Qt.Key.Key_F5, triggered=self.quick_sim))
         self.addAction(QAction(self, shortcut=QKeySequence("Ctrl+Shift+S"), triggered=self.save_and_vm))
         self.addAction(QAction(self, shortcut=QKeySequence("Ctrl+L"), triggered=self.lint_only))
+        self.addAction(QAction(self, shortcut=QKeySequence("Ctrl+J"), triggered=self.dock.toggle_folded))
         self.addAction(QAction(self, shortcut=QKeySequence.StandardKey.Find, triggered=self.show_find_dialog))  # Ctrl+F
         self.addAction(QAction(self, shortcut=QKeySequence("Ctrl+H"), triggered=self.show_replace_dialog))  # Ctrl+H
         self.addAction(QAction(self, shortcut=QKeySequence.StandardKey.ZoomIn, triggered=self.zoom_in))
@@ -456,9 +469,11 @@ class Main(QMainWindow):
             set_font(l, 0.85)
         for l in self.findChildren(QLabel, "PanelTitle"):
             f = l.font(); f.setPointSizeF(self.base_pt * scale * 0.95); f.setBold(True); l.setFont(f)
-        # Tabs (TOOLS/MACROS): normal size
-        for tab in [self.btnTabTools, self.btnTabMacros]:
+        # Tabs (TOOLS/MACROS/ASSIST): normal size
+        for tab in self.dock.tabs + [self.dock.toggle]:
             set_font(tab, 1.0)
+        if self.dock.is_folded():
+            self.dock.set_folded(True)  # the tab row's height follows the font
         self.editor.setViewportMargins(self.editor.lineNumberAreaWidth(), 0, 0, 0)
 
     def _set_ai_busy(self, busy: bool):
@@ -483,10 +498,22 @@ class Main(QMainWindow):
         finally:
             self._set_ai_busy(False)
 
-    def _switch_left_tab(self, idx: int):
-        self.leftStack.setCurrentIndex(idx)
-        self.btnTabTools.setChecked(idx == 0)
-        self.btnTabMacros.setChecked(idx == 1)
+    def _remember_dock_height(self, _pos=None, _index=None):
+        if not self.dock.is_folded():
+            self._dock_height = self.vsplit.sizes()[1]
+
+    def _dock_folded(self, folded: bool):
+        """Gives the panel its height back when it opens again."""
+        if folded:
+            return
+        sizes = self.vsplit.sizes()
+        total = sum(sizes)
+        height = self._dock_height or max(total // 4, 160)
+        self.vsplit.setSizes([max(total - height, 0), height])
+
+    def _show_assist(self):
+        """An answer to something the operator asked for opens the assist."""
+        self.dock.show_page(self.ASSIST_PAGE)
 
     def on_macro_double_click(self, index):
         """Double click on Macro → Insert in Editor"""
@@ -540,12 +567,14 @@ class Main(QMainWindow):
 
     def _append_user_message(self, text: str):
         """Shows user message in chat (with separator and blue style)"""
+        self._show_assist()
         self.chat.append("<hr style='border:1px solid #444; margin:8px 0;'>")
         self.chat.append(f"<div style='background:#1A2530; padding:8px; border-left:3px solid {self.cfg_colors['CYAN']}; margin:4px 0;'>"
                         f"<span style='color:{self.cfg_colors['CYAN']}; font-weight:bold;'>👤 You:</span> {text}</div>")
 
     def _append_assistant_message(self, role: str, text: str, is_error: bool = False):
         """Shows assistant message in chat (with green/yellow style)"""
+        self._show_assist()
         color = self.cfg_colors['FANUC_YELLOW'] if is_error else self.cfg_colors['CRT_GREEN']
         icon = "⚠️" if is_error else "🤖"
         self.chat.append(f"<div style='background:#1A1A1A; padding:8px; border-left:3px solid {color}; margin:4px 0;'>"
@@ -1359,8 +1388,15 @@ class Main(QMainWindow):
     
     def _save_state(self):
         self.settings.setValue("geometry", self.saveGeometry())
-        self.settings.setValue("splitter", self.split.saveState())
-        self.settings.setValue("vsplitter", self.vsplit.saveState())
+        # Under new keys: "splitter" and "vsplitter" hold the layout before the
+        # program and the simulation stood side by side, and restoring those
+        # into these splitters gave nonsense sizes.
+        self.settings.setValue("layout2/split", self.split.saveState())
+        self.settings.setValue("layout2/vsplit", self.vsplit.saveState())
+        self.settings.setValue("layout2/dock_page", self.dock.current_index())
+        self.settings.setValue("layout2/dock_folded", self.dock.is_folded())
+        if self._dock_height:
+            self.settings.setValue("layout2/dock_height", self._dock_height)
         self.settings.setValue("base_pt", self.base_pt)
         self.settings.setValue("opt_stop", self.btnOptStop.isChecked())
         self.settings.setValue("single_block", self.btnSingleBlock.isChecked())
@@ -1368,10 +1404,16 @@ class Main(QMainWindow):
     def _restore_state(self):
         g = self.settings.value("geometry")
         if g is not None: self.restoreGeometry(g)
-        s = self.settings.value("splitter")
+        s = self.settings.value("layout2/split")
         if s is not None: self.split.restoreState(s)
-        vs = self.settings.value("vsplitter")
+        vs = self.settings.value("layout2/vsplit")
         if vs is not None: self.vsplit.restoreState(vs)
+        dh = self.settings.value("layout2/dock_height", 0, type=int)
+        if dh > 0: self._dock_height = dh
+        page = self.settings.value("layout2/dock_page", 0, type=int)
+        if 0 <= page < len(self.dock.tabs): self.dock.show_page(page)
+        if self.settings.value("layout2/dock_folded", False, type=bool):
+            self.dock.set_folded(True)
         bp = self.settings.value("base_pt")
         if bp is not None: self.base_pt = int(bp)
         opt = self.settings.value("opt_stop", False, type=bool)

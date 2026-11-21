@@ -42,7 +42,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest tests.test_tool_model tests.test_arc_rendering tests.test_ai_worker tests.test_plot_orientation tests.test_macro_model
-          tests.test_settings_manager tests.test_gcode_editor tests.test_fonts tests.test_main_panel tests.test_ai_client tests.test_ai_settings tests.test_gcode_completer -v
+          tests.test_settings_manager tests.test_gcode_editor tests.test_fonts tests.test_main_panel tests.test_ai_client tests.test_ai_settings tests.test_gcode_completer tests.test_fold_panel -v
 
   # Dead imports and unused variables grew back once already, so the gate is in
   # CI rather than in a habit. F covers pyflakes (unused, undefined, redefined),

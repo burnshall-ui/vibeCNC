@@ -235,6 +235,9 @@ class AssistBoxKeyTests(PanelCase):
         # Offline, so generating answers with a stub and nothing reaches a
         # backend. Only this window's copy of the settings is touched.
         win.cfg.data['ai']['offline'] = True
+        # The box is on the ASSIST tab under the simulation; typing into it
+        # means that tab is open.
+        win.dock.show_page(win.ASSIST_PAGE)
         win.activateWindow()
         win.input.setFocus()
         QTest.qWait(50)
@@ -482,6 +485,64 @@ class AssistBoxKeyTests(PanelCase):
         self.assertIn(key, win.input.toolTip())
         self.assertIn(key, win.btnGen.toolTip())
         self.assertIn("Enter", win.input.toolTip())
+
+
+
+class LayoutTests(PanelCase):
+    """The program and the simulation side by side, the rest folding away below."""
+
+    def test_the_program_and_the_simulation_stand_side_by_side(self):
+        win = self.window()
+
+        self.assertIs(win.split.widget(0), win.title_center)
+        self.assertIs(win.split.widget(1), win.vsplit)
+        self.assertIs(win.vsplit.widget(1), win.dock)
+        self.assertTrue(win.vsplit.widget(0).isAncestorOf(win.plotter))
+
+    def test_tools_macros_and_the_assist_share_the_panel_below(self):
+        win = self.window()
+
+        self.assertEqual([tab.text() for tab in win.dock.tabs], ["TOOLS", "MACROS", "ASSIST"])
+        self.assertTrue(win.dock.isAncestorOf(win.table))
+        self.assertTrue(win.dock.isAncestorOf(win.macroTable))
+        self.assertTrue(win.dock.isAncestorOf(win.chat))
+
+    def test_an_answer_opens_the_assist(self):
+        win = self.window()
+        win.dock.set_folded(True)
+
+        win._append_assistant_message("Lint", "No issues found")
+
+        self.assertFalse(win.dock.is_folded())
+        self.assertEqual(win.dock.current_index(), win.ASSIST_PAGE)
+
+    def test_a_message_from_the_simulation_leaves_it_folded(self):
+        win = self.window()
+        win.dock.set_folded(True)
+
+        win._append_system_message("Simulation started")
+
+        self.assertTrue(win.dock.is_folded())
+
+    def test_ctrl_j_folds_the_panel(self):
+        win = self.window()
+
+        (action,) = [a for a in win.actions() if a.shortcut() == QKeySequence("Ctrl+J")]
+        action.trigger()
+        self.assertTrue(win.dock.is_folded())
+        action.trigger()
+        self.assertFalse(win.dock.is_folded())
+
+    def test_the_panel_comes_back_as_it_was_left(self):
+        win = self.window()
+        win.dock.show_page(1)
+        win.dock.set_folded(True)
+        win._save_state()
+
+        again = self.window()
+
+        self.assertTrue(again.dock.is_folded())
+        self.assertEqual(again.dock.current_index(), 1)
 
 
 if __name__ == "__main__":
