@@ -17,7 +17,7 @@ from .tool_data import nose_direction_of, nose_offset
 #
 # G92 used to sit here too. Its words are cycle parameters, so reading them as
 # one straight move was wrong -- but so is drawing nothing, because the cycle
-# really does cut. It is a modal motion mode now, see _expand_thread_cycle.
+# really does cut. It is a modal motion mode now, see _expand_box_cycle.
 NON_MOTION_CODES = frozenset({4, 10, 28, 30, 50, 65, 70, 71, 72, 73, 74, 75, 76})
 
 # Cycles recorded in self.cycle rather than self.mode. They are one-shot calls,
@@ -31,6 +31,16 @@ ROUGHING_CODES = frozenset({71, 72})
 # The finishing cycle: the contour the roughing cycles left material on, run
 # once exactly as programmed. It names the same blocks by P and Q.
 FINISHING_CODES = frozenset({70})
+
+# The one-block cycles of G-code system A: turning (G90), threading (G92) and
+# facing (G94). Modal in group 01 like G00-G03: a following block with only
+# an X (or for G94 a Z) runs the cycle again, and G00-G03 cancel it.
+BOX_CYCLE_CODES = frozenset({90, 92, 94})
+
+# What ends the program: M30, M02, and M99 at the end of a subprogram. Also
+# written M030 or run together as N100M30; not M300 or M20. The control never
+# runs a block after it.
+PROGRAM_END = re.compile(r'(?<![A-Z])M0*(30|2|99)(?!\d)', re.IGNORECASE)
 
 # The multi-pass threading cycle. G92 cuts one pass per block and leaves the
 # depth schedule to the program; G76 takes the whole thread from two blocks and
@@ -89,10 +99,15 @@ class GCodeParser:
         self.f = 0.0  # Feed rate
         self.mode = 'G00'  # G00=rapid, G01=cut, G02=CW-arc, G03=CCW-arc
         self.cycle = None  # Last canned cycle seen (G70-G76), informational
-        # Modal parameters of the threading cycle. A repeat block carries only
-        # the new X; Z and the taper come from the block that opened it.
+        # Modal parameters of G90, G92 and G94. A repeat block carries only
+        # the word that changes; the others come from the block before.
+        self.cycle_x = None
         self.cycle_z = None
         self.cycle_taper = 0.0
+        # Where the program ended: line, the M-code, and the position there.
+        # None when the code never ends -- a snippet, or a program that lost
+        # its M30.
+        self.program_end = None
         # G76: what its first block sets holds until the next first block.
         self.thread_finishes = 1      # m: passes at full depth after the roughing
         self.thread_runout = 0        # r: 45-degree run-out, in tenths of the lead
@@ -169,6 +184,12 @@ class GCodeParser:
             if line_num in self._skip:
                 continue
             self._parse_line(line, line_num)
+            end = PROGRAM_END.search(self._code_of(line))
+            if end:
+                code = f"M{int(end.group(1)):02d}"
+                self.program_end = {'line': line_num, 'code': code, 'x': self.x, 'z': self.z}
+                self._warn_code_after_end(lines, line_num, code)
+                break
         self.paths['skipped'] = frozenset(self._skip)
 
         # Post-processing: intersect corners (Lookahead Corner Handling)
@@ -181,6 +202,29 @@ class GCodeParser:
         """The value of one address word, or None when the block has none."""
         match = re.search(rf'{letter}([-+]?\d*\.?\d+)', line, re.IGNORECASE)
         return float(match.group(1)) if match else None
+
+    @staticmethod
+    def _code_of(line: str) -> str:
+        """One block without its comments: parentheses, and everything after ';'."""
+        return re.sub(r';.*', '', re.sub(r'\(.*?\)', '', line)).strip()
+
+    def _warn_code_after_end(self, lines, end_line, code):
+        """The first block after the program end, if there is one.
+
+        The control stops at M30; what follows is never run, so it is not
+        drawn either. Drawing it put a move into the plot that the machine
+        never makes, and a chuck collision on a line that never runs. The
+        tape end '%' closes the file: nothing after it is read at all.
+        """
+        for line_num in range(end_line + 1, len(lines) + 1):
+            text = self._code_of(lines[line_num - 1])
+            if text.startswith('%'):
+                return
+            if text:
+                self._warn(line_num, 'CODE_AFTER_END',
+                           f'Code after the program end ({code} in line {end_line}): '
+                           'the control never runs it, so it is not drawn')
+                return
 
     def _warn(self, line_num: int, code: str, message: str):
         """Records a geometry problem instead of silently drawing nothing.
@@ -213,11 +257,19 @@ class GCodeParser:
                 self.mode = 'G02'
             elif g == 3:
                 self.mode = 'G03'
-            elif g == 92:
+            elif g == 32:
+                # Simple threading, one straight pass per block at the lead F.
+                self.mode = 'G32'
+            elif g in BOX_CYCLE_CODES:
                 # A modal cycle, group 01 like G00-G03: the next block that
                 # carries only an X repeats it, and the next G00/G01/G02/G03
                 # cancels it. Keeping it in self.mode gets both for free.
-                self.mode = 'G92'
+                # Entering it from another mode starts afresh: what an earlier
+                # cycle left in X, Z and R belongs to that one.
+                mode = f'G{g}'
+                if self.mode != mode:
+                    self.cycle_x, self.cycle_z, self.cycle_taper = None, None, 0.0
+                self.mode = mode
             elif g == 40:
                 self.comp = 'G40'
             elif g == 41:
@@ -300,15 +352,16 @@ class GCodeParser:
         self.i = float(i_match.group(1)) if i_match else 0.0
         self.k = float(k_match.group(1)) if k_match else 0.0
 
-        if self.mode == 'G92':
+        if self.mode in ('G90', 'G92', 'G94'):
             # The cycle returns to where it started, so it has to be handled
             # ahead of the gate below -- which asks whether the position
-            # changed, and for a thread pass it never does. A block with no
-            # axis word at all (a bare F, say) does not repeat the cycle.
+            # changed, and for a cycle it never does. A block with no axis
+            # word at all (a bare F, say) does not repeat the cycle.
             if any(m is not None for m in (x_match, u_match, z_match, w_match)):
-                self._expand_thread_cycle(new_x, new_z,
-                                          z_match is not None or w_match is not None,
-                                          r_match, line_num)
+                self._expand_box_cycle(self.mode, new_x, new_z,
+                                       x_match is not None or u_match is not None,
+                                       z_match is not None or w_match is not None,
+                                       r_match, line_num)
             return
 
         # A circular block with I/K but no X/Z is a full circle: start and end
@@ -331,6 +384,8 @@ class GCodeParser:
                     self._add_compensated_segment(segment_data)
             elif self.mode in ['G02', 'G03']:
                 self._add_arc(new_x, new_z, i_match, k_match, r_match, line_num)
+            elif self.mode == 'G32':
+                self._record_move('thread', (self.x, self.z), (new_x, new_z), line_num)
 
             self.x = new_x
             self.z = new_z
@@ -783,44 +838,63 @@ class GCodeParser:
             return None
         return points, range(start_line, end_line + 1)
 
-    def _expand_thread_cycle(self, target_x, target_z, has_z, r_match, line_num):
-        """G92: one threading pass, drawn as the four moves it really makes.
+    def _expand_box_cycle(self, mode, target_x, target_z, has_x, has_z, r_match, line_num):
+        """G90, G92 or G94: one pass, drawn as the four moves it really makes.
 
-        A Fanuc lathe cuts *one* pass per G92 block -- the depth schedule is
-        the sequence of blocks that follows, each with a smaller X, not
-        something hidden inside a single block. So one block is: feed in to
-        the diameter, cut the thread to Z, retract in X, return in Z. Only the
-        second of those removes material; the other three are rapids.
+        A Fanuc lathe cuts *one* pass per block -- the passes are the
+        sequence of blocks that follows, each with a new X (or for G94 a new
+        Z), not something hidden inside a single block. G90 and G92 feed in
+        X and cut along Z; G94 the other way round:
 
-        The tool ends the block where it began, which is what lets the next
-        block carry nothing but an X. Position therefore stays untouched.
+            G90  rapid in X, cut along Z, cut back out in X, rapid back in Z
+            G92  rapid in X, thread along Z, rapid out in X, rapid back in Z
+            G94  rapid in Z, cut along X, cut back out in Z, rapid back in X
+
+        Which legs are feeds is how the cycles are generally described, not
+        checked against the 0i-TF manual. The tool ends the block where it
+        began, which is what lets the next block carry only one word.
+        Position therefore stays untouched.
         """
         start_x, start_z = self.x, self.z
 
-        # Z and the taper are modal within the cycle: a repeat block carries
-        # only the next X, and the end of the thread stays where the opening
-        # block put it. Reading Z off the current position instead turned every
-        # repeat into a zero-length pass.
+        # X, Z and the taper are modal within the cycle: a repeat block
+        # carries only the next X (G94: the next Z), and the rest stays where
+        # the block before put it. Reading the missing word off the current
+        # position instead turned every repeat into a zero-length pass.
+        if has_x:
+            self.cycle_x = target_x
+        elif self.cycle_x is not None:
+            target_x = self.cycle_x
         if has_z:
             self.cycle_z = target_z
         elif self.cycle_z is not None:
             target_z = self.cycle_z
-
-        # R is the taper: the difference in *radius* between the start of the
-        # thread and its end, so the entry diameter is that much wider.
         if r_match is not None:
             self.cycle_taper = float(r_match.group(1))
-        entry_x = target_x + 2.0 * self.cycle_taper
 
-        if target_z == start_z and entry_x == start_x and target_x == start_x:
+        if mode == 'G94':
+            # R is the taper along Z: how far the start of the facing pass
+            # lies from its end (sign as for G90, not checked against the
+            # manual).
+            entry = (start_x, target_z + self.cycle_taper)
+            corner = (target_x, start_z)
+        else:
+            # R is the taper: the difference in *radius* between the start of
+            # the cut and its end, so the entry diameter is that much wider.
+            entry = (target_x + 2.0 * self.cycle_taper, start_z)
+            corner = (start_x, target_z)
+
+        if (target_x, target_z) == (start_x, start_z) and entry == (start_x, start_z):
             self._warn(line_num, 'CYCLE_NO_PASS',
-                       'G92 without a target — nothing to cut')
+                       f'{mode} without a target — nothing to cut')
             return
 
-        self._record_move('rapid', (start_x, start_z), (entry_x, start_z), line_num)
-        self._record_move('thread', (entry_x, start_z), (target_x, target_z), line_num)
-        self._record_move('rapid', (target_x, target_z), (start_x, target_z), line_num)
-        self._record_move('rapid', (start_x, target_z), (start_x, start_z), line_num)
+        cut = 'thread' if mode == 'G92' else 'cut'
+        back = 'rapid' if mode == 'G92' else 'cut'
+        self._record_move('rapid', (start_x, start_z), entry, line_num)
+        self._record_move(cut, entry, (target_x, target_z), line_num)
+        self._record_move(back, (target_x, target_z), corner, line_num)
+        self._record_move('rapid', corner, (start_x, start_z), line_num)
 
     # --- Multi-pass threading (G76) ---------------------------------------
     #

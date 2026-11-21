@@ -534,6 +534,131 @@ class GCodeParserThreadCycleTests(unittest.TestCase):
         self.assertEqual([w["code"] for w in parser.warnings], ["CYCLE_NO_PASS"])
 
 
+class GCodeParserBoxCycleTests(unittest.TestCase):
+    """G90 and G94, the one-block turning and facing cycles of G-code system
+    A. They were drawn as one rapid straight to the target, and the tool left
+    standing there. Which legs are feeds is the usual description of the
+    cycles, not checked against the 0i-TF manual."""
+
+    def moves(self, code):
+        parser = GCodeParser()
+        paths = parser.parse(code)
+        return parser, [(kind, paths[kind][index][:2]) for kind, index, _line in paths["order"]]
+
+    def test_g90_is_rapid_in_cut_along_z_cut_out_and_rapid_back(self):
+        parser, moves = self.moves("G00 X40. Z5.\nG90 X30. Z-20. F0.2")
+
+        self.assertEqual(moves[1:], [
+            ("rapid", [(40.0, 5.0), (30.0, 5.0)]),
+            ("cut", [(30.0, 5.0), (30.0, -20.0)]),
+            ("cut", [(30.0, -20.0), (40.0, -20.0)]),
+            ("rapid", [(40.0, -20.0), (40.0, 5.0)]),
+        ])
+        self.assertEqual((parser.x, parser.z), (40.0, 5.0))     # back where it began
+        self.assertEqual(parser.warnings, [])
+
+    def test_a_g90_repeat_block_carries_only_the_next_x(self):
+        _parser, moves = self.moves("G00 X40. Z5.\nG90 X36. Z-20. F0.2\nX32.\nX28.")
+
+        cuts_along_z = [m[1] for m in moves if m[0] == "cut" and m[1][0][0] == m[1][1][0]]
+        self.assertEqual(cuts_along_z, [[(36.0, 5.0), (36.0, -20.0)],
+                                        [(32.0, 5.0), (32.0, -20.0)],
+                                        [(28.0, 5.0), (28.0, -20.0)]])
+
+    def test_g90_r_is_the_taper_in_radius(self):
+        _parser, moves = self.moves("G00 X40. Z5.\nG90 X30. Z-20. R-2. F0.2")
+
+        self.assertEqual(moves[2], ("cut", [(26.0, 5.0), (30.0, -20.0)]))
+
+    def test_g94_is_rapid_in_z_cut_along_x_cut_out_and_rapid_back(self):
+        parser, moves = self.moves("G00 X52. Z2.\nG94 X20. Z-2. F0.2\nZ-4.")
+
+        self.assertEqual(moves[1:5], [
+            ("rapid", [(52.0, 2.0), (52.0, -2.0)]),
+            ("cut", [(52.0, -2.0), (20.0, -2.0)]),
+            ("cut", [(20.0, -2.0), (20.0, 2.0)]),
+            ("rapid", [(20.0, 2.0), (52.0, 2.0)]),
+        ])
+        # The repeat block carries only the next Z; X stays at Ø20.
+        self.assertEqual(moves[6], ("cut", [(52.0, -4.0), (20.0, -4.0)]))
+        self.assertEqual((parser.x, parser.z), (52.0, 2.0))
+
+    def test_g00_cancels_the_cycle(self):
+        _parser, moves = self.moves("G00 X40. Z5.\nG90 X30. Z-20. F0.2\nG00 X100.")
+
+        self.assertEqual(moves[-1], ("rapid", [(40.0, 5.0), (100.0, 5.0)]))
+
+    def test_a_cycle_entered_afresh_does_not_keep_the_last_ones_z(self):
+        _parser, moves = self.moves("G00 X40. Z5.\nG90 X30. Z-20. F0.2\nG00 X40.\n"
+                                    "G94 X20. Z-1. F0.2\nG00 X40. Z5.\nG90 X35.")
+
+        # Without a Z of its own the last G90 has nowhere to go along Z: in
+        # to Ø35 and out again, not down to the first cycle's Z-20.
+        self.assertEqual(moves[-2:], [("rapid", [(40.0, 5.0), (35.0, 5.0)]),
+                                      ("cut", [(35.0, 5.0), (40.0, 5.0)])])
+
+    def test_a_cycle_with_nowhere_to_go_is_reported(self):
+        parser, _moves = self.moves("G00 X40. Z5.\nG90 X40. Z5. F0.2")
+
+        self.assertEqual([(w["code"], w["message"]) for w in parser.warnings],
+                         [("CYCLE_NO_PASS", "G90 without a target — nothing to cut")])
+
+    def test_g32_is_one_threading_pass_and_moves_the_tool(self):
+        parser, moves = self.moves("G00 X19.4 Z3.\nG32 Z-20. F1.5\nG00 X25.")
+
+        self.assertEqual(moves[1], ("thread", [(19.4, 3.0), (19.4, -20.0)]))
+        self.assertEqual(moves[2], ("rapid", [(19.4, -20.0), (25.0, -20.0)]))
+        self.assertEqual((parser.x, parser.z), (25.0, -20.0))
+
+
+class GCodeParserProgramEndTests(unittest.TestCase):
+    """The control stops at M30; the parser drew what followed, and a move
+    behind M30 was reported as a chuck collision."""
+
+    def test_nothing_after_m30_is_drawn(self):
+        parser = GCodeParser(chuck_z=-100.0)
+        paths = parser.parse("G00 X40. Z5.\nM30\nG01 X20. Z-150. F0.2")
+
+        self.assertEqual(paths["cut"], [])
+        self.assertEqual(paths["collisions"], [])
+        self.assertEqual(parser.program_end, {"line": 2, "code": "M30", "x": 40.0, "z": 5.0})
+        self.assertEqual([(w["line"], w["code"]) for w in parser.warnings],
+                         [(3, "CODE_AFTER_END")])
+
+    def test_the_tape_end_a_comment_or_a_blank_line_is_no_code(self):
+        for ending in ("M30\n%", "M30\n\n", "M30\n(END)", "M30\n%\nG01 X1."):
+            with self.subTest(ending=ending):
+                parser = GCodeParser()
+                parser.parse("G00 X40. Z5.\n" + ending)
+
+                self.assertEqual(parser.warnings, [])
+
+    def test_m02_m99_and_run_together_words_end_it_too(self):
+        for end, code in (("M02", "M02"), ("M2", "M02"), ("N100M30", "M30"), ("M030", "M30"),
+                          ("M99", "M99")):
+            with self.subTest(end=end):
+                parser = GCodeParser()
+                parser.parse(f"G00 X40. Z5.\n{end}\nG00 X60.")
+
+                self.assertEqual(parser.program_end["code"], code)
+                self.assertEqual(parser.paths["rapid"], [[(0.0, 0.0), (40.0, 5.0), 1]])
+
+    def test_what_only_looks_like_an_end_is_none(self):
+        for text in ("M300", "M20", "(M30)", "G00 X40. ; M30"):
+            with self.subTest(text=text):
+                parser = GCodeParser()
+                parser.parse(f"{text}\nG00 X60.")
+
+                self.assertIsNone(parser.program_end)
+                self.assertEqual(parser.paths["rapid"][-1][1][0], 60.0)    # drawn on
+
+    def test_a_move_on_the_m30_block_is_made_first(self):
+        parser = GCodeParser()
+        parser.parse("G00 X100. Z100. M30")
+
+        self.assertEqual(parser.program_end["z"], 100.0)
+
+
 class GCodeParserRoughingExpansionTests(unittest.TestCase):
     """VC-13: G71/G72 expand into the passes they really cut."""
 
