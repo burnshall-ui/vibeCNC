@@ -20,6 +20,14 @@
 - `G70`–`G76`: `P` and `Q` are written **without a decimal point**. In G70–G73 they are
   block numbers (`P100`); in G74–G76 they are amounts in 0.001 mm (`P1500` = 1.5 mm,
   `Q400` = 0.4 mm). The control rejects a decimal point there with an alarm.
+- Contour of `G70`–`G73`: the block `P` names writes `G00` or `G01` itself, and
+  for `G71` moves `X`, for `G72` moves `Z`. No `G40`/`G41`/`G42` between `P` and
+  `Q`: compensation goes before the cycle and is cancelled after it. The block
+  numbers `P` and `Q` name occur only once in the program.
+- `G76`: in `P(mmrraa)` of the first block, `mm` is 01–99 and `aa` one of 80, 60,
+  55, 30, 29, 00; the finishing allowance `R` is smaller than the thread height
+  `P` of the second block.
+- `G74`, `G75`, `G76`: no tool nose radius compensation; `G40` before the cycle.
 - `G4` dwell: ≤ 5 s without a comment, otherwise document it.
 
 ## Safe sequence

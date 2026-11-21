@@ -23,9 +23,11 @@ file decides. It is meant to be built to, and changed when a decision changes.
 - **TOML read with `tomllib`, dataclasses, `unittest`.** Standard library only,
   so spec loading runs in the GUI-free suite next to the parser and linter.
 - **Every card says where its content comes from** and whether it was checked
-  on the real machine. The parser's assumptions (G76 depth schedule, G73 pass
-  spacing, G75 retract) are listed in the cards as assumptions, unverified until
-  someone confirms them on the 0i-TF Plus.
+  on the real machine. Since 2026-11-21 the cards are checked against the
+  FANUC 0i-F lathe operator's manual (B-64604EN-1/01, section 4.2), and each
+  assumption names the section that supports it. The parser's assumptions
+  stay `verified = false` until someone confirms them on the 0i-TF Plus; the
+  0i-F manual is not that machine.
 - **Works with every backend** (Claude, Ollama, OpenAI-compatible) and without
   tool calling.
 - **Measured, not hoped for.** Every change that affects what a model sees is
@@ -133,8 +135,8 @@ Severity follows the consequence:
 
 | Severity | Meaning | Rules |
 |---|---|---|
-| ERROR | the control alarms, the machine can crash, or a shop safety rule breaks | decimal point in P/Q of G70–G76; cycle blocks missing or no contour; an arc that cannot be made; feed or depth of cut zero; G50 S not before G96; a protected M-code commented out; at M30 the tool not in front of what was cut; no program end (whole programs only); **chuck collision** (it used to show only in the plot); a cut or a cycle before the spindle runs (whole programs only); header without **G40** or without **G21**; an arc too tight for the tool nose |
-| WARNING | a shop rule about form | rest of the header (G18, G80, G97), work offset G54, the other G41/G42 checks, too many cycle passes, code after the program end |
+| ERROR | the control alarms, the machine can crash, or a shop safety rule breaks | decimal point in P/Q of G70–G76; cycle blocks missing or no contour; an arc that cannot be made; feed or depth of cut zero; G50 S not before G96; a protected M-code commented out; at M30 the tool not in front of what was cut; no program end (whole programs only); **chuck collision** (it used to show only in the plot); a cut or a cycle before the spindle runs (whole programs only); header without **G40** or without **G21**; an arc too tight for the tool nose; from the manual: a G70–G73 contour whose first block has no G00/G01 of its own or (G71, G72) does not move its axis, G40/G41/G42 between P and Q, a block number P or Q names that occurs twice, G76 P fields out of range, a G76 allowance not below the thread height |
+| WARNING | a shop rule about form | rest of the header (G18, G80, G97), work offset G54, the other G41/G42 checks, too many cycle passes, code after the program end, G41/G42 still on in G74–G76 |
 | INFO | a hint without a finding | the G76 "check F/S/R" heuristic |
 
 `lint_clean` means no ERROR and no WARNING.
@@ -202,7 +204,7 @@ Collisions are not instructions; they are diagnostics.
 
 ## Steps
 
-### A — Verifier loop on the existing linter
+### A — Verifier loop on the existing linter (done 2026-11-21)
 
 1. The AI client holds a conversation: a list of messages, for all three
    backends. `ask()` stays as the one-question form.
@@ -229,7 +231,7 @@ client); an identical repeated finding stops the loop; the delete guard, the
 snippet rule and a chuck collision as a diagnostic are tested; the generate
 eval has run once against a real model.
 
-### B — Specs, narrow
+### B — Specs, narrow (done 2026-11-21)
 
 `specs.py`; `dialect.toml` for system A, which also feeds the autocomplete
 table (its G90/G91/G94 entries describe another G-code system today); cards
@@ -242,7 +244,7 @@ Done when: autocomplete reads `dialect.toml`; the decimal-point and range rules
 come from the cards; every card example is `lint_clean` and drawn; a broken
 card names its file and key when loaded.
 
-### C — Cards in the prompt
+### C — Cards in the prompt (done 2026-11-21)
 
 `spec_context.py` finds G/M codes and keywords in the request and the program
 and puts the one to three matching cards into the prompt, with a short sheet
@@ -253,6 +255,19 @@ both evals have run before and after. The concrete question: does the model
 find the `R0.5` arc it missed on 2026-11-21 once it has the card?
 
 Tool calling only if the evals show the pre-pass is not enough.
+
+**Outcome.** A request that names a cycle gets that cycle's card; one that
+names none gets the cards its keywords point to; a review gets the cards of
+the cycles in the code; a correction the card of a cycle a finding names. At
+most three, with the dialect sheet. Measured on 2026-11-21 with
+`tencent/hy4-flash`, `--repeat 3`, with and without the cards on the same
+day: the review found 74 and 76 of 84 faults, first drafts were lint clean 18
+times in 24 either way. No measurable gain for that model. The `R0.5` arc was
+missed every time either way; no card covers G02/G03. With the cards the
+model no longer reported a missing retract after a G70 or G76 that returns to
+its start point in front of the face, which the operator decided is a retract
+(the linter does not know that yet). The generate tasks turned out to ask for
+the very parts of the card examples, so with the cards a model can copy them.
 
 ### D — IR
 
@@ -270,6 +285,10 @@ sample programs look the same (checked by eye, as before).
 | Topic | When |
 |---|---|
 | Tool calling | when the evals show the pre-pass is not enough |
+| Retract judged against the face | a cycle start point in front of the part's face counts as a retract before M30, beside the part it does not (operator's decision, 2026-11-21); the rule today counts G01 moves in the air as cuts |
+| Generate tasks of their own | the eval's parts must differ from the card examples |
+| G71/G72 escape at feed | the manual has the 45° escape after each pass in cutting feed; the parser draws a rapid, and `tests/test_reference.py` has to be worked out again by hand |
+| G75 with Z travel and Q0 | lint-clean today; the manual does not say what the control does |
 | Rapid through stock | needs a model of the material removed so far: stock changes as it is cut, so checking against the blank raises false alarms |
 | Machine profile (travel, max rpm) | when the values are measured, not estimated |
 | PDF importer for machine manuals | local only; produces card drafts with `verified = false` for a person to check; the manual never enters the repository |
