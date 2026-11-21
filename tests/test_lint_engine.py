@@ -201,6 +201,30 @@ class LintEngineRetractTests(unittest.TestCase):
 
         self.assertEqual(len(rules(findings, "RETRACT_BEFORE_M30")), 1)
 
+    def test_what_follows_m30_does_not_push_the_retract_out_of_sight(self):
+        # The tape end '%' after M30 took the place of the Z retract, so this
+        # ordinary ending was reported. Blank lines and comments did the same.
+        engine = LintEngine(make_cfg())
+        for ending in ("M30\n%", "M30\n\n", "M30\n(END)", "M30\n%\n"):
+            with self.subTest(ending=ending):
+                code = "G01 X-5. F0.2\nG00 Z50.\nX200.\n" + ending
+
+                self.assertEqual(rules(engine.run_all(code), "RETRACT_BEFORE_M30"), [])
+
+    def test_the_finding_points_at_m30_not_at_what_follows(self):
+        engine = LintEngine(make_cfg())
+
+        findings = rules(engine.run_all("G01 X-5.\nG00 X200.\nN100M30\n%"), "RETRACT_BEFORE_M30")
+
+        self.assertEqual([f.line for f in findings], [3])
+
+    def test_m30_in_a_comment_ends_nothing(self):
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all("G01 X-5.\nG00 X200.\n(no M30 here, the program goes on)")
+
+        self.assertEqual(rules(findings, "RETRACT_BEFORE_M30"), [])
+
 
 class LintEngineParserWarningTests(unittest.TestCase):
     """VC-16: geometry the parser rejects has to reach the operator."""

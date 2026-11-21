@@ -124,16 +124,24 @@ class LintEngine:
                                               "protected and must not be removed."))
 
         # 4) End-of-program retract
-        end_idx = max(len(lines)-3, 0)
-        end_block = " ".join(lines[end_idx:])
+        #
+        # The last three lines that carry code. Three raw lines were read
+        # before, so the tape-end '%' after M30 -- or a blank line, or a closing
+        # comment -- took the place of the Z retract, and a program ending
+        # "G00 Z50. / X200. / M30 / %" was reported for a retract it has.
+        tail = [(i, code) for i, code in
+                ((i, self._strip_comments(ln).lstrip('%').strip()) for i, ln in enumerate(lines))
+                if code][-3:]
+        end_block = " ".join(code for _i, code in tail)
         # G28 is the reference return and retracts both axes by itself; U/W are
         # the incremental words a Fanuc lathe uses for exactly this move, so
         # looking only for X and Z missed the most common correct ending.
         retracted = (re.search(r'\bG28\b', end_block)
                      or (re.search(r'\b[ZW][-+]?\d', end_block)
                          and re.search(r'\b[XU][-+]?\d', end_block)))
-        if not snippet and "M30" in end_block and not retracted:
-            finds.append(self._f(len(lines), ERROR, "RETRACT_BEFORE_M30",
+        m30_line = next((i + 1 for i, code in reversed(tail) if self._M30.search(code)), None)
+        if not snippet and m30_line is not None and not retracted:
+            finds.append(self._f(m30_line, ERROR, "RETRACT_BEFORE_M30",
                                  "Before M30: Move Z to safe plane, then retract X.",
                                  hint="Before M30, move Z to a safe plane, then retract X "
                                       "(or G28 U0 W0)."))
@@ -294,6 +302,9 @@ class LintEngine:
             return float(m.group(1))
         except ValueError:      # a bare "F" with no number behind it
             return None
+
+    # M30, also written M030 or run together as N100M30; not M300.
+    _M30 = re.compile(r'(?<![A-Z])M0*30(?!\d)', re.IGNORECASE)
 
     # A G70-G76 block, the cycle number captured; not G700. A digit may come
     # before the G -- N10G75X26. is a legal block without spaces.
