@@ -15,10 +15,11 @@ import unittest
 from PyQt6.QtWidgets import QApplication
 import matplotlib.patches as patches
 import matplotlib.lines as lines
+from matplotlib.colors import to_hex
 
 from vibe_cnc.arc_geometry import arc_sweep
 from vibe_cnc.gcode_parser import GCodeParser
-from vibe_cnc.gcode_plotter import GCodePlotterWidget
+from vibe_cnc.gcode_plotter import GHOST_ALPHA, PATH_COLOURS, GCodePlotterWidget
 
 COLORS = {'CRT_GREEN': '#6CFF6C', 'FANUC_YELLOW': '#FFC800', 'CYAN': '#56D6FF',
           'BG_DARK': '#1A1A1A', 'WHITE': '#EDEDED'}
@@ -241,6 +242,37 @@ class PlotViewTests(unittest.TestCase):
         self.assertFalse(self.solid(widget, -10.0, 35.0))
         self.assertTrue(self.solid(widget, -10.0, 29.5))
 
+    def test_the_half_section_shows_the_part_below_the_centre_line_too(self):
+        widget = self.turned()
+
+        self.assertTrue([p for p in widget.ax.patches if p.get_gid() == 'stock_view'])
+        self.assertTrue([im for im in widget.ax.images if im.get_gid() == 'view'])
+        self.assertLessEqual(widget.ax.get_ylim()[0], -40.0)
+
+    def test_without_the_half_section_only_the_upper_half_is_drawn(self):
+        widget = self.turned()
+
+        widget.set_mirror(False)
+
+        self.assertEqual([p for p in widget.ax.patches if p.get_gid() == 'stock_view'], [])
+        self.assertEqual(list(widget.ax.images), [])
+        self.assertGreater(widget.ax.get_ylim()[0], -40.0)
+
+    def test_a_diameter_below_the_centre_line_is_not_negative(self):
+        formatter = self.turned().ax.yaxis.get_major_formatter()
+
+        self.assertEqual(formatter(-20.0, 0), "20")
+        self.assertEqual(formatter(20.0, 0), "20")
+
+    def test_a_cut_made_by_a_drill_has_the_drill_colour(self):
+        widget = GCodePlotterWidget(COLORS, chuck_z=-1000.0)
+        self.addCleanup(widget.deleteLater)
+        widget.parser.tool_items = {5: {"type": "drill", "d_mm": 8.2}}
+        widget.set_gcode("T0505\nG00 X0. Z2.\nG01 Z-20. F0.1\nG00 Z2.")
+
+        drilled = [ln for ln in widget.ax.lines if ln.get_color() == PATH_COLOURS['drill']]
+        self.assertEqual(len(drilled), 1)
+
     def test_the_view_makes_room_for_the_stock(self):
         # A short cut on a long blank: the blank is what the part is made of.
         widget = self.plotter("(STOCK D40 L50)\nG00 X30. Z2.\nG01 Z-5. F0.2")
@@ -365,12 +397,12 @@ class PlotPlaybackTests(unittest.TestCase):
         widget = self.plotter(code=self.FINISHED)
 
         def finishing(w):
-            # The G54 cross is cyan as well, but it is a single point.
+            # Markers are single points; a move is two.
             return [ln for ln in w.ax.lines
-                    if ln.get_color() == COLORS['CYAN'] and len(ln.get_xdata()) == 2]
+                    if ln.get_color() == PATH_COLOURS['finish'] and len(ln.get_xdata()) == 2]
 
         run = finishing(widget)
-        roughing = [ln for ln in widget.ax.lines if ln.get_color() == COLORS['CRT_GREEN']]
+        roughing = [ln for ln in widget.ax.lines if ln.get_color() == PATH_COLOURS['cut']]
 
         self.assertEqual(len(run), 3)
         self.assertGreater(min(ln.get_zorder() for ln in run),
@@ -382,7 +414,7 @@ class PlotPlaybackTests(unittest.TestCase):
 
         def finishing():
             return [ln for ln in widget.ax.lines
-                    if ln.get_color() == COLORS['CYAN'] and len(ln.get_xdata()) == 2]
+                    if ln.get_color() == PATH_COLOURS['finish'] and len(ln.get_xdata()) == 2]
 
         widget.set_live_step(call, 1)       # only the rapid onto the contour
         self.assertEqual(finishing(), [])
@@ -425,14 +457,14 @@ class PlotPlaybackTests(unittest.TestCase):
         widget = self.plotter(code=self.G76_THREAD)
 
         # One roughing and one finishing pass: two cutting legs.
-        self.assertEqual(len(self.lines_in(widget, COLORS['FANUC_YELLOW'])), 2)
-        self.assertEqual(self.lines_in(widget, COLORS['CRT_GREEN']), [])
+        self.assertEqual(len(self.lines_in(widget, PATH_COLOURS['thread'])), 2)
+        self.assertEqual(self.lines_in(widget, PATH_COLOURS['cut']), [])
 
     def test_g92_passes_get_the_same_colour(self):
         widget = self.plotter(code=self.G92_THREAD)
 
-        self.assertEqual(len(self.lines_in(widget, COLORS['FANUC_YELLOW'])), 2)
-        self.assertEqual(self.lines_in(widget, COLORS['CRT_GREEN']), [])
+        self.assertEqual(len(self.lines_in(widget, PATH_COLOURS['thread'])), 2)
+        self.assertEqual(self.lines_in(widget, PATH_COLOURS['cut']), [])
 
     def test_a_thread_pass_appears_with_its_cut_and_not_with_its_feed_in(self):
         widget = self.plotter(code=self.G76_THREAD)
@@ -440,7 +472,7 @@ class PlotPlaybackTests(unittest.TestCase):
         widget.set_live_max_line(call - 1)
 
         def passes():
-            return len(self.lines_in(widget, COLORS['FANUC_YELLOW']))
+            return len(self.lines_in(widget, PATH_COLOURS['thread']))
 
         widget.set_live_step(call, 1)      # feed in: a rapid
         self.assertEqual(passes(), 0)
@@ -454,7 +486,7 @@ class PlotPlaybackTests(unittest.TestCase):
     def test_a_thread_pass_is_drawn_above_an_ordinary_cut_and_below_a_finishing_run(self):
         widget = self.plotter(code=self.G76_THREAD)
 
-        thread = self.lines_in(widget, COLORS['FANUC_YELLOW'])[0].get_zorder()
+        thread = self.lines_in(widget, PATH_COLOURS['thread'])[0].get_zorder()
 
         self.assertGreater(thread, 2)       # a cut
         self.assertLess(thread, 2.5)        # a finishing run
@@ -484,9 +516,38 @@ class PlotPlaybackTests(unittest.TestCase):
         total = widget.steps_in_line(self.CALL)
 
         def red():
-            return [ln for ln in widget.ax.lines if ln.get_color() == '#FF0000']
+            return [ln for ln in widget.ax.lines if ln.get_color() == PATH_COLOURS['collision']]
 
         widget.set_live_step(self.CALL, 1)
         self.assertEqual(red(), [])
         widget.set_live_step(self.CALL, total)
         self.assertTrue(red())
+
+    @staticmethod
+    def faint(widget):
+        return [c for c in widget.ax.collections if c.get_alpha() == GHOST_ALPHA]
+
+    def test_the_moves_ahead_of_the_playback_are_drawn_faint(self):
+        widget = self.plotter()
+
+        widget.set_live_max_line(1)
+
+        # Every move after line 1's, as one segment each: the cycle has no arcs.
+        ahead = sum(len(c.get_segments()) for c in self.faint(widget))
+        self.assertEqual(ahead, len(widget.paths_cache['order']) - widget.steps_in_line(1))
+
+    def test_outside_a_playback_nothing_is_faint(self):
+        self.assertEqual(self.faint(self.plotter()), [])
+
+    def test_the_move_just_made_is_drawn_in_fanuc_yellow(self):
+        widget = self.plotter()
+
+        widget.set_live_step(self.CALL, 2)
+
+        yellow = [c for c in widget.ax.collections
+                  if to_hex(c.get_edgecolor()[0]) == COLORS['FANUC_YELLOW'].lower()]
+        self.assertTrue(yellow)
+        x, z = widget.step_end(self.CALL, 2)
+        ends = {tuple(round(v, 6) for v in segment[-1])
+                for c in yellow for segment in c.get_segments()}
+        self.assertEqual(ends, {(z, x)})

@@ -9,16 +9,51 @@ the slice a Z falls in, so a value on a slope can be off by that much times
 the slope: the tolerance is SLICE unless a test says otherwise.
 """
 import math
-import os
 import unittest
 
 from vibe_cnc.arc_geometry import sample_arc
 from vibe_cnc.gcode_parser import GCodeParser
 from vibe_cnc.stock_model import (MAX_CELLS, NO_BODY, Body, StockModel,
-                                  StockPlayback, body_for)
+                                  StockPlayback, body_for, tool_at)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WELLE = os.path.join(HERE, os.pardir, "programs", "O0002_WELLE.nc")
+# programs/O0002_WELLE.nc as it stood on 2026-11-21. Kept here because
+# programs/*.nc is not under version control: CI would not find the file.
+WELLE = """\
+(SHAFT D30 — O0002)
+(Tools: T01 CNMG1204P-S External R0.8 / T05 Drill 8.2)
+(Material: C45, Stock D40, Date: 2026-11-16, REV: A1)
+(STOCK D40 L50)
+N10 G18 G40 G80 G97 G99
+N20 G21 G54
+N30 G50 S2500
+N40 G00 X100. Z50.
+(--- Centre hole D8.2, 20 deep ---)
+N50 T0505
+N60 G97 S2000 M03
+N70 G00 X0. Z2.
+N80 G01 Z-20. F0.12
+N90 G00 Z2.
+N100 G00 X100. Z50.
+(--- Rough turning: 1.5 mm depth of cut per side ---)
+N110 T0101
+N120 G96 S150 M03
+N130 G00 X42. Z2.
+N140 G71 U1.5 R0.5
+N150 G71 P160 Q230 U0.4 W0.1 F0.25
+N160 G00 X16.
+N170 G01 X20. Z-2. F0.15
+N180 Z-18.
+N190 G02 X24. Z-20. R2.
+N200 G01 X30.
+N210 Z-35.
+N220 X38.
+N230 X40. Z-36.
+(--- Finishing ---)
+N240 G70 P160 Q230
+N250 G00 Z50.
+N260 G00 X100. M05
+N270 M30
+"""
 
 OD = Body('outer')
 BORE = Body('inner')
@@ -185,6 +220,17 @@ class TurningTests(unittest.TestCase):
         model.cut((42.0, -51.0), (-1.0, -51.0), OD)
 
         self.assertEqual(model.outline(), [])
+        self.assertEqual(model.pieces(), [])
+
+    def test_a_piece_ends_where_the_cut_went_through(self):
+        model = blank()
+        self.assertEqual(model.pieces(), [(0, len(model.z))])
+
+        model.cut((42.0, -30.0), (-1.0, -30.0), OD)
+
+        ((first, stop),) = model.pieces()
+        self.assertEqual(first, 0)
+        self.assertAlmostEqual(model.z_back + stop * model.cell, -30.0, delta=model.cell)
 
 
 class BoreTests(unittest.TestCase):
@@ -220,6 +266,23 @@ class BoreTests(unittest.TestCase):
         (outline,) = model.outline()
         self.assertEqual(outline[-1], (0.0, -50.0))
         self.assertIn((8.2, 0.0), outline)
+
+    def test_the_inner_edge_runs_from_the_back_to_the_bore_at_the_face(self):
+        model = blank()
+        model.cut((0.0, 2.0), (0.0, -30.0), Body('drill', radius=4.1))
+
+        ((first, stop),) = model.pieces()
+        inner = model.edge('inner', first, stop)
+        self.assertEqual(inner[0], (0.0, -50.0))
+        self.assertEqual(inner[-1], (8.2, 0.0))
+        self.assertEqual(model.edge('outer', first, stop), [(40.0, -50.0), (40.0, 0.0)])
+
+
+class ToolAtTests(unittest.TestCase):
+    def test_the_tool_is_the_last_one_changed_to(self):
+        changes = [(10, 5), (17, 1)]
+        self.assertEqual([tool_at(line, changes) for line in (5, 10, 16, 17, 99)],
+                         [0, 5, 5, 1, 1])
 
 
 class PlaybackTests(unittest.TestCase):
@@ -284,13 +347,12 @@ class PlaybackTests(unittest.TestCase):
 
 
 class SampleProgramTests(unittest.TestCase):
-    """O0002_WELLE.nc: a D8.2 hole 20 deep, then G71 and G70 to the contour
+    """O0002_WELLE: a D8.2 hole 20 deep, then G71 and G70 to the contour
     X16 Z2 - X20 Z-2 - Z-18 - R2 to X24 Z-20 - X30 - Z-35 - X38 - X40 Z-36."""
 
     @classmethod
     def setUpClass(cls):
-        with open(WELLE, encoding="utf-8") as handle:
-            cls.paths = GCodeParser().parse(handle.read())
+        cls.paths = GCodeParser().parse(WELLE)
         cls.model = StockPlayback(cls.paths, TOOLS).at()
 
     def test_the_hole_is_the_drill(self):

@@ -198,14 +198,12 @@ class StockModel:
             return None
         return 2.0 * self.inner[i], 2.0 * self.outer[i]
 
-    def outline(self) -> list:
-        """What is left, as closed outlines of (X, Z) points with X a diameter.
+    def pieces(self) -> list:
+        """(first, stop) slice ranges that still have material, back to front.
 
-        One outline per stretch of Z that still has material. Each runs along
-        the outside from the back to the front and returns along the bore, with
-        the cells as flat steps, so a shoulder stays square.
+        One per stretch of Z the cuts have not gone right through.
         """
-        outlines = []
+        found = []
         i, cells = 0, len(self.z)
         while i < cells:
             if not self._solid(i):
@@ -214,10 +212,19 @@ class StockModel:
             j = i
             while j < cells and self._solid(j):
                 j += 1
-            outlines.append(self._edge(self.outer, i, j)
-                            + self._edge(self.inner, i, j)[::-1])
+            found.append((i, j))
             i = j
-        return outlines
+        return found
+
+    def outline(self) -> list:
+        """What is left, as closed outlines of (X, Z) points with X a diameter.
+
+        One outline per piece. Each runs along the outside from the back to
+        the front and returns along the bore, with the slices as flat steps,
+        so a shoulder stays square.
+        """
+        return [self.edge('outer', first, stop) + self.edge('inner', first, stop)[::-1]
+                for first, stop in self.pieces()]
 
     def _boundary(self, i):
         """Z where slice i begins. Worked out from the index each time, and
@@ -226,21 +233,28 @@ class StockModel:
             return self.z_front
         return self.z_back + i * self.cell
 
-    def _edge(self, radii, first, stop):
-        """One side of an outline, cells first..stop-1, back to front."""
+    def edge(self, side, first, stop):
+        """The 'outer' or 'inner' edge over slices first..stop-1, back to
+        front, as (X, Z) points with X a diameter."""
+        radii = self.outer if side == 'outer' else self.inner
+        boundary = self._boundary
         points = []
         for i in range(first, stop):
             x = 2.0 * radii[i]
-            z0, z1 = self._boundary(i), self._boundary(i + 1)
             if points and abs(points[-1][0] - x) < 1e-9:
-                points[-1] = (x, z1)
+                points[-1] = (x, boundary(i + 1))
             else:
-                points.extend(((x, z0), (x, z1)))
+                points.append((x, boundary(i)))
+                points.append((x, boundary(i + 1)))
         return points
 
 
-def _tool_at(line, changes):
-    """The tool in the spindle on `line`: the last change at or before it."""
+def tool_at(line, changes):
+    """The tool in the spindle on `line`: the last change at or before it.
+
+    changes is (line, tool) pairs sorted by line, from the parser's
+    `tool_changes`. 0 before the first change.
+    """
     tool = 0
     for change_line, number in changes:
         if change_line > line:
@@ -268,7 +282,7 @@ class StockPlayback:
         self._moves = []
         for kind, index, line in paths.get('order', []):
             self._moves.append(self._move(paths, kind, index, line,
-                                          body_for(tools.get(_tool_at(line, changes)))))
+                                          body_for(tools.get(tool_at(line, changes)))))
         self._model = None
         self._applied = 0
 

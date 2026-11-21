@@ -1,21 +1,117 @@
 # gcode_plotter.py — 2D workpiece visualization for Fanuc lathes
 import math
 import hashlib
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+import numpy as np
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QMenu
 from PyQt6.QtCore import QTimer, pyqtSignal, Qt
+from PyQt6.QtGui import QCursor
 import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.collections import LineCollection
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
+from matplotlib.path import Path
 import matplotlib.patches as patches
 
 
 # GCodeParser lives in gcode_parser so it stays importable without a GUI stack.
 # Re-exported here because this module has always been its import site.
 from vibe_cnc.gcode_parser import GCodeParser
-from vibe_cnc.arc_geometry import arc_thetas
-from vibe_cnc.stock_model import StockPlayback
+from vibe_cnc.arc_geometry import arc_thetas, sample_arc
+from vibe_cnc.stock_model import StockPlayback, body_for, tool_at
 
+# The look: graphite under the part, and Fanuc yellow (`ui.fanuc_yellow` in
+# config.yaml) for the move being made and nothing else, so it stays a signal.
+BACKGROUND = '#14161A'
+GRID = '#24272D'
+SPINE = '#3A3F47'
+AXIS_TEXT = '#8A929E'
+LABEL = '#6B7380'
+MARKER = '#C9CED6'
+CENTRE_LINE = '#566070'
+# The chuck zone: red like a collision, but darker, so its boundary line is
+# never taken for one.
+CHUCK = '#B23A48'
+
+# One colour per kind of move. The tests read them from here.
+PATH_COLOURS = {
+    'rapid': '#8C95A3',
+    'cut': '#3FA7FF',
+    'finish': '#58E86A',
+    'thread': '#F472B6',
+    'drill': '#B48CFF',
+    'comp': '#56D6FF',
+    'collision': '#FF5468',
+}
+# The moves a playback has not reached yet.
+GHOST_ALPHA = 0.28
+# Chords an arc ahead of the playback is drawn with.
+ARC_CHORDS = 24
+
+# The part: a hatched section above the centre line, the turned surface below.
+SECTION_FILL = '#3A4350'
+SECTION_HATCH = '#4C5666'
+SECTION_EDGE = '#D5DCE5'
+VIEW_EDGE = '#B9C2CE'
+BLANK_EDGE = '#5A626E'
+STEEL = np.array([0.47, 0.52, 0.58])
+# A step in diameter this big (mm) is a shoulder, drawn as a line across the
+# view. Smaller ones are the slices of a chamfer or a radius.
+SHOULDER_MIN = 1.0
+
+# A datum mark: a circle with two opposite quarters filled.
+ORIGIN_MARK = Path.make_compound_path(Path.wedge(0, 90), Path.wedge(180, 270))
+
+
+def _segments(points, mirror=False):
+    """A polyline of (X, Z) points as ((z, x), (z, x)) segments.
+
+    Stretches that lie on the centre line are left out: that is where the
+    section ends, and the centre line is drawn there already.
+    """
+    sign = -1.0 if mirror else 1.0
+    return [((z0, sign * x0), (z1, sign * x1))
+            for (x0, z0), (x1, z1) in zip(points, points[1:])
+            if not (x0 == 0.0 and x1 == 0.0)]
+
+
+def _turned_surface(model, rows=120, columns=600):
+    """The lower half of the part as an RGBA image, lit like turned steel.
+
+    Each column is a slice of the model, each row a diameter from the centre
+    line down to the blank's. A slice is a cylinder seen side on: its surface
+    faces the viewer at the centre line and turns away towards the edge, so
+    the light it catches follows the height over its radius.
+
+    At most `columns` slices are sampled: the edges are drawn exactly on top,
+    and finer shading costs time on every playback step without showing.
+    """
+    every = max(1, math.ceil(len(model.outer) / columns))
+    outer = np.asarray(model.outer[::every], dtype=float)
+    solid = outer > np.asarray(model.inner[::every], dtype=float) + 1e-9
+    reach = np.where(solid & (outer > 0.0), 2.0 * outer, 0.0)[None, :]
+    height = np.linspace(0.0, -model.diameter, rows)[:, None]
+    inside = (height >= -reach) & (reach > 0.0)
+    t = np.clip(height / np.where(reach > 0.0, reach, 1.0), -1.0, 0.0)
+    facing = np.sqrt(1.0 - t * t)
+
+    light = np.array([-0.62, 0.78]) / np.hypot(-0.62, 0.78)
+    half = light + np.array([0.0, 1.0])
+    half /= np.hypot(*half)
+    diffuse = np.clip(t * light[0] + facing * light[1], 0.0, 1.0)
+    shine = np.clip(t * half[0] + facing * half[1], 0.0, 1.0) ** 28
+    rim = np.exp(-((t + 0.93) / 0.05) ** 2)
+    # Turning marks: a faint grain along Z, the same every time it is drawn.
+    grain = 1.0 + 0.022 * np.convolve(np.random.default_rng(7).normal(0, 1, outer.size),
+                                      np.ones(4) / 4, mode='same')
+
+    colour = STEEL * (0.10 + 0.62 * diffuse)[..., None] * grain[None, :, None]
+    colour += (1.0 - diffuse)[..., None] * np.array([0.0, 0.010, 0.035])
+    colour += shine[..., None] * np.array([0.90, 0.94, 1.0]) * 0.34
+    colour += rim[..., None] * np.array([0.55, 0.62, 0.70]) * 0.22
+    return np.dstack([np.clip(colour, 0.0, 1.0), inside.astype(float)])
 
 
 class GCodePlotterWidget(QWidget):
@@ -61,9 +157,14 @@ class GCodePlotterWidget(QWidget):
         self._move_of = {}  # id() of a straight segment -> (list, index)
         # What is left of the blank, move by move. Rebuilt after every parse.
         self._stock_playback = None
+        self._stock_cache = None  # (key, shapes) of the stock last drawn
+        self._drill_lines = frozenset()  # Lines whose cuts a drill makes
+        # Half section: the part's view drawn below the centre line too. It
+        # doubles the height the part needs; the right-click menu turns it off.
+        self.mirror = True
 
         # Matplotlib Figure
-        self.fig = Figure(figsize=(6, 4), dpi=100, facecolor='#1A1A1A')
+        self.fig = Figure(figsize=(6, 4), dpi=100, facecolor=colors.get('BG_DARK', '#1A1A1A'))
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.ax = self.fig.add_subplot(111)
@@ -91,17 +192,21 @@ class GCodePlotterWidget(QWidget):
         self._draw_empty()
 
     def _setup_plot(self):
-        """Configures the plot layout (Fanuc style)"""
-        self.ax.set_facecolor('#0A0A0A')
+        """Configures the plot layout: graphite, quiet axes, grid underneath."""
+        self.ax.set_facecolor(BACKGROUND)
         # Z along the horizontal with the chuck to the left, X up the vertical.
         # That is how every lathe control draws it, and it matches the shape of
         # both the part (long in Z, small in X) and this panel (wide and short).
-        self.ax.set_xlabel('Z (mm)', color=self.colors['CRT_GREEN'], fontsize=9)
-        self.ax.set_ylabel('X (Ø mm)', color=self.colors['CRT_GREEN'], fontsize=9)
-        self.ax.tick_params(colors=self.colors['CRT_GREEN'], labelsize=8)
-        self.ax.grid(True, color='#2A2A2A', linestyle='--', linewidth=0.5)
-        self.ax.spines['bottom'].set_color('#444')
-        self.ax.spines['left'].set_color('#444')
+        self.ax.set_xlabel('Z (mm)', color=AXIS_TEXT, fontsize=9)
+        self.ax.set_ylabel('X (Ø mm)', color=AXIS_TEXT, fontsize=9)
+        self.ax.tick_params(colors=AXIS_TEXT, labelsize=8)
+        # Below the centre line the half section mirrors the part, and a
+        # diameter is not negative there either.
+        self.ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _pos: f"{abs(value):g}"))
+        self.ax.set_axisbelow(True)
+        self.ax.grid(True, color=GRID, linestyle='-', linewidth=0.6)
+        self.ax.spines['bottom'].set_color(SPINE)
+        self.ax.spines['left'].set_color(SPINE)
         self.ax.spines['top'].set_visible(False)
         self.ax.spines['right'].set_visible(False)
         self.fig.tight_layout()
@@ -182,8 +287,11 @@ class GCodePlotterWidget(QWidget):
         blocked, and the hatching spans the full width to say so.
         """
         diameter = self.parser.chuck_diameter
-        style = dict(linewidth=1, edgecolor='#AA0000', facecolor='#AA0000',
-                     alpha=0.15, hatch='//', zorder=0)
+        colour = CHUCK
+        # Faint: it is a boundary to stay out of, and it can fill half the
+        # picture when the view is zoomed out.
+        style = dict(linewidth=0.8, edgecolor=to_rgba(colour, 0.30),
+                     facecolor=to_rgba(colour, 0.05), hatch='//', zorder=0)
 
         if diameter is None:
             # Every diameter is blocked, so span the whole height. axvspan works
@@ -195,7 +303,7 @@ class GCodePlotterWidget(QWidget):
         else:
             self.ax.add_patch(patches.Rectangle(
                 (self.parser.chuck_z - 50, -diameter), 50, 2 * diameter, **style))
-        self.ax.axvline(x=self.parser.chuck_z, color='#AA0000', linestyle=':',
+        self.ax.axvline(x=self.parser.chuck_z, color=colour, linestyle=':',
                         linewidth=1, alpha=0.5, zorder=0, label='Chuck Limit')
 
     def _draw_arc(self, arc, **style):
@@ -222,30 +330,120 @@ class GCodePlotterWidget(QWidget):
 
         The blank stays as a dashed outline, so what has been cut away still
         shows where it was. What is left comes from stock_model, which says
-        what it assumes about the tools.
+        what it assumes about the tools. Above the centre line it is drawn as
+        a section, hatched; below it, when the half section is on, as the
+        turned surface seen from the front.
         """
         stock = self.paths_cache.get('stock') if self.paths_cache else None
         if not stock:
             return
-        z_front = stock['z_front']
+        z_back = stock['z_front'] - stock['length']
         diameter = stock['diameter']
+        blank = dict(linewidth=0.8, linestyle=(0, (4, 3)), edgecolor=BLANK_EDGE,
+                     facecolor=(1.0, 1.0, 1.0, 0.03), zorder=0.6)
         # The upper half of the section, with the centre line as its bottom
         # edge -- the way the control draws a turned part.
-        self.ax.add_patch(patches.Rectangle(
-            (z_front - stock['length'], 0.0), stock['length'], diameter,
-            linewidth=0.8, linestyle='--', edgecolor='#555555', facecolor='none',
-            zorder=0.5, gid='stock'))
+        self.ax.add_patch(patches.Rectangle((z_back, 0.0), stock['length'], diameter,
+                                            gid='stock', **blank))
+        if self.mirror:
+            self.ax.add_patch(patches.Rectangle((z_back, -diameter), stock['length'],
+                                                diameter, gid='stock_view', **blank))
         model = (self._stock_playback.at(self._moves_reached())
                  if self._stock_playback else None)
-        for outline in (model.outline() if model else ()):
-            self.ax.add_patch(patches.Polygon(
-                [(z, x) for x, z in outline], closed=True,
-                linewidth=1, edgecolor='#666666', facecolor='#202020',
-                zorder=0.6, gid='material'))
+        if model is not None:
+            shapes = self._stock_shapes(model)
+            self._draw_section(shapes)
+            if self.mirror:
+                self._draw_view(model, shapes)
         # At the far end, clear of the rapids that arrive at the front face.
-        self.ax.text(z_front - stock['length'], diameter,
-                     f" STOCK Ø{diameter:g} × {stock['length']:g}",
-                     ha='left', va='bottom', color='#777777', fontsize=7)
+        self.ax.text(z_back, diameter, f" STOCK Ø{diameter:g} × {stock['length']:g}",
+                     ha='left', va='bottom', color=LABEL, fontsize=7)
+
+    def _stock_shapes(self, model) -> dict:
+        """What the section and the view are drawn from, for this state of the stock.
+
+        Kept until the material changes. A playback redraws on every move, and
+        most moves -- rapids, retracts, moves in the air -- cut nothing.
+        """
+        key = (id(model), hash(tuple(model.outer)), hash(tuple(model.inner)))
+        if self._stock_cache is not None and self._stock_cache[0] == key:
+            return self._stock_cache[1]
+
+        outlines, section, view, hidden = [], [], [], []
+        for first, stop in model.pieces():
+            outer = model.edge('outer', first, stop)
+            inner = model.edge('inner', first, stop)
+            outlines.append([(z, x) for x, z in outer + inner[::-1]])
+            section += _segments(outer) + _segments(inner)
+            view += _segments(outer, mirror=True)
+            hidden += _segments(inner, mirror=True)
+            # The back face and the front face: from the bore to the outside
+            # in the section, from the centre line in the view.
+            for i in (0, -1):
+                z = outer[i][1]
+                section.append(((z, inner[i][0]), (z, outer[i][0])))
+                view.append(((z, 0.0), (z, -outer[i][0])))
+        # A shoulder is the edge of a face, seen side on: a line across the
+        # whole half, not only the step.
+        radii, cores = model.outer, model.inner
+        for i in range(len(radii) - 1):
+            if (2.0 * abs(radii[i + 1] - radii[i]) > SHOULDER_MIN
+                    and radii[i] > cores[i] and radii[i + 1] > cores[i + 1]):
+                z = model.z_back + (i + 1) * model.cell
+                view.append(((z, 0.0), (z, -2.0 * max(radii[i], radii[i + 1]))))
+
+        shapes = {'outlines': outlines, 'section': section, 'view': view,
+                  'hidden': hidden, 'surface': None}
+        self._stock_cache = (key, shapes)
+        return shapes
+
+    def _add_shape(self, patch):
+        """Adds a patch without matplotlib working out data limits from it.
+
+        That costs milliseconds on an outline of thousands of points, every
+        playback step, and the view is framed by _fit_view anyway.
+        """
+        self.ax.add_artist(patch)
+
+    def _draw_section(self, shapes):
+        """The material left, above the centre line, as a hatched section."""
+        for xy in shapes['outlines']:
+            self._add_shape(patches.Polygon(xy, closed=True, facecolor=SECTION_FILL,
+                                            edgecolor='none', zorder=0.65, gid='material'))
+            # The hatching on a patch of its own: its colour is the patch's
+            # edge colour, and this one has no edge to draw.
+            self._add_shape(patches.Polygon(xy, closed=True, facecolor='none',
+                                            edgecolor=SECTION_HATCH, linewidth=0,
+                                            hatch='////', zorder=0.66))
+        self.ax.add_collection(LineCollection(shapes['section'], colors=SECTION_EDGE,
+                                              linewidths=1.1, zorder=0.7),
+                               autolim=False)
+
+    def _draw_view(self, model, shapes):
+        """The material left, below the centre line, as the turned surface.
+
+        Lit as a cylinder seen from the front. The bore is hidden in a view,
+        so it is drawn dashed, the way a drawing shows a hidden edge.
+        """
+        if shapes['surface'] is None:
+            shapes['surface'] = _turned_surface(model)
+        image = self.ax.imshow(shapes['surface'],
+                               extent=(model.z_back, model.z_front, -model.diameter, 0.0),
+                               origin='upper', aspect='auto', interpolation='bilinear',
+                               zorder=0.62)
+        image.set_gid('view')
+        self.ax.add_collection(LineCollection(shapes['view'], colors=VIEW_EDGE,
+                                              linewidths=0.9, zorder=0.7),
+                               autolim=False)
+        if shapes['hidden']:
+            self.ax.add_collection(LineCollection(shapes['hidden'], colors=VIEW_EDGE,
+                                                  linewidths=0.8, linestyles=(0, (3, 2)),
+                                                  alpha=0.55, zorder=0.7),
+                                   autolim=False)
+
+    def _draw_centre_line(self):
+        self.ax.axhline(0.0, color=CENTRE_LINE, linewidth=0.8,
+                        linestyle=(0, (14, 3, 2, 3)), zorder=0.8)
 
     def _draw_tool_changes(self):
         """Marks where each tool change happens, one label per position.
@@ -261,10 +459,23 @@ class GCodePlotterWidget(QWidget):
 
         for (z, x), tools in at_position.items():
             label = ", ".join(f"T{t}" for t in dict.fromkeys(tools))
-            self.ax.plot(z, x, marker='o', color=self.colors['FANUC_YELLOW'],
-                         markersize=6, zorder=3)
-            self.ax.text(z, x, f" {label}", color=self.colors['FANUC_YELLOW'],
-                         fontsize=8, va='center')
+            self.ax.plot(z, x, marker='D', color=MARKER, markersize=5, zorder=3)
+            self.ax.text(z, x, f"  {label}", color=AXIS_TEXT, fontsize=8, va='center')
+
+    def _colour_of(self, kind, line):
+        """The colour of a move: its kind, and for a cut, whether a drill makes it."""
+        if kind == 'cut' and line in self._drill_lines:
+            return PATH_COLOURS['drill']
+        return PATH_COLOURS[kind]
+
+    def _segments_of(self, kind, index):
+        """One move as ((z, x), (z, x)) segments, an arc along its chords."""
+        if kind == 'arc':
+            points = sample_arc(self.paths_cache['arc'][index], ARC_CHORDS)
+        else:
+            start, end, _line = self.paths_cache[kind][index]
+            points = [start, end]
+        return [((z0, x0), (z1, x1)) for (x0, z0), (x1, z1) in zip(points, points[1:])]
 
     def _draw_scene(self) -> bool:
         """Clears the axes and draws the program up to live_max_line.
@@ -272,87 +483,114 @@ class GCodePlotterWidget(QWidget):
         Shared by the full update and the live redraw, which differ only in
         what they do with the zoom afterwards. Returns whether any path was
         drawn.
+
+        During a playback the moves it has not reached are drawn faint, as one
+        collection, so the program ahead stays in view and every move that has
+        been made is still one line of its own.
         """
         self.ax.clear()
         self.highlight_artist = None  # Invalid after clear() - will be recreated
         self.live_text = None  # Invalid after clear() - will be recreated
         self._setup_plot()
 
-        has_paths = False
-
         self._draw_stock()
         self._draw_chuck()
+        self._draw_centre_line()
+
+        has_paths = False
+        ahead = {'solid': ([], []), 'dotted': ([], [])}  # segments, colours
+
+        def later(style, kind, index, colour):
+            segments = self._segments_of(kind, index)
+            ahead[style][0].extend(segments)
+            ahead[style][1].extend([colour] * len(segments))
 
         # Live drawing: only what the playback has reached. _shown decides.
-
-        # Rapid moves (G00) - gray dashed
-        for index, segment in enumerate(self.paths_cache['rapid']):
-            (x1, z1), (x2, z2), line = segment
-            if self._shown(line, ('rapid', index)):
-                self.ax.plot([z1, z2], [x1, x2], color='#555', linestyle='--', linewidth=1, zorder=1)
+        for kind, zorder in (('rapid', 1), ('cut', 2), ('thread', 2.4), ('finish', 2.5)):
+            for index, segment in enumerate(self.paths_cache[kind]):
+                (x1, z1), (x2, z2), line = segment
+                colour = self._colour_of(kind, line)
                 has_paths = True
+                if not self._shown(line, (kind, index)):
+                    later('dotted' if kind == 'rapid' else 'solid', kind, index, colour)
+                elif kind == 'rapid':
+                    self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=0.9,
+                                 linestyle=(0, (1.5, 2.5)), alpha=0.8, zorder=zorder)
+                else:
+                    # Thread passes run along Z like turning; the colour is what
+                    # makes them read as a thread. The finishing run lies a
+                    # fraction of a millimetre off the roughing, so it is drawn
+                    # over it in a colour of its own.
+                    self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=1.6,
+                                 zorder=zorder, solid_capstyle='round')
 
-        # Cutting paths (G01) - green solid
-        for index, segment in enumerate(self.paths_cache['cut']):
-            (x1, z1), (x2, z2), line = segment
-            if self._shown(line, ('cut', index)):
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CRT_GREEN'], linewidth=2, zorder=2)
-                has_paths = True
+        # Circular arcs (G02/G03)
+        for index, arc in enumerate(self.paths_cache['arc']):
+            colour = self._colour_of('cut', arc['line'])
+            has_paths = True
+            if self._shown(arc['line'], ('arc', index)):
+                self._draw_arc(arc, color=colour, linewidth=1.6, zorder=2)
+            else:
+                later('solid', 'arc', index, colour)
 
-        # Finishing cycle (G70) - cyan solid, over the roughing it follows
-        for index, segment in enumerate(self.paths_cache['finish']):
-            (x1, z1), (x2, z2), line = segment
-            if self._shown(line, ('finish', index)):
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['CYAN'], linewidth=2, zorder=2.5)
-                has_paths = True
-
-        # Thread passes (G92, G76) - yellow solid. Each is a straight line along
-        # Z, like turning, so they need a colour of their own to read as a thread.
-        for index, segment in enumerate(self.paths_cache['thread']):
-            (x1, z1), (x2, z2), line = segment
-            if self._shown(line, ('thread', index)):
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'],
-                             linewidth=2, zorder=2.4)
-                has_paths = True
-
-        # Compensated cutting paths (G41/G42) - yellow dashed
+        # Compensated paths (G41/G42): where the nose centre runs. Dashed.
+        comp = PATH_COLOURS['comp']
         for segment in self.paths_cache.get('comp_cut', []):
             (x1, z1), (x2, z2), line = segment
             if self._shown(line):
-                self.ax.plot([z1, z2], [x1, x2], color=self.colors['FANUC_YELLOW'], linewidth=1.5,
-                            linestyle='--', alpha=0.9, zorder=3)
+                self.ax.plot([z1, z2], [x1, x2], color=comp, linewidth=1.2,
+                             linestyle='--', alpha=0.9, zorder=3)
                 has_paths = True
-
-        # Compensated arcs (G41/G42) - yellow dashed
         for arc in self.paths_cache.get('comp_arc', []):
             if self._shown(arc['line']):
-                self._draw_arc(arc, color=self.colors['FANUC_YELLOW'],
-                               linewidth=1.5, linestyle='--', alpha=0.9,
-                               zorder=3)
+                self._draw_arc(arc, color=comp, linewidth=1.2, linestyle='--',
+                               alpha=0.9, zorder=3)
                 has_paths = True
 
-        # Circular arcs (G02/G03) - green arc
-        for index, arc in enumerate(self.paths_cache['arc']):
-            if self._shown(arc['line'], ('arc', index)):
-                self._draw_arc(arc, color=self.colors['CRT_GREEN'],
-                               linewidth=2, zorder=2)
-                has_paths = True
+        for style, (segments, colours) in ahead.items():
+            if segments:
+                self.ax.add_collection(LineCollection(
+                    segments, colors=colours, alpha=GHOST_ALPHA, zorder=0.9,
+                    linewidths=0.8 if style == 'dotted' else 1.0,
+                    linestyles=(0, (1.5, 2.5)) if style == 'dotted' else 'solid'))
 
-        # Collisions (highlighted red). A straight one is the very segment that
-        # was filed under cut or rapid, so it appears with its move.
+        self._draw_current_move()
+
+        # Collisions. A straight one is the very segment that was filed under
+        # cut or rapid, so it appears with its move.
         for segment in self.paths_cache['collisions']:
             (x1, z1), (x2, z2), line = segment
             if self._shown(line, self._move_of.get(id(segment))):
-                self.ax.plot([z1, z2], [x1, x2], color='#FF0000', linewidth=3,
-                            alpha=0.7, zorder=5, label='Collision!')
+                self.ax.plot([z1, z2], [x1, x2], color=PATH_COLOURS['collision'],
+                             linewidth=3, alpha=0.85, zorder=5, label='Collision!')
 
         self._draw_tool_changes()
-
-        # Zero point marker
-        self.ax.plot(0, 0, marker='+', color=self.colors['CYAN'], markersize=10, zorder=4, linewidth=2)
-        self.ax.text(0, 0, ' G54', color=self.colors['CYAN'], fontsize=8, va='bottom')
+        self._draw_origin()
 
         return has_paths
+
+    def _draw_current_move(self):
+        """The move the playback has just made, in Fanuc yellow, glowing."""
+        if self.live_max_line is None:
+            return
+        reached = self._moves_reached()
+        if not reached:
+            return
+        kind, index, _line = self.paths_cache['order'][reached - 1]
+        segments = self._segments_of(kind, index)
+        accent = self.colors['FANUC_YELLOW']
+        for width, alpha in ((7.0, 0.16), (2.2, 1.0)):
+            self.ax.add_collection(LineCollection(segments, colors=accent, alpha=alpha,
+                                                  linewidths=width, zorder=6,
+                                                  capstyle='round'))
+
+    def _draw_origin(self):
+        """The programmed zero, as a drawing marks a datum."""
+        self.ax.plot(0, 0, marker='o', markersize=9, markerfacecolor=BACKGROUND,
+                     markeredgecolor=MARKER, markeredgewidth=1.1, zorder=7)
+        self.ax.plot(0, 0, marker=ORIGIN_MARK, markersize=9, color=MARKER,
+                     markeredgewidth=0, zorder=7.1)
+        self.ax.text(0, 0, '   G54', color=AXIS_TEXT, fontsize=8, va='top', zorder=7)
 
     def _fit_bounds(self):
         """(z_min, z_max, x_min, x_max) of what the picture should frame.
@@ -374,6 +612,9 @@ class GCodePlotterWidget(QWidget):
         if stock:
             points.append((stock['diameter'], stock['z_front']))
             points.append((0.0, stock['z_front'] - stock['length']))
+            if self.mirror:
+                # The view below the centre line is the same size again.
+                points.append((-stock['diameter'], stock['z_front'] - stock['length']))
         if not points:
             # Nothing is cut; a program of rapids alone still wants a frame.
             for start, end, _line in paths['rapid']:
@@ -437,6 +678,7 @@ class GCodePlotterWidget(QWidget):
         self.paths_cache = self.parser.parse(self.pending_code)
         self._index_moves()
         self._stock_playback = StockPlayback(self.paths_cache, self.parser.tool_items)
+        self._drill_lines = self._lines_drilled()
 
         if not self._draw_scene():
             self._draw_empty()
@@ -575,14 +817,12 @@ class GCodePlotterWidget(QWidget):
 
         # Double click: reactivate auto-zoom
         if event.dblclick and event.button == 1:
-            self._manual_zoom = False
-            # Forget the view too: a small zoom is within the 20% the fit
-            # tolerates, so the old limits would otherwise survive the reset.
-            self._last_xlim = None
-            self._last_ylim = None
-            self._last_code_hash = None  # Invalidate cache
-            if self.pending_code:
-                self._do_update()
+            self._fit_again()
+            return
+
+        # Right click: what the picture shows
+        if event.button == 3:
+            self._show_view_menu()
             return
 
         # Left click: store start position for click/drag detection
@@ -590,6 +830,44 @@ class GCodePlotterWidget(QWidget):
             self._click_start = (event.x, event.y)  # Pixel coordinates
             self._pan_start = (event.xdata, event.ydata)  # Data coordinates
             self._is_panning = False
+
+    def _fit_again(self):
+        """Frames the work again and forgets any zoom of the user's."""
+        self._manual_zoom = False
+        # Forget the view too: a small zoom is within the 20% the fit
+        # tolerates, so the old limits would otherwise survive the reset.
+        self._last_xlim = None
+        self._last_ylim = None
+        self._last_code_hash = None  # Invalidate cache
+        if self.pending_code:
+            self._do_update()
+
+    def _show_view_menu(self):
+        menu = QMenu(self)
+        half = menu.addAction("Half section: the part's view below the centre line")
+        half.setCheckable(True)
+        half.setChecked(self.mirror)
+        fit = menu.addAction("Fit the view (double-click)")
+        chosen = menu.exec(QCursor.pos())
+        if chosen is half:
+            self.set_mirror(not self.mirror)
+        elif chosen is fit:
+            self._fit_again()
+
+    def set_mirror(self, on: bool):
+        """Turns the half section on or off and frames the picture for it."""
+        if self.mirror == bool(on):
+            return
+        self.mirror = bool(on)
+        self._fit_again()
+
+    def _lines_drilled(self) -> frozenset:
+        """The lines whose cuts a drill makes, so they get the drill's colour."""
+        changes = sorted((change['line'], change['tool'])
+                         for change in self.paths_cache['tool_changes'])
+        tools = self.parser.tool_items
+        return frozenset(line for _start, _end, line in self.paths_cache['cut']
+                         if body_for(tools.get(tool_at(line, changes))).kind == 'drill')
 
     def _on_mouse_release(self, event):
         """Mouse release event"""
@@ -829,8 +1107,9 @@ class GCodePlotterWidget(QWidget):
                 fontsize=9,
                 verticalalignment='top',
                 horizontalalignment='right',
-                bbox=dict(boxstyle='round,pad=0.6', facecolor='#1A1A1A', edgecolor=self.colors['FANUC_YELLOW'], linewidth=2, alpha=0.95),
-                color=self.colors['FANUC_YELLOW'],
+                bbox=dict(boxstyle='round,pad=0.6', facecolor=BACKGROUND,
+                          edgecolor=self.colors['FANUC_YELLOW'], linewidth=1.2, alpha=0.95),
+                color=MARKER,
                 family='monospace',
                 weight='bold',
                 zorder=100
