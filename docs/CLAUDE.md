@@ -10,7 +10,7 @@
 ## Inputs
 - An excerpt of the G-code (max. 250 lines per request).
 - Context: tool JSON (`tools/tools.json`) and policies (`policies.md`).
-- Material/machine: stated in the prompt.
+- Machine: stated in the prompt. Material: in the program's own header comment, which the policies require.
 
 ## Outputs
 1) A list of rule violations: line, rule name, short fix.
