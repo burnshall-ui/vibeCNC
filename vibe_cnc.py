@@ -17,6 +17,7 @@ from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.diagnostics import blocking
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.specs import load_specs
 from vibe_cnc import verifier
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
 from vibe_cnc.ai_client import AIClient, backend_of
@@ -567,7 +568,7 @@ class Main(QMainWindow):
         """On the worker thread: draft, lint and correct, all of it, so the
         window gets one result. The linter only reads its config here."""
         return True, verifier.verify(self.ai, request, self.ai.generate_prompt(), self.linter,
-                                     snippet=snippet)
+                                     snippet=snippet, specs=load_specs())
 
     def _handle_generate_response(self, ok: bool, resp, who: str):
         """The answer the loop ended with, then what the linter says of it.
@@ -1233,7 +1234,7 @@ class Main(QMainWindow):
         # what the eval measures is what this button sends.
         prompt = build_analysis_prompt(snippet,
                                        read_policies(os.path.join(HERE, "policies.md")),
-                                       load_tools_json())
+                                       load_tools_json(), load_specs())
         # ask() picks the backend, as for a generation. Choosing it here sent
         # every mode but "claude" to Ollama, "anthropic" included.
         role = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"

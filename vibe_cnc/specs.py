@@ -101,6 +101,7 @@ class Dialect:
     g_codes: Dict[str, str]
     m_codes: Dict[str, str]
     machine_specific: Tuple[str, ...]   # M-codes whose meaning the machine builder decides
+    notes: Tuple[str, ...]              # what a model gets wrong about this control, in sentences
     path: str
 
 
@@ -255,7 +256,7 @@ def load_card(path: str) -> CycleCard:
 
 def load_dialect(path: str) -> Dialect:
     reader, data = _load(path)
-    reader.only(data, "", {"name", "source", "g", "m", "machine_specific"})
+    reader.only(data, "", {"name", "source", "notes", "g", "m", "machine_specific"})
     codes = {}
     for group in ("g", "m"):
         table = reader.table(data.get(group, {}), group)
@@ -270,7 +271,7 @@ def load_dialect(path: str) -> Dialect:
         if code not in codes["m"]:
             reader.fail("machine_specific", f"{code} is not in [m]")
     return Dialect(reader.text(data, "name", ""), reader.source(data), codes["g"], codes["m"],
-                   machine, path)
+                   machine, reader.texts(data, "notes", ""), path)
 
 
 @dataclass(frozen=True)

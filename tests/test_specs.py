@@ -111,6 +111,11 @@ class DialectTests(unittest.TestCase):
         self.assertIn("per revolution", dialect.g_codes["G99"])
         self.assertIn("speed limit", dialect.g_codes["G50"])
 
+    def test_the_notes_for_a_model_are_read(self):
+        notes = load_specs().dialect.notes
+        self.assertTrue(notes)
+        self.assertTrue(any("no G91" in note for note in notes))
+
     def test_the_machine_builders_m_codes_are_marked(self):
         dialect = load_specs().dialect
         self.assertIn("M06", dialect.machine_specific)
@@ -183,6 +188,13 @@ class BrokenCardTests(unittest.TestCase):
             load_dialect(path)
         self.assertIn("dialect.toml", str(caught.exception))
         self.assertIn("g.X00", str(caught.exception))
+
+    def test_dialect_notes_that_are_not_a_list_of_text(self):
+        path = self.card('name = "x"\nnotes = "one"\n[source]\ntext = "t"\n'
+                         'verified = false\n[g]\nG00 = "Rapid"\n', name="dialect.toml")
+        with self.assertRaises(SpecError) as caught:
+            load_dialect(path)
+        self.assertIn("notes: expected a list of text", str(caught.exception))
 
     def test_the_shipped_files_load(self):
         # Through the cache-free path, so a broken shipped file fails here too.

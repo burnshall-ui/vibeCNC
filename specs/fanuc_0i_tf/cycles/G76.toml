@@ -1,6 +1,8 @@
 code = "G76"
 name = "Multiple threading cycle"
-keywords = ["thread", "threading", "pitch", "lead", "gewinde", "gewindedrehen", "steigung", "g76"]
+# Keywords match whole words, so a German compound is listed as itself.
+keywords = ["thread", "threads", "threading", "pitch", "lead", "gewinde", "außengewinde",
+            "innengewinde", "gewindedrehen", "steigung", "g76"]
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \

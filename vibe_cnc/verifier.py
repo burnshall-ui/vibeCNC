@@ -12,6 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
+from . import spec_context
 from .diagnostics import Diagnostic, blocking, is_lint_clean, weight
 from .lint_engine import code_only, is_snippet
 
@@ -75,9 +76,12 @@ _TOOL = re.compile(r"(?<![A-Z])T(\d+)")
 _M_CODE = re.compile(r"(?<![A-Z])M0*(\d+)(?!\d)")
 
 
-def generation_request(text: str) -> str:
-    """The operator's request with the answer format the code is read out by."""
-    return text.strip() + ANSWER_FORMAT
+def generation_request(text: str, reference: str = "") -> str:
+    """The operator's request with the answer format the code is read out by,
+    after the reference from the spec files when there is one."""
+    if not reference:
+        return text.strip() + ANSWER_FORMAT
+    return f"{reference}\n\nRequest: {text.strip()}{ANSWER_FORMAT}"
 
 
 def code_blocks(answer: str) -> List[str]:
@@ -150,8 +154,11 @@ def _listed(findings: Iterable[Diagnostic]) -> str:
     return "\n".join(rows)
 
 
-def correction_request(findings: Iterable[Diagnostic]) -> str:
+def correction_request(findings: Iterable[Diagnostic], reference: str = "") -> str:
+    """The findings to correct; reference: the cards of cycles they name
+    that the model was not given yet."""
     return ("The linter found this in your code:\n" + _listed(findings) + "\n\n"
+            + (reference + "\n\n" if reference else "") +
             "Correct exactly these findings. Keep everything else as it is: every cycle, tool, "
             "offset and value the findings do not name. " + _SAME_FORMAT)
 
@@ -187,6 +194,7 @@ class Outcome:
     snippet: bool                           # linted as a piece of a program, as the caller asked
     stop: str                               # why the loop ended, one of the names above
     error: Optional[str] = None             # the backend's message when stop is FAILED
+    cards: Tuple[str, ...] = ()             # the cycle cards the model was given, in order
 
     @property
     def lint_clean(self) -> bool:
@@ -207,7 +215,7 @@ class Outcome:
 
 
 def verify(client, request: str, system: Optional[str], linter,
-           corrections: int = MAX_CORRECTIONS, *, snippet: bool) -> Outcome:
+           corrections: int = MAX_CORRECTIONS, *, snippet: bool, specs=None) -> Outcome:
     """Draft, lint, correct.
 
     client: anything with chat(messages, system) -> (ok, text), as AIClient.
@@ -226,14 +234,26 @@ def verify(client, request: str, system: Optional[str], linter,
     clean, when a correction's findings repeat an earlier attempt's, when
     an answer has no single code block, when the backend fails, or after
     `corrections` rounds.
+
+    specs: the spec files (specs.load_specs()), or None. With them the
+    request carries the dialect sheet and the cards of the cycles it is
+    about, and a correction the cards of cycles its findings name that the
+    model has not had yet. None sends the request as the operator wrote it,
+    which the evals use to measure what the cards change.
     """
-    conversation = [user(generation_request(request))]
+    cards: List[str] = []
+    reference = ""
+    if specs is not None:
+        chosen = spec_context.cards_for_request(request, specs)
+        cards = [c.code for c in chosen]
+        reference = spec_context.reference(chosen, specs.dialect)
+    conversation = [user(generation_request(request, reference))]
     ok, answer = client.chat(conversation, system)
     if not ok:
-        return Outcome((), None, snippet, FAILED, answer)
+        return Outcome((), None, snippet, FAILED, answer, tuple(cards))
     code, blocks = the_code(answer)
     if code is None:
-        return Outcome((Attempt(answer, None, blocks),), None, snippet, NO_CODE)
+        return Outcome((Attempt(answer, None, blocks),), None, snippet, NO_CODE, cards=tuple(cards))
 
     protected = getattr(linter, "protected_m", ())
     draft = Attempt(answer, code, blocks, tuple(linter.run_all(code, snippet=snippet)))
@@ -249,8 +269,13 @@ def verify(client, request: str, system: Optional[str], linter,
         if len(attempts) - 1 >= corrections:
             stop = OUT_OF_ROUNDS
             break
-        feedback = (rejection_request(last.dropped, accepted.findings) if last.rejected
-                    else correction_request(accepted.findings))
+        if last.rejected:
+            feedback = rejection_request(last.dropped, accepted.findings)
+        else:
+            more = (spec_context.cards_for_findings(accepted.findings, specs, cards)
+                    if specs is not None else [])
+            cards += [c.code for c in more]
+            feedback = correction_request(accepted.findings, spec_context.reference(more))
         conversation += [assistant(last.answer), user(feedback)]
         ok, answer = client.chat(conversation, system)
         if not ok:
@@ -275,7 +300,7 @@ def verify(client, request: str, system: Optional[str], linter,
 
     candidates = [a for a in attempts if a.code is not None and not a.rejected]
     best = min(candidates, key=lambda a: weight(a.findings))
-    return Outcome(tuple(attempts), best, snippet, stop, error)
+    return Outcome(tuple(attempts), best, snippet, stop, error, tuple(cards))
 
 
 def change(outcome: Outcome) -> str:

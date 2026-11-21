@@ -1,6 +1,7 @@
 code = "G72"
 name = "Stock removal in facing (roughing along X)"
-keywords = ["face", "facing", "face roughing", "plandrehen", "planschruppen", "querschruppen", "g72"]
+# Not "face": "from the face at Z0" is in almost every turning request.
+keywords = ["facing", "face roughing", "plandrehen", "planschruppen", "querschruppen", "g72"]
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \

@@ -6,6 +6,8 @@
 import json
 import os
 
+from .spec_context import review_reference
+
 # The most of the program a review is sent; a longer one is cut here.
 MAX_CODE_CHARS = 8000
 
@@ -36,16 +38,23 @@ def read_policies(path: str) -> str:
     return "No policies found."
 
 
-def build_analysis_prompt(snippet: str, policies: str, tools_json: dict) -> str:
+def build_analysis_prompt(snippet: str, policies: str, tools_json: dict, specs=None) -> str:
     """The user message of a review: machine, shop rules, tools, the code.
+
+    specs: the spec files (specs.load_specs()), or None. With them the
+    review carries the dialect sheet and the cards of the cycles the code
+    runs, found by their code words. The app always passes them; None is
+    for the eval, to measure what they change.
 
     No material is named. The program says it in its own header, as the
     policies ask; a fixed "Material: 42CrMo4" here contradicted every program
     cut from anything else, and a model then proposed to change the program's
     material comment to match the prompt.
     """
+    reference = review_reference(snippet, specs)
     return (f"Machine: FANUC 0i-TF\nPolicies:\n{policies}\n"
             f"Tools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\n"
+            + (f"{reference}\n\n" if reference else "") +
             f"Code:\n```\n{snippet}\n```\n\n"
             "Task: List rule violations (line/rule/fix). Optional unified diff. "
             f"No cosmetic changes.\n\n{FORMAT_RULES}")

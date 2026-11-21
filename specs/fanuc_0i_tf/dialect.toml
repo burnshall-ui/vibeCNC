@@ -2,6 +2,14 @@ name = "FANUC 0i-TF (Plus), G-code system A"
 # A turret lathe changes tools with the T word; M06, the chuck, the gear ranges
 # and the external program call are the machine builder's.
 machine_specific = ["M06", "M10", "M11", "M19", "M41", "M42", "M43", "M44", "M78", "M79"]
+# Put in front of a model with the codes below (vibe_cnc/spec_context.py):
+# what models have brought from other G-code systems and older controls.
+notes = [
+    "G90, G92 and G94 are one-block cycles (turning, threading, facing), not absolute mode, a coordinate or speed setting, or a feed mode.",
+    "There is no G91: U and W are the incremental words. X and U are diameters.",
+    "The feed modes are G98 (per minute) and G99 (per revolution). G50 S is the spindle speed limit and comes before G96.",
+    "G71 to G76 take two blocks each. The one-block form with a D word belongs to older controls.",
+]
 
 [source]
 text = """Drafted on 2026-11-21 from the autocomplete table this project had, corrected \

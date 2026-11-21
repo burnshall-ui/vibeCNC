@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from vibe_cnc import verifier
 from vibe_cnc.diagnostics import Diagnostic
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.specs import load_specs
 from vibe_cnc.verifier import (
     CLEAN, FAILED, MAX_CORRECTIONS, NO_CODE, OUT_OF_ROUNDS, REPEATED, change, code_blocks,
     dropped, fingerprint, the_code, verify,
@@ -390,6 +391,65 @@ class PromptTests(unittest.TestCase):
 
     def test_the_request_comes_first(self):
         self.assertTrue(verifier.generation_request("  Cut a thread.  ").startswith("Cut a thread.\n"))
+
+    def test_with_a_reference_the_request_follows_it(self):
+        text = verifier.generation_request("  Cut a thread.  ", "REFERENCE")
+        self.assertTrue(text.startswith("REFERENCE\n\nRequest: Cut a thread.\n"))
+        self.assertTrue(text.endswith(verifier.ANSWER_FORMAT))
+
+
+class CardTests(unittest.TestCase):
+    """With the spec files the model is given the cards of the cycles in
+    question; without them the request goes as before step C."""
+
+    def test_the_request_carries_the_dialect_and_the_card(self):
+        model = Model(answer(G76_RIGHT))
+
+        outcome = verify(model, "Cut an M20x2.5 thread, 30 long.", None, linter(), snippet=True,
+                         specs=load_specs())
+
+        first = model.sent[0][0][0]["content"]
+        self.assertIn("Control: FANUC 0i-TF (Plus), G-code system A", first)
+        self.assertIn("G76 -- Multiple threading cycle", first)
+        self.assertNotIn("G71 -- ", first)
+        self.assertIn("Request: Cut an M20x2.5 thread, 30 long.", first)
+        self.assertEqual(outcome.cards, ("G76",))
+
+    def test_without_specs_the_request_is_as_it_was(self):
+        model = Model(answer(G76_RIGHT))
+
+        outcome = verify(model, "Cut an M20x2.5 thread.", None, linter(), snippet=True)
+
+        self.assertEqual(model.sent[0][0][0]["content"],
+                         verifier.generation_request("Cut an M20x2.5 thread."))
+        self.assertEqual(outcome.cards, ())
+
+    def test_a_correction_brings_the_card_of_a_cycle_the_request_did_not_name(self):
+        # Nothing in "Make the part." points to G76; the finding does.
+        model = Model(answer(G76_POINT), answer(G76_RIGHT))
+
+        outcome = verify(model, "Make the part.", None, linter(), snippet=True, specs=load_specs())
+
+        first = model.sent[0][0][0]["content"]
+        correction = model.sent[1][0][2]["content"]
+        self.assertNotIn("G76 -- ", first)
+        self.assertIn("Line 2, ERROR DECIMAL_POINT", correction)
+        self.assertIn("G76 -- Multiple threading cycle", correction)
+        self.assertNotIn("Control: ", correction)        # the sheet went with the request
+        self.assertLess(correction.index("G76 -- "), correction.index("Correct exactly"))
+        self.assertEqual(outcome.cards, ("G76",))
+        self.assertTrue(outcome.lint_clean)
+
+    def test_a_card_already_given_is_not_sent_again(self):
+        model = Model(answer(G76_POINT), answer(G76_RIGHT))
+
+        outcome = verify(model, "Cut an M20x2.5 thread.", None, linter(), snippet=True,
+                         specs=load_specs())
+
+        correction = model.sent[1][0][2]["content"]
+        self.assertIn("Line 2, ERROR DECIMAL_POINT", correction)
+        self.assertEqual(correction, verifier.correction_request(outcome.draft.findings))
+        self.assertEqual(outcome.cards, ("G76",))
 
 
 if __name__ == "__main__":
