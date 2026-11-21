@@ -719,3 +719,134 @@ class SnippetTests(unittest.TestCase):
 
         self.assertTrue({"DECIMAL_POINT", "VALUE_RANGE", "PROTECTED_M_CODE",
                          "CHUCK_COLLISION"} <= found, found)
+
+
+class RunTogetherWordTests(unittest.TestCase):
+    """N10G96S180M03 is a legal block. The word boundaries the older rules
+    searched for are not there between a digit and a letter, so the block
+    was not seen; and a G50 in a comment was taken for the limit."""
+
+    G96 = "G96 S180 M03\nG00 X40. Z5.\nG01 Z-20. F0.2\nG00 X60.\nZ50.\nM30"
+
+    def found(self, code, rule):
+        return [f.line for f in rules(LintEngine(make_cfg()).run_all(code), rule)]
+
+    def test_a_g50_in_a_comment_limits_nothing(self):
+        self.assertEqual(self.found("(G50)\n" + self.G96, "G50_BEFORE_G96"), [2])
+        self.assertEqual(self.found("G00 X60. (G50 S2500 is in the setup sheet)\n" + self.G96,
+                                    "G50_BEFORE_G96"), [2])
+
+    def test_a_run_together_g96_is_seen(self):
+        self.assertEqual(self.found(self.G96.replace("G96 S180 M03", "N10G96S180M03"),
+                                    "G50_BEFORE_G96"), [1])
+
+    def test_only_a_g50_with_an_s_is_the_limit(self):
+        # G50 X Z sets the coordinate system; it limits nothing.
+        self.assertEqual(self.found("G50 X0 Z0\n" + self.G96, "G50_BEFORE_G96"), [2])
+        self.assertEqual(self.found("N5G50S2500\n" + self.G96, "G50_BEFORE_G96"), [])
+        self.assertEqual(self.found("G50 S2500\n" + self.G96, "G50_BEFORE_G96"), [])
+
+    def test_a_run_together_header_is_a_header(self):
+        engine = LintEngine(make_cfg(**SHOP_HEADER))
+
+        found = engine.run_all("%\nO0001\nG18G21G40G80G97\nG54\nM30\n%")
+
+        self.assertEqual(rules(found, "HEADER_CODE") + rules(found, "UNITS")
+                         + rules(found, "ORIGIN"), [])
+
+    def test_a_run_together_reference_return_is_a_retract(self):
+        self.assertEqual(self.found("G01 X10. Z-5. F0.2\nN100G28U0W0\nM30", "RETRACT_BEFORE_M30"),
+                         [])
+
+    def test_run_together_compensation_is_seen(self):
+        code = "G00 X40. Z5.\nN20G42G01X30.Z0F0.2\nG01 Z-20.\nG00 X60.\nZ50.\nM30"
+        self.assertEqual(self.found(code, "TNR_OPEN_AT_END"), [6])
+        self.assertEqual(self.found(code.replace("G00 X60.", "G40 G00 X60."), "TNR_OPEN_AT_END"),
+                         [])
+
+    def test_g960_and_a_value_of_96_are_no_g96(self):
+        self.assertEqual(self.found("G960 S180\nG00 X96.\nM30", "G50_BEFORE_G96"), [])
+
+
+class WhereTheToolEndsTests(unittest.TestCase):
+    """Before M30 the tool stands clear of the part. The rule read the text
+    before: an X and a Z word in the last three lines were a retract, so a
+    G01 into the part right before M30 passed."""
+
+    def found(self, code):
+        return rules(LintEngine(make_cfg()).run_all(code), "RETRACT_BEFORE_M30")
+
+    def test_a_cut_into_the_part_is_no_retract(self):
+        findings = self.found("G00 X40. Z5.\nG01 X30. Z0 F0.2\nM30")
+
+        self.assertEqual([f.line for f in findings], [3])
+        self.assertIn("Z0", findings[0].message)
+        self.assertIn("Z5", findings[0].message)
+
+    def test_in_front_of_everything_cut_is_clear_whichever_axis_went_first(self):
+        for ending in ("G00 Z50.\nX200.", "G00 X200.\nZ50.", "G00 X200. Z50."):
+            with self.subTest(ending=ending):
+                self.assertEqual(self.found(f"G00 X40. Z2.\nG01 Z-20. F0.2\n{ending}\nM30"), [])
+
+    def test_a_reference_return_after_the_last_move_is_clear(self):
+        self.assertEqual(self.found("G00 X40. Z2.\nG01 Z-20. F0.2\nG28 U0 W0\nM30"), [])
+        self.assertEqual(self.found("G00 X40. Z2.\nG01 Z-20. F0.2\nG30 U0 W0\nM05\nM30"), [])
+
+    def test_a_move_back_after_the_reference_return_is_judged(self):
+        found = self.found("G00 X40. Z2.\nG01 Z-20. F0.2\nG28 U0 W0\nG00 X30. Z-10.\nM30")
+
+        self.assertEqual([f.line for f in found], [5])
+
+    def test_the_face_of_the_stock_counts(self):
+        # Nothing was cut in front of Z0, but the blank stands to Z3.
+        code = "(STOCK D50 L80 Z3)\nG00 X52. Z0\nG01 X-1. F0.2\nG00 Z2.\nX100.\nM30"
+        self.assertEqual(len(self.found(code)), 1)
+        self.assertEqual(self.found(code.replace("G00 Z2.", "G00 Z5.")), [])
+
+    def test_an_arc_that_bulges_forward_counts(self):
+        # The arc runs from Z-2 back to Z-2 over a half circle that reaches
+        # Z0, so Z-1 is still inside what it cut; its two ends say Z-2.
+        code = "G00 X40. Z-2.\nG02 X32. Z-2. I-2. K0 F0.1\nG00 Z-1.\nX100.\nM30"
+        self.assertEqual(len(self.found(code)), 1)
+        self.assertEqual(self.found(code.replace("G00 Z-1.", "G00 Z1.")), [])
+
+    def test_m02_ends_a_program_too_and_m99_hands_back_to_its_caller(self):
+        cut = "G00 X40. Z5.\nG01 X30. Z0 F0.2\n"
+        self.assertEqual([f.message.split(" ")[1] for f in self.found(cut + "M02")], ["M02"])
+        self.assertEqual(self.found(cut + "M99"), [])
+
+    def test_without_a_cut_there_is_nothing_to_stand_clear_of(self):
+        self.assertEqual(self.found("G00 X40. Z5.\nM30"), [])
+
+
+class ProgramEndTests(unittest.TestCase):
+    """A whole program ends; a piece of one need not. What follows the end is
+    never run, so it is no fault of the program -- but it is said."""
+
+    def test_a_program_without_m30_is_reported(self):
+        engine = LintEngine(make_cfg())
+
+        findings = rules(engine.run_all("G00 X40. Z5.\nG01 Z-20. F0.2\nG00 X60."), "PROGRAM_END")
+
+        self.assertEqual([(f.line, f.severity) for f in findings], [(3, "ERROR")])
+
+    def test_a_piece_of_a_program_need_not_end(self):
+        engine = LintEngine(make_cfg())
+
+        self.assertEqual(rules(engine.run_all("G00 X40. Z5.", snippet=True), "PROGRAM_END"), [])
+
+    def test_m02_and_m99_are_ends_as_well(self):
+        engine = LintEngine(make_cfg())
+        for end in ("M02", "M99", "N200M30"):
+            with self.subTest(end=end):
+                self.assertEqual(rules(engine.run_all(f"G00 X40. Z5.\n{end}"), "PROGRAM_END"), [])
+
+    def test_what_follows_m30_is_said_and_not_checked_for_a_collision(self):
+        engine = LintEngine(machine_cfg(chuck_z=-100.0, chuck_diameter=210.0))
+        code = ("G97 S1000 M03\nG00 X40. Z5.\nG01 Z-20. F0.2\nG00 X60.\nZ50.\nM30\n"
+                "G01 X20. Z-150. F0.2\n%")
+
+        findings = engine.run_all(code)
+
+        self.assertEqual([(f.line, f.rule, f.severity) for f in findings],
+                         [(7, "CODE_AFTER_END", "WARNING")])

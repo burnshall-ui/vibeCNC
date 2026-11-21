@@ -2,10 +2,21 @@ import re
 from typing import List, Optional
 
 from .diagnostics import ERROR, INFO, WARNING, Diagnostic, Severity
+from .gcode_parser import PROGRAM_END
 from .specs import load_specs
 
-# Code words that end a program: M30, M02, and M99 for a subprogram.
-_PROGRAM_END = re.compile(r'(?<![A-Z])M0*(?:30|2|99)(?!\d)', re.IGNORECASE)
+
+def word(text: str):
+    """A code word as the control reads it: G96 also as G096, and run
+    together with its neighbours as in N10G96S180M03; not G960, and not the
+    96 of X96. The word boundaries these rules used before missed the
+    run-together form: a digit and a letter are both word characters, so
+    there is no boundary between them."""
+    match = re.fullmatch(r'([A-Z])0*(\d+)', text.strip(), re.IGNORECASE)
+    if match is None:
+        return re.compile(rf'(?<![A-Z]){re.escape(text.strip())}(?!\d)', re.IGNORECASE)
+    letter, number = match.groups()
+    return re.compile(rf'(?<![A-Z]){letter}0*{int(number)}(?!\d)', re.IGNORECASE)
 
 
 def code_only(line: str) -> str:
@@ -20,7 +31,9 @@ def is_snippet(code: str) -> bool:
     it: the program it goes into has them. Only the code words count; a
     comment that says M30 ends nothing.
     """
-    return not any(_PROGRAM_END.search(code_only(ln)) for ln in code.splitlines())
+    # PROGRAM_END is the parser's, so the two cannot disagree on where a
+    # program ends: M30, M02, and M99 for a subprogram.
+    return not any(PROGRAM_END.search(code_only(ln)) for ln in code.splitlines())
 
 
 class LintEngine:
@@ -38,6 +51,7 @@ class LintEngine:
         "CYCLE_BLOCKS_MISSING": ERROR,
         "CYCLE_CONTOUR_TURNS_BACK": ERROR,
         "CYCLE_TOO_MANY_PASSES": WARNING,
+        "CODE_AFTER_END": WARNING,
     }
 
     # Header codes whose absence can crash a machine rather than just break a
@@ -102,11 +116,16 @@ class LintEngine:
                                       "comment which work offset the program uses."))
 
         # 2) G50 before G96
-        first_g50 = self._first_index(lines, r'\bG50\b')
-        first_g96 = self._first_index(lines, r'\bG96\b')
+        #
+        # Code words only: a comment saying "(G50)" limits nothing. And only a
+        # G50 with an S is the limit -- G50 X Z sets the coordinate system.
+        codes = [self._strip_comments(ln) for ln in lines]
+        first_g96 = next((i for i, c in enumerate(codes) if self._G96.search(c)), -1)
+        first_g50 = next((i for i, c in enumerate(codes)
+                          if self._G50.search(c) and self._S_WORD.search(c)), -1)
         if not snippet and first_g96 != -1 and (first_g50 == -1 or first_g50 > first_g96):
             finds.append(self._f(first_g96 + 1, ERROR, "G50_BEFORE_G96",
-                                 "G50 must precede first G96.", token="G96",
+                                 "G50 S... must precede first G96.", token="G96",
                                  hint="Limit the spindle speed with G50 S... before the first "
                                       "G96, or constant surface speed can overspeed near "
                                       "the centre.",
@@ -119,38 +138,24 @@ class LintEngine:
         # still in the file but commented out, which is the form removing it
         # usually takes. The old "override" rule fired on any line carrying more
         # than one M-code, so a perfectly normal "M62 M08" was reported.
+        protected = [(m, word(f"M{m}")) for m in sorted(self.protected_m)]
         for i, ln in enumerate(lines):
             code_ln = self._strip_comments(ln)
-            for m in sorted(self.protected_m):
-                pat = rf'\bM0?{m}\b'
-                if re.search(pat, ln, re.IGNORECASE) and not re.search(pat, code_ln, re.IGNORECASE):
+            for m, pat in protected:
+                if pat.search(ln) and not pat.search(code_ln):
                     finds.append(self._f(i+1, ERROR, "PROTECTED_M_CODE",
                                          f"M{m} is commented out (invariant).", token=f"M{m}",
                                          hint=f"Leave M{m} in the code as it was; it is "
                                               "protected and must not be removed."))
 
-        # 4) End-of-program retract
-        #
-        # The last three lines that carry code. Three raw lines were read
-        # before, so the tape-end '%' after M30 -- or a blank line, or a closing
-        # comment -- took the place of the Z retract, and a program ending
-        # "G00 Z50. / X200. / M30 / %" was reported for a retract it has.
-        tail = [(i, code) for i, code in
-                ((i, self._strip_comments(ln).lstrip('%').strip()) for i, ln in enumerate(lines))
-                if code][-3:]
-        end_block = " ".join(code for _i, code in tail)
-        # G28 is the reference return and retracts both axes by itself; U/W are
-        # the incremental words a Fanuc lathe uses for exactly this move, so
-        # looking only for X and Z missed the most common correct ending.
-        retracted = (re.search(r'\bG28\b', end_block)
-                     or (re.search(r'\b[ZW][-+]?\d', end_block)
-                         and re.search(r'\b[XU][-+]?\d', end_block)))
-        m30_line = next((i + 1 for i, code in reversed(tail) if self._M30.search(code)), None)
-        if not snippet and m30_line is not None and not retracted:
-            finds.append(self._f(m30_line, ERROR, "RETRACT_BEFORE_M30",
-                                 "Before M30: Move Z to safe plane, then retract X.",
-                                 hint="Before M30, move Z to a safe plane, then retract X "
-                                      "(or G28 U0 W0)."))
+        # 4) The program has an end. A whole program without M30 (or M02) is
+        #    not finished, and the rule about the end -- the retract -- has
+        #    nothing to look at, so a program that merely lost its M30 came
+        #    through clean.
+        if not snippet and is_snippet(code):
+            finds.append(self._f(len(lines), ERROR, "PROGRAM_END",
+                                 "No program end: M30 (or M02) is missing.",
+                                 hint="End the program with M30, after the retract."))
 
         # 5) Cycle words, as the cycle cards in specs/ give them: which words
         #    take no decimal point, and the ranges of their values. Only the
@@ -158,8 +163,9 @@ class LintEngine:
         #    modal, so "no F here" says nothing.
         for i, ln in enumerate(lines):
             finds.extend(self._card_findings(i + 1, ln))
-            if re.search(r'\bG76\b', ln):
-                if not re.search(r'\b[FRS]\d', ln):
+            code_ln = self._strip_comments(ln)
+            if self._G76.search(code_ln):
+                if not re.search(r'(?<![A-Z])[FRS][\d.]', code_ln, re.IGNORECASE):
                     finds.append(self._f(i+1, INFO, "G76_CHECK",
                                          "Threading: Check F/S/R parameters (heuristic).",
                                          related_code="G76"))
@@ -192,10 +198,9 @@ class LintEngine:
             tool_map = {}
 
         for i, ln in enumerate(lines):
-            # Skip comments for simple search
-            code_ln = re.sub(r'\(.*?\)', '', ln)
+            code_ln = self._strip_comments(ln)
             # Tool change
-            m_t = re.search(r'\bT(\d+)\b', code_ln)
+            m_t = self._T_WORD.search(code_ln)
             if m_t:
                 try:
                     current_tool = int(m_t.group(1)) // 100
@@ -207,7 +212,7 @@ class LintEngine:
                                          hint="Put G40 on a move before the tool change."))
 
             # Compensation on/off
-            if re.search(r'\bG0?41\b', code_ln) or re.search(r'\bG0?42\b', code_ln):
+            if self._G41.search(code_ln) or self._G42.search(code_ln):
                 comp_active = True
                 # Tool radius exists?
                 if current_tool is not None and tool_table_loaded:
@@ -227,19 +232,19 @@ class LintEngine:
                                              token=f"T{current_tool:02d}"))
                 # Check lead-in for next move (next line with movement)
                 for j in range(i+1, min(i+6, len(lines))):
-                    nxt = re.sub(r'\(.*?\)', '', lines[j])
-                    if re.search(r'\bX[-+]?\d', nxt) or re.search(r'\bZ[-+]?\d', nxt):
-                        if re.search(r'\bG0?0\b', nxt):
+                    nxt = self._strip_comments(lines[j])
+                    if self._XZ_WORD.search(nxt):
+                        if self._G00.search(nxt):
                             finds.append(self._f(j+1, WARNING, "TNR_LEADIN_RAPID",
                                                  "Lead-in must not use G00 — use G01.",
                                                  hint="Make the first move after G41/G42 a G01."))
-                        if re.search(r'\bG0?[23]\b', nxt):
+                        if self._G02.search(nxt) or self._G03.search(nxt):
                             finds.append(self._f(j+1, WARNING, "TNR_LEADIN_ARC",
                                                  "Avoid arcs directly after G41/G42 (use linear lead-in).",
                                                  hint="Put a straight G01 move between G41/G42 "
                                                       "and the first arc."))
                         break
-            if re.search(r'\bG0?40\b', code_ln):
+            if self._G40.search(code_ln):
                 comp_active = False
 
         # Open compensation at program end. A snippet may leave it on: the
@@ -249,8 +254,13 @@ class LintEngine:
                                  "Set G40 before program end.",
                                  hint="Cancel compensation with G40 before the program ends."))
 
-        # 7) Geometry the parser could not make sense of, and moves into the chuck
-        finds.extend(self._parser_findings(code))
+        # 7) Geometry the parser could not make sense of, moves into the
+        #    chuck, and where the tool stands when the program ends
+        parser = self._parse(code)
+        if parser is not None:
+            finds.extend(self._parser_findings(parser))
+            if not snippet:
+                finds.extend(self._retract_findings(parser, lines))
 
         # One list, in program order, without exact repeats -- several
         # protected M-codes on one line used to yield the same text twice.
@@ -282,7 +292,7 @@ class LintEngine:
 
     @staticmethod
     def _has_word(haystack: str, token: str) -> bool:
-        return re.search(rf'\b{re.escape(token)}\b', haystack, re.IGNORECASE) is not None
+        return word(token).search(haystack) is not None
 
     @staticmethod
     def _insert_radius(tool: dict) -> float:
@@ -292,8 +302,13 @@ class LintEngine:
         except (AttributeError, TypeError, ValueError):
             return 0.0
 
-    # M30, also written M030 or run together as N100M30; not M300.
-    _M30 = re.compile(r'(?<![A-Z])M0*30(?!\d)', re.IGNORECASE)
+    _G00, _G02, _G03 = word("G00"), word("G02"), word("G03")
+    _G40, _G41, _G42 = word("G40"), word("G41"), word("G42")
+    _G50, _G76, _G96 = word("G50"), word("G76"), word("G96")
+    _G28_G30 = re.compile(r'(?<![A-Z])G0*(?:28|30)(?!\d)', re.IGNORECASE)
+    _S_WORD = re.compile(r'(?<![A-Z])S\d', re.IGNORECASE)
+    _T_WORD = re.compile(r'(?<![A-Z])T(\d+)', re.IGNORECASE)
+    _XZ_WORD = re.compile(r'(?<![A-Z])[XZ][-+]?[\d.]', re.IGNORECASE)
 
     # Spindle on (M03, M04) and off (M05); not M30, M40 or M50.
     _SPINDLE = re.compile(r'(?<![A-Z])M0*([345])(?!\d)', re.IGNORECASE)
@@ -417,16 +432,8 @@ class LintEngine:
                 unique.append(f)
         return unique
 
-    def _parser_findings(self, code: str) -> List[Diagnostic]:
-        """Warnings the parser records while building the toolpaths, and the
-        moves it found running into the chuck.
-
-        Impossible R geometry, arcs without a centre. The parser has always
-        known about these; until they were routed here nothing read the list,
-        so the operator saw a missing arc and no explanation for it. The
-        collisions were drawn in the plot and nowhere else, so a program that
-        ran into the chuck came through the linter without a word.
-        """
+    def _parse(self, code: str):
+        """The parser, run over the code; None when it choked."""
         try:
             from .gcode_parser import GCodeParser
             if self.chuck_z is not None:
@@ -436,8 +443,63 @@ class LintEngine:
             parser.parse(code)
         except Exception:
             # Linting must never fail because the parser choked on something.
-            return []
+            return None
+        return parser
 
+    # What removes material, as the parser files it.
+    _CUTTING_KINDS = ("cut", "finish", "thread")
+
+    def _retract_findings(self, parser, lines) -> List[Diagnostic]:
+        """Before M30 (or M02) the tool stands clear of the part.
+
+        Clear means in front of it: Z beyond the highest Z the program cut
+        at, or beyond the face of the STOCK comment if that is further out --
+        or a G28/G30 reference return after the last move. Whether Z went
+        before X is not judged, only where the tool ends.
+
+        It read the text before: an X and a Z word in the last three lines
+        were taken as a retract, so a G01 into the part right before M30
+        passed. M99 ends a subprogram, which hands the tool back to the
+        program that called it, so it is not judged.
+        """
+        end = parser.program_end
+        if end is None or end["code"] == "M99":
+            return []
+        paths = parser.paths
+        cut_z = [z for kind in self._CUTTING_KINDS for segment in paths[kind]
+                 for _x, z in segment[:2]]
+        cut_z += [z for arc in paths["arc"] for _x, z in parser._sample_arc(arc)]
+        if not cut_z:
+            return []                   # nothing cut, nothing to stand clear of
+        front = max(cut_z)
+        if paths.get("stock"):
+            front = max(front, paths["stock"]["z_front"])
+        if end["z"] > front + 1e-9:
+            return []
+        # The reference return moves the tool off to the machine's home; the
+        # parser does not follow it there, so it is read from the code: a
+        # G28 or G30 after the last move drawn.
+        last_move = max((line for _kind, _index, line in paths["order"]), default=0)
+        if any(self._G28_G30.search(self._strip_comments(lines[i]))
+               for i in range(last_move, end["line"])):
+            return []
+        code = end["code"]
+        return [self._f(end["line"], ERROR, "RETRACT_BEFORE_M30",
+                        f"Before {code} the tool still stands at the part: it ends at "
+                        f"Z{end['z']:g}, and the program cut up to Z{front:g}.",
+                        hint=f"Before {code}, move Z to a safe plane in front of the part, "
+                             "then retract X (or G28 U0 W0).")]
+
+    def _parser_findings(self, parser) -> List[Diagnostic]:
+        """Warnings the parser records while building the toolpaths, and the
+        moves it found running into the chuck.
+
+        Impossible R geometry, arcs without a centre. The parser has always
+        known about these; until they were routed here nothing read the list,
+        so the operator saw a missing arc and no explanation for it. The
+        collisions were drawn in the plot and nowhere else, so a program that
+        ran into the chuck came through the linter without a word.
+        """
         finds = [self._f(w["line"], self.PARSER_SEVERITY.get(w["code"], WARNING),
                          w["code"], w["message"])
                  for w in parser.warnings]
@@ -457,12 +519,6 @@ class LintEngine:
                         hint="Keep the tool in front of the chuck face or outside the jaws; "
                              "if the chuck values are wrong, correct them in Settings → Machine.")
                 for line in lines]
-
-    def _first_index(self, lines, pattern):
-        rx = re.compile(pattern)
-        for i, ln in enumerate(lines):
-            if rx.search(ln): return i
-        return -1
 
     @staticmethod
     def _f(line: int, severity: Severity, rule: str, msg: str, token: Optional[str] = None,

@@ -25,7 +25,9 @@
 ## Safe sequence
 - Start the spindle (`M03`/`M04`) before the first cutting move or cycle, and again
   after every `M05`.
-- Before `M30`: move `Z` to a safe plane first, then retract `X`.
+- Before `M30`: move `Z` to a safe plane first, then retract `X`. The linter checks
+  where the tool ends: in front of everything the program cut, or after a `G28`/`G30`.
+- A program ends with `M30` (or `M02`). Nothing after the end is run.
 - Do not change cooling air or signals at the end if they are marked "invariant".
 
 ## Comments & documentation

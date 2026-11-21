@@ -133,8 +133,8 @@ Severity follows the consequence:
 
 | Severity | Meaning | Rules |
 |---|---|---|
-| ERROR | the control alarms, the machine can crash, or a shop safety rule breaks | decimal point in P/Q of G70–G76; cycle blocks missing or no contour; an arc that cannot be made; feed or depth of cut zero; G50 not before G96; a protected M-code commented out; no retract before M30; **chuck collision** (it used to show only in the plot); a cut or a cycle before the spindle runs (whole programs only); header without **G40** or without **G21**; an arc too tight for the tool nose |
-| WARNING | a shop rule about form | rest of the header (G18, G80, G97), work offset G54, the other G41/G42 checks, too many cycle passes |
+| ERROR | the control alarms, the machine can crash, or a shop safety rule breaks | decimal point in P/Q of G70–G76; cycle blocks missing or no contour; an arc that cannot be made; feed or depth of cut zero; G50 S not before G96; a protected M-code commented out; at M30 the tool not in front of what was cut; no program end (whole programs only); **chuck collision** (it used to show only in the plot); a cut or a cycle before the spindle runs (whole programs only); header without **G40** or without **G21**; an arc too tight for the tool nose |
+| WARNING | a shop rule about form | rest of the header (G18, G80, G97), work offset G54, the other G41/G42 checks, too many cycle passes, code after the program end |
 | INFO | a hint without a finding | the G76 "check F/S/R" heuristic |
 
 `lint_clean` means no ERROR and no WARNING.
