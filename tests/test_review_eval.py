@@ -270,6 +270,31 @@ class ScoringTests(unittest.TestCase):
     def test_a_block_with_leading_zeros(self):
         self.assertTrue(self.found("N090: zero feed"))
 
+    def test_a_block_at_the_end_of_a_sentence(self):
+        # "... before N40." was read as no block at all.
+        self.assertTrue(self.found("• The feed is zero; correct it at N90."))
+
+    def test_a_number_with_decimals_after_n_is_no_block(self):
+        self.assertFalse(self.found("• N90.5: the feed is zero"))
+
+    def test_a_line_past_the_end_is_the_block_of_that_number(self):
+        # The program has 20 lines; a model writing "Line 90" means N90.
+        self.assertTrue(self.found("• Line 90 — the feed is zero"))
+        self.assertTrue(self.found("• Lines 90-100: the feed is zero"))
+
+    def test_a_line_inside_the_program_is_still_that_line(self):
+        # Line 11 is N90; N11 does not exist, but line 11 does.
+        self.assertTrue(self.found("• Line 11: the feed must not be zero"))
+        self.assertFalse(self.found("• Line 12: the feed is zero"))
+
+    def test_a_missing_block_said_as_no_matching_block(self):
+        cases, _ = cases_of(SHAFT=SHAFT)
+        missing = cases[("SHAFT", "blocks_missing")]
+
+        self.assertTrue(self.found("• Line 11 (N90): Q135 has no matching N135 block", missing))
+        self.assertTrue(self.found("• N90: there is no such block for Q135", missing))
+        self.assertFalse(self.found("• N90: P100 and Q135 are fine", missing))
+
     def test_the_header_may_be_named_by_word(self):
         self.assertTrue(self.found("The header lacks G40.", self.header))
         self.assertTrue(self.found("• N10: add G40 to the safe start block", self.header))
@@ -289,6 +314,10 @@ class ScoringTests(unittest.TestCase):
         # N110 and line 4 are lines the linter has nothing on; N90 is the fault.
         answer = "• N90: F0<br>• N110: consider G42<br>• Line 4: G21 fine<br>• N999: ?"
         self.assertEqual(ev.score(answer, self.feed), {"found": True, "other_places": 2})
+
+    def test_a_line_that_is_neither_a_line_nor_a_block_is_no_place(self):
+        # The program has 20 lines and no N400: line 400 was counted as a place.
+        self.assertEqual(ev.score("• N90: F0<br>• Line 400: odd", self.feed)["other_places"], 0)
 
 
 class FakeClient:
@@ -352,6 +381,21 @@ class RunTests(unittest.TestCase):
         report = printed.getvalue()
         self.assertIn("test-model (claude): 2 answer(s), 0 failed call(s)", report)
         self.assertIn("all              2/2 (100 %)", report)
+
+    def test_scoring_again_uses_the_words_as_they_are_now(self):
+        # The record keeps the words of its run; a corrected list must count.
+        self.run_eval([(True, "• N90: F0 is no feed"), (True, "• N90: decimal point in P")])
+        with open(self.out, encoding="utf-8") as handle:
+            records = [json.loads(line) for line in handle]
+        for record in records:
+            record["case"]["about"] = r"(?!)"           # words that match nothing
+        with open(self.out, "w", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(r) + "\n" for r in records)
+
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            ev.main(["--rescore", self.out])
+
+        self.assertIn("all              2/2 (100 %)", printed.getvalue())
 
     def test_a_miss_is_named_with_its_block(self):
         _, records, _ = self.run_eval([(True, "nothing"), (True, "nothing")])

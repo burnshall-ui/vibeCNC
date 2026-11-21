@@ -314,7 +314,8 @@ FAULTS = [
           r'depth|\b[UW]0(?:\.0*)?(?![.\d])|\bzero\b|zustellung|schnitttiefe', _depth_zero),
     Fault("blocks_missing", "Q of a cycle pointed at a block that does not exist",
           r'not (?:be )?(?:found|exist|defined|present)|missing|does(?:n\'t| not) exist'
-          r'|no (?:such )?block|non-?exist|undefined|fehlt|nicht vorhanden', _blocks_missing),
+          r'|no (?:such |matching )?(?:N?\d+ )?block|non-?exist|undefined|fehlt|nicht vorhanden',
+          _blocks_missing),
     Fault("arc_radius", "the R of an arc cut to a tenth, too small to reach the end point",
           r'radius|chord|too small|impossible|cannot|geometr|end ?point', _arc_radius),
     Fault("leadin_rapid", "the move after G41/G42 made a rapid",
@@ -403,7 +404,9 @@ def case_prompt(case: Case, policies: str, tools_json: dict) -> str:
 _BREAKS = re.compile(r'<\s*(?:br|/?p|/?li|/?div|/?tr|/?pre|/?h\d|/?ul|/?ol)\b[^>]*>', re.IGNORECASE)
 _LINE_REF = re.compile(r'\b(?:lines?|zeilen?|ln\.?)\s*[:#]?\s*(\d+)'
                        r'(?:\s*(?:-|–|to|bis|and|und)\s*(\d+))?', re.IGNORECASE)
-_BLOCK_REF = re.compile(r'(?<![A-Za-z0-9])N0*(\d+)(?![\d.])')
+# A full stop after the number ends a sentence ("insert G50 before N40.");
+# only a digit after it makes it something else.
+_BLOCK_REF = re.compile(r'(?<![A-Za-z0-9])N0*(\d+)(?!\d|\.\d)')
 
 
 def answer_items(answer: str) -> List[str]:
@@ -413,12 +416,20 @@ def answer_items(answer: str) -> List[str]:
     return [part.strip() for part in re.split(r'\n|•', text) if part.strip()]
 
 
-def named_lines(text: str, blocks: Dict[int, int]) -> set:
-    """The program lines a piece of text names, by line number or by N number."""
+def named_lines(text: str, blocks: Dict[int, int], line_count: Optional[int] = None) -> set:
+    """The program lines a piece of text names, by line number or by N number.
+
+    A line past the end of the program is no line of it: "Line 40" in a
+    program of twelve lines is a model meaning block N40, and is read as
+    that block, or as nothing when there is no such block.
+    """
     found = set()
     for m in _LINE_REF.finditer(text):
         first = int(m.group(1))
         last = int(m.group(2)) if m.group(2) else first
+        if line_count is not None and first > line_count:
+            found.update(blocks[n] for n in {first, last} if n in blocks)
+            continue
         if 0 <= last - first <= 20:
             found.update(range(first, last + 1))
         else:
@@ -436,18 +447,19 @@ def find_fault(answer: str, case: Case) -> bool:
     The item after it counts too, when it names no place of its own: some
     answers put "N150:" on one line and the reason on the next.
     """
-    blocks = block_numbers(case.code.splitlines())
+    lines = case.code.splitlines()
+    blocks, count = block_numbers(lines), len(lines)
     where = set(case.where)
     about = re.compile(case.about, re.IGNORECASE)
     places = re.compile(case.places, re.IGNORECASE) if case.places else None
     items = answer_items(answer)
     for i, item in enumerate(items):
-        if not (named_lines(item, blocks) & where or (places and places.search(item))):
+        if not (named_lines(item, blocks, count) & where or (places and places.search(item))):
             continue
         if about.search(item):
             return True
         nxt = items[i + 1] if i + 1 < len(items) else ""
-        if nxt and not named_lines(nxt, blocks) and about.search(nxt):
+        if nxt and not named_lines(nxt, blocks, count) and about.search(nxt):
             return True
     return False
 
@@ -457,8 +469,22 @@ def other_places(answer: str, case: Case) -> int:
 
     Rough: advice ("N10: add G99") counts the same as a false alarm. Read them.
     """
-    blocks = block_numbers(case.code.splitlines())
-    return len(named_lines(" \n ".join(answer_items(answer)), blocks) - set(case.known))
+    lines = case.code.splitlines()
+    named = named_lines(" \n ".join(answer_items(answer)), block_numbers(lines), len(lines))
+    return len(named - set(case.known))
+
+
+def rescored_case(saved: dict) -> Case:
+    """A saved case with the words of its fault as they are now.
+
+    A record keeps the words it was scored with; scoring it again with those
+    would never pick up a corrected list, which is what --rescore is for.
+    """
+    case = Case(**saved)
+    fault = FAULTS_BY_NAME.get(case.fault)
+    if fault is not None:
+        case.about, case.places = fault.about, fault.places
+    return case
 
 
 def score(answer: str, case: Case) -> dict:
@@ -637,7 +663,7 @@ def main(argv=None) -> int:
             records = [json.loads(line) for line in f if line.strip()]
         for r in records:
             if r["ok"]:
-                r["score"] = score(r["answer"], Case(**r["case"]))
+                r["score"] = score(r["answer"], rescored_case(r["case"]))
         print(summarize(records))
         return 0
 
