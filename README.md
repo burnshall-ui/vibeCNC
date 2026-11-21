@@ -23,10 +23,15 @@ system A), with a rule-based checker and optional AI review and generation.
 - **Editor**: syntax highlighting, line numbers, find and replace,
   autocomplete, tool and macro libraries with their own editors.
 - **Simulation**: the toolpath drawn to scale and played back block by block,
-  with CYCLE START, FEED HOLD, SINGLE BLOCK and OPT STOP. The stock is cut as
-  the program runs, shown as a half section: hatched above the centre line,
-  the turned part below it. Moves ahead of the playback are drawn faint, the
-  move just made in yellow. Moves into the chuck are reported.
+  with CYCLE START, FEED HOLD, SINGLE BLOCK and OPT STOP. The tool -- insert
+  and holder at their real size, or the drill -- travels along each move,
+  and the stock is cut as it goes, shown as a half section: hatched above the
+  centre line, the turned part below it. Moves ahead are drawn faint, the
+  move being made in yellow. Moves into the chuck are reported.
+- **Position display and timeline**: above the simulation X and Z, the tool,
+  spindle speed and feed (under G96 the speed at the tool's diameter) and the
+  modal codes in force; below it the program as a band to jump around in,
+  with playback at 0.5× to 5×.
 - **Layout**: the program and the simulation side by side, each the full
   height of the window; the tool and macro libraries and the assist share a
   panel under the simulation that folds away (Ctrl+J).
@@ -86,7 +91,7 @@ programs may leave the shop.
 
 1. Open a program (Ctrl+O) or write one.
 2. **CYCLE START** (Space) runs the simulation, **FEED HOLD** (F) pauses it,
-   Esc resets.
+   Esc resets. A click on the timeline under the simulation jumps there.
 3. Ctrl+L lints the program. **AI ANALYZE** lints it and asks the model for a
    review.
 4. Describe what you need in the assist box and press **AI GENERATE**
@@ -119,9 +124,12 @@ machine, these matter most:
   face counts as a collision.
 - `policies`: the header codes, units and work offset the linter expects, and
   the M-codes that must never be commented out.
-- [`tools/tools.json`](tools/tools.json): the tool library. Nose radius
-  compensation reads `insert_radius_mm` and `nose_direction`, the Fanuc tip
-  number:
+- [`tools/tools.json`](tools/tools.json): the tool library. The simulation
+  draws a tool from its ISO codes: the holder in `holder` (ISO 5608, e.g.
+  `PCLNR2525`) and the insert at the start of `name` (ISO 1832, e.g.
+  `CNMG1204...`); a drill from its `d_mm`. A tool without them is drawn as a
+  ring. Nose radius compensation reads `insert_radius_mm` and
+  `nose_direction`, the Fanuc tip number:
 
 | Tip | Programmed point relative to the radius centre | Typical tool |
 |---|---|---|
@@ -159,12 +167,17 @@ yet, so every card says `verified = false`. Known simplifications:
 - The 45° escape after each G71/G72 pass is drawn as a rapid; the control
   makes it at cutting feed.
 - Inch input (G20) is not supported.
-- The material removed takes each tool's body as a square shoulder behind
-  its tip, on the side its tip number gives, because the tool table has no
-  insert shape. A move running down towards the chuck therefore shows a
-  gouge sooner than a real insert would cut one. Drills bore their `d_mm`
-  with a 118° point. Grooving, parting and thread tools remove nothing (the
-  table has no width), and neither do thread passes.
+- The material removed takes each tool's body from its tip number, and the
+  clearance behind the tip from its holder and insert codes (5° for a CNMG
+  in a 95° holder). Without the codes the body is a square shoulder behind
+  the tip, so a move running down towards the chuck shows a gouge sooner
+  than a real insert would cut one. Drills bore their `d_mm` with a 118°
+  point. Grooving, parting and thread tools remove nothing (the table has
+  no width), and neither do thread passes.
+- The position display shows speeds and feeds as the control would command
+  them, not as measured, and no cycle time: rapid rates are not known, and
+  G70 runs at the feeds of its contour blocks, which are not tracked per
+  move.
 
 ## Development
 
