@@ -1649,3 +1649,67 @@ class GCodeParserContourWarningTests(unittest.TestCase):
         parser._warn(3, "ARC_NO_CENTER", "no centre")
         parser._warn(4, "ARC_NO_CENTER", "no centre")
         self.assertEqual([w["line"] for w in parser.warnings], [3, 4])
+
+
+class GCodeParserContourDirectionTests(unittest.TestCase):
+    """G71/G72 type I cannot cut a pocket: a contour that turns back is reported.
+
+    The rule is general Fanuc knowledge, not checked on the machine; the G71
+    and G72 cards say so."""
+
+    RULE = 'CYCLE_CONTOUR_TURNS_BACK'
+
+    def warned(self, contour, start="G00 X52. Z2.", cycle="G71 U2. R0.5\nG71 P10 Q20 U0.4 W0.1 F0.25"):
+        parser = GCodeParser(chuck_z=-500.0)
+        parser.parse(f"{start}\n{cycle}\n{contour}")
+        return [w for w in parser.warnings if w['code'] == self.RULE]
+
+    def test_the_generated_shaft_that_steps_down_further_in(self):
+        # tencent/hy4-flash, 2026-11-21: Ø40 first, then Ø30 behind it. Drawn,
+        # its passes at Ø36 and Ø32 ran straight through the Ø40 section.
+        found = self.warned("N10 G00 X40.\nG01 Z0.\nZ-30.\nX30.\nN20 Z-45.")
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]['line'], 3)               # the cycle block
+        self.assertIn('X40 → X30', found[0]['message'])
+
+    def test_a_shaft_that_steps_up_is_fine(self):
+        self.assertEqual(self.warned("N10 G00 X30.\nG01 Z-15. F0.1\nX40.\nZ-30.\nN20 X52."), [])
+
+    def test_a_bore_that_gets_narrower_further_in_is_fine(self):
+        # Boring: the cycle starts inside, so X goes down along the contour.
+        self.assertEqual(self.warned("N10 G00 X40.\nG01 Z-10. F0.1\nX30.\nN20 Z-25.",
+                                     start="G00 X20. Z2.",
+                                     cycle="G71 U1. R0.5\nG71 P10 Q20 U-0.4 W0.1 F0.2"), [])
+
+    def test_a_contour_that_turns_back_along_z(self):
+        found = self.warned("N10 G00 X30.\nG01 Z-20. F0.1\nX40.\nZ-10.\nN20 X52.")
+
+        self.assertEqual(len(found), 1)
+        self.assertIn('Z-20 → Z-10', found[0]['message'])
+
+    def test_type_two_is_left_to_the_operator(self):
+        # X and Z in the first contour block: the pocket form, not judged.
+        self.assertEqual(self.warned("N10 G00 X40. Z2.\nG01 Z0.\nZ-30.\nX30.\nN20 Z-45."), [])
+
+    def test_a_rounded_corner_is_no_turn(self):
+        self.assertEqual(self.warned("N10 G00 X30.\nG01 Z-13. F0.1\nG02 X34. Z-15. R2.\n"
+                                     "G01 X40.\nZ-30.\nN20 X52."), [])
+
+    def test_a_face_contour_that_turns_back_in_z(self):
+        found = self.warned("N10 G00 Z-5.\nG01 X40. F0.1\nZ-10.\nN20 X0.", start="G00 X82. Z2.",
+                            cycle="G72 W1.5 R0.5\nG72 P10 Q20 U0.2 W0.1 F0.2")
+
+        self.assertEqual(len(found), 1)
+        self.assertIn('Z-5 → Z-10', found[0]['message'])
+
+    def test_the_sample_programs_and_the_reference_have_none(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        paths = [os.path.join(root, "programs", name)
+                 for name in sorted(os.listdir(os.path.join(root, "programs")))]
+        paths.append(os.path.join(root, "tests", "fixtures", "reference.nc"))
+        for path in paths:
+            with self.subTest(program=os.path.basename(path)), open(path, encoding="utf-8") as handle:
+                parser = GCodeParser()
+                parser.parse(handle.read())
+                self.assertEqual([w for w in parser.warnings if w['code'] == self.RULE], [])

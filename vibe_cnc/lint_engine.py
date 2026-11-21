@@ -36,6 +36,7 @@ class LintEngine:
         "CYCLE_NO_DEPTH": ERROR,
         "CYCLE_NO_CONTOUR": ERROR,
         "CYCLE_BLOCKS_MISSING": ERROR,
+        "CYCLE_CONTOUR_TURNS_BACK": ERROR,
         "CYCLE_TOO_MANY_PASSES": WARNING,
     }
 

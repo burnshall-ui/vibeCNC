@@ -46,6 +46,10 @@ verified = false
 text = "Retract, allowance and the last cut along the contour are as in G71."
 verified = false
 
+[[assumption]]
+text = "Type I -- only Z in the first contour block -- cannot cut a pocket: along the contour Z only moves towards the start point's side and X only one way. Otherwise the passes run through the finished shape; the control is said to stop with an alarm (PS0064/PS0065). From general Fanuc knowledge; the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block, is meant for pockets and is not judged."
+verified = false
+
 [[example]]
 title = "Ø80 bar: face down to Z-10 outside Ø40, leave a Ø40 boss faced to Z-5"
 code = '''

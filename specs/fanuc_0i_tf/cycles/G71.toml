@@ -54,6 +54,10 @@ verified = false
 text = "The cycle ends with one cut along the contour shifted by the allowance and a rapid back to the start point."
 verified = false
 
+[[assumption]]
+text = "Type I -- only X in the first contour block -- cannot cut a pocket: along the contour X only moves towards the start point's side and Z only one way. Otherwise the passes run through the finished shape; the control is said to stop with an alarm (PS0064/PS0065). From general Fanuc knowledge; the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block, is meant for pockets and is not judged."
+verified = false
+
 [[example]]
 title = "Shaft from Ø50 stock: Ø30 for 15 mm, then Ø40 to 30 mm"
 code = '''

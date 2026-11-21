@@ -575,6 +575,7 @@ class GCodeParser:
         if found is None:
             return
         contour, contour_lines = found
+        self._check_type_one_contour(code, contour, contour_lines, line_num)
         if self.cycle_depth <= 0.0:
             self._warn(line_num, 'CYCLE_NO_DEPTH',
                        f'G{code} without a depth of cut — '
@@ -629,6 +630,49 @@ class GCodeParser:
         self._record_move('rapid', (self.x, self.z), start, line_num)
         self.x, self.z = start
         self._skip.update(contour_lines)
+
+    def _check_type_one_contour(self, code, contour, contour_lines, line_num):
+        """G71/G72 type I cannot cut a pocket.
+
+        Type I is the usual form: the first contour block moves only the axis
+        the passes step along -- X for G71, Z for G72. Its passes cut from the
+        start side until the contour stops them, so the contour must only ever
+        move towards the start point's side along that axis, and only one way
+        along the other. A contour that turns back -- Ø40 first and then down
+        to Ø30 further in -- leaves its passes running straight through the
+        finished shape: drawn, they cut into the part. Type II, with both
+        axes in the first contour block, is meant for pockets and is not
+        judged here. Said to raise an alarm on the control (PS0064/PS0065);
+        that is from general Fanuc knowledge, not checked on the machine.
+        """
+        first_line = self._lines[contour_lines.start - 1]
+        moves = [letter for letter in 'XUZW' if self._word(first_line, letter) is not None]
+        if any(letter in moves for letter in ('ZW' if code == 71 else 'XU')):
+            return                                  # type II
+        level, travel = (0, 1) if code == 71 else (1, 0)
+        steps = list(zip(contour, contour[1:]))
+
+        def against(axis, allowed):
+            """The first step along axis that goes against `allowed` (+1 or -1)."""
+            return next(((a, b) for a, b in steps if (b[axis] - a[axis]) * allowed < -1e-6), None)
+
+        # Along the stepping axis: towards the side the cycle starts on.
+        side = (self.x, self.z)[level] - contour[0][level]
+        turn, axis = (against(level, 1 if side > 0 else -1), level) if abs(side) > 1e-6 else (None, level)
+        if turn is None:
+            # Along the cutting axis: one way only, the way the contour first goes.
+            first = next((b[travel] - a[travel] for a, b in steps
+                          if abs(b[travel] - a[travel]) > 1e-6), 0.0)
+            turn, axis = (against(travel, 1 if first > 0 else -1), travel) if first else (None, travel)
+        if turn is None:
+            return
+        a, b = turn
+        names = ('X', 'Z')
+        self._warn(line_num, 'CYCLE_CONTOUR_TURNS_BACK',
+                   f'G{code}: the contour turns back in {names[axis]} '
+                   f'({names[axis]}{a[axis]:g} → {names[axis]}{b[axis]:g}). Type I, with only '
+                   f'{names[level]} in the first contour block, cannot cut a pocket: the passes '
+                   'run through the finished shape')
 
     def _one_roughing_pass(self, value, level, travel, start, rough, forward,
                            line_num):
