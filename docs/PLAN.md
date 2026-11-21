@@ -122,7 +122,7 @@ Severity = Literal["ERROR", "WARNING", "INFO"]
 class Diagnostic:
     line: int                           # 1-based line in the program
     severity: Severity
-    rule: str                           # stable id, e.g. "PQ_DECIMAL_POINT"
+    rule: str                           # stable id, e.g. "DECIMAL_POINT"
     message: str                        # for the operator
     token: Optional[str] = None         # e.g. "Q0.4"; None where there is nothing to point at
     hint: Optional[str] = None          # a concrete fix, for the operator and the model

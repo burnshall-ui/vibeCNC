@@ -2,6 +2,7 @@ import re
 from typing import List, Optional
 
 from .diagnostics import ERROR, INFO, WARNING, Diagnostic, Severity
+from .specs import load_specs
 
 # Code words that end a program: M30, M02, and M99 for a subprogram.
 _PROGRAM_END = re.compile(r'(?<![A-Z])M0*(?:30|2|99)(?!\d)', re.IGNORECASE)
@@ -60,6 +61,9 @@ class LintEngine:
         machine = cfg.data.get("machine") or {}
         self.chuck_z = machine.get("chuck_z_limit")
         self.chuck_diameter = machine.get("chuck_diameter")
+        # What the cycles take, from specs/. A broken card raises here and
+        # names its file and key: linting with half the rules would look clean.
+        self.cards = load_specs().cycles
 
     def run_all(self, code: str, snippet: bool = False) -> List[Diagnostic]:
         """Every finding, in program order.
@@ -147,31 +151,17 @@ class LintEngine:
                                  hint="Before M30, move Z to a safe plane, then retract X "
                                       "(or G28 U0 W0)."))
 
-        # 5) G7x sanity (rough)
+        # 5) Cycle words, as the cycle cards in specs/ give them: which words
+        #    take no decimal point, and the ranges of their values. Only the
+        #    words a block carries are judged: a G71 is two blocks, and F is
+        #    modal, so "no F here" says nothing.
         for i, ln in enumerate(lines):
-            cycle_code = re.search(r'\bG7(0|1|2)\b', ln)
-            if cycle_code:
-                # Read the number rather than pattern-match it. `\bF0(\.0+)?\b`
-                # matched the "F0" inside "F0.25", because the '.' that follows
-                # satisfies the word boundary -- so every ordinary turning feed
-                # (0.1 to 0.3 mm/rev) was reported as zero.
-                # Only judge a feed that is actually on this block. A G71 is
-                # two blocks -- depth and retract on the first, P/Q/U/W/F on
-                # the second -- and F is modal besides, so "no F here" says
-                # nothing. Catching a genuinely missing feed needs the modal
-                # state the parser tracks, not a per-line regex.
-                feed = self._feed_value(ln)
-                if feed is not None and feed <= 0.0:
-                    finds.append(self._f(i+1, ERROR, "CYCLE_FEED_ZERO",
-                                         "Feed F must not be 0 or negative.", token=f"F{feed:g}",
-                                         hint="Give the cycle a feed above zero, e.g. F0.25.",
-                                         related_code=f"G7{cycle_code.group(1)}"))
+            finds.extend(self._card_findings(i + 1, ln))
             if re.search(r'\bG76\b', ln):
                 if not re.search(r'\b[FRS]\d', ln):
                     finds.append(self._f(i+1, INFO, "G76_CHECK",
                                          "Threading: Check F/S/R parameters (heuristic).",
                                          related_code="G76"))
-            finds.extend(self._cycle_decimal_points(i+1, ln))
 
         # 5b) The spindle runs before the tool cuts.
         if not snippet:
@@ -266,6 +256,10 @@ class LintEngine:
         # Sorting is stable, so findings sharing a line keep the order the
         # rules above produced them in.
         finds = self._dedupe(finds)
+        # A zero depth on the block that carries it is one fault, and the card
+        # names the word; the parser's "nothing to cut" on the same line goes.
+        named = {f.line for f in finds if f.rule == "VALUE_RANGE"}
+        finds = [f for f in finds if not (f.rule == "CYCLE_NO_DEPTH" and f.line in named)]
         finds.sort(key=lambda f: f.line)
         return finds
 
@@ -296,17 +290,6 @@ class LintEngine:
             return float(tool.get("insert_radius_mm", 0.0) or 0.0)
         except (AttributeError, TypeError, ValueError):
             return 0.0
-
-    @staticmethod
-    def _feed_value(line: str):
-        """The F word of a line as a number. None if absent or unparsable."""
-        m = re.search(r'\bF([-+]?\d*\.?\d*)', line, re.IGNORECASE)
-        if not m:
-            return None
-        try:
-            return float(m.group(1))
-        except ValueError:      # a bare "F" with no number behind it
-            return None
 
     # M30, also written M030 or run together as N100M30; not M300.
     _M30 = re.compile(r'(?<![A-Z])M0*30(?!\d)', re.IGNORECASE)
@@ -363,55 +346,65 @@ class LintEngine:
 
     # A G70-G76 block, the cycle number captured; not G700. A digit may come
     # before the G -- N10G75X26. is a legal block without spaces.
-    _CYCLE_BLOCK = re.compile(r'(?<![A-Z])G7([0-6])(?!\d)', re.IGNORECASE)
-    # A P or Q word written with a decimal point: P1.5, Q3., Q.4.
-    _POINTED_PQ = re.compile(r'(?<![A-Z])([PQ])([-+]?(?:\d+\.\d*|\.\d+))', re.IGNORECASE)
+    _CYCLE_BLOCK = re.compile(r'(?<![A-Z])G(7[0-6])(?!\d)', re.IGNORECASE)
+    # Every address word but G and N, the number as written: P1.5, Q3., Q.4.
+    _CYCLE_WORD = re.compile(r'(?<![A-Z])([A-FH-MO-Z])([-+]?(?:\d+\.?\d*|\.\d+))',
+                             re.IGNORECASE)
 
-    def _cycle_decimal_points(self, line_no: int, line: str) -> List[Diagnostic]:
-        """P and Q of the cycles G70-G76 take no decimal point.
+    def _card_findings(self, line_no: int, line: str) -> List[Diagnostic]:
+        """The words of one G70-G76 block, against the card of its cycle.
 
-        In G70-G73 they are block numbers. In G74-G76 they are amounts in the
-        least input increment, 0.001 mm: P1500 is 1.5 mm. A Fanuc control
-        rejects a point there with an alarm; the parser draws P1.5 as the
-        1.5 mm that was meant, so without this the plot looked fine for a
-        program the machine will not run. Taken from training material and
-        forum posts that describe the Fanuc format, not from the manual.
+        A word the card marks decimal_point = false and that has one is an
+        ERROR: the control stops with an alarm, while the parser draws P1.5
+        as the 1.5 mm that was meant, so the plot looks fine. A value outside
+        the card's range is an ERROR too -- a depth, peck or feed of zero or
+        below, which policies.md forbids. A pointed value is not also judged
+        for its range: the point is the mistake.
         """
         code = self._strip_comments(line)
         cycle = self._CYCLE_BLOCK.search(code)
-        if not cycle:
+        card = self.cards.get(f"G{cycle.group(1)}") if cycle else None
+        if card is None:
             return []
-        name = f"G7{cycle.group(1)}"
-        blocks = int(cycle.group(1)) <= 3
-        if blocks:
-            why = "they name block numbers (N100 → P100)"
-        else:
-            why = "they are written in 0.001 mm (P1500 = 1.5 mm)"
+        words = [(m.group(1).upper(), m.group(2)) for m in self._CYCLE_WORD.finditer(code)]
+        block = card.block_of({letter for letter, _text in words})
         found = []
-        for m in self._POINTED_PQ.finditer(code):
-            word, value = m.group(1).upper(), m.group(2)
-            meant = self._pq_without_point(value, blocks)
-            found.append(self._f(
-                line_no, ERROR, "PQ_DECIMAL_POINT",
-                f"{name}: {word}{value} has a decimal point. "
-                f"P and Q of this cycle take none — {why}; "
-                "the control stops with an alarm.",
-                token=f"{word}{value}",
-                hint=f"Write {word}{meant}." if meant is not None else None,
-                related_code=name))
+        for letter, text in words:
+            word = block.words.get(letter)
+            if word is None:
+                continue
+            token = f"{letter}{text}"
+            if not word.decimal_point and "." in text:
+                meant = self._without_point(text, word.unit)
+                why = {"block number": f"block numbers take no point (N100 is {letter}100)",
+                       "0.001 mm": f"it is written in 0.001 mm ({letter}1500 = 1.5 mm)"}.get(
+                    word.unit, f"it is packed digits ({word.form})" if word.form else "it takes none")
+                found.append(self._f(
+                    line_no, ERROR, "DECIMAL_POINT",
+                    f"{card.code}: {token} has a decimal point. {letter} is the {word.meaning}; "
+                    f"{why}. The control stops with an alarm.",
+                    token=token, hint=f"Write {letter}{meant}." if meant is not None else None,
+                    related_code=card.code))
+                continue
+            wanted = word.out_of_range(float(text))
+            if wanted:
+                found.append(self._f(
+                    line_no, ERROR, "VALUE_RANGE",
+                    f"{card.code}: {token} — {letter} is the {word.meaning}, and must be {wanted}.",
+                    token=token, hint=f"Give {letter} a value {wanted}.", related_code=card.code))
         return found
 
     @staticmethod
-    def _pq_without_point(value: str, blocks: bool) -> Optional[str]:
-        """What P/Q with a point most likely meant: the block number, or the
-        amount in 0.001 mm. None when the number does not read as either."""
-        try:
-            number = float(value)
-        except ValueError:
-            return None
-        if blocks:
+    def _without_point(text: str, unit: str) -> Optional[str]:
+        """What a pointed word most likely meant: the block number, or the
+        amount in 0.001 mm. None when the unit says neither, or the number
+        does not read as one."""
+        number = float(text)
+        if unit == "block number":
             return str(int(number)) if number == int(number) else None
-        return str(int(round(number * 1000)))
+        if unit == "0.001 mm":
+            return str(int(round(number * 1000)))
+        return None
 
     @staticmethod
     def _dedupe(finds: List[Diagnostic]) -> List[Diagnostic]:

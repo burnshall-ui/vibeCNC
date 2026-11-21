@@ -55,7 +55,7 @@ class GenerateEvalTests(unittest.TestCase):
         self.assertTrue(record["result_clean"])
         self.assertEqual(record["corrections"], 1)
         self.assertEqual(record["best"], 1)
-        self.assertEqual(record["attempts"][0]["findings"][0]["rule"], "PQ_DECIMAL_POINT")
+        self.assertEqual(record["attempts"][0]["findings"][0]["rule"], "DECIMAL_POINT")
         self.assertEqual(record["stop"], "lint_clean")
 
     def test_the_summary_counts_drafts_results_rounds_and_the_guard(self):
@@ -75,7 +75,7 @@ class GenerateEvalTests(unittest.TestCase):
     def test_the_findings_left_are_named(self):
         records, _saved = self.run_tasks(Model(fenced(G76_POINT), fenced(G76_POINT)), "thread_m20")
 
-        self.assertIn("Findings left in the results: PQ_DECIMAL_POINT 1",
+        self.assertIn("Findings left in the results: DECIMAL_POINT 1",
                       generate_eval.summarize(records))
 
     def test_every_task_has_a_name_of_its_own_and_a_request(self):

@@ -129,7 +129,7 @@ class LintEngineCycleFeedTests(unittest.TestCase):
         for feed in ("F0.25", "F0.15", "F0.08"):
             with self.subTest(feed=feed):
                 findings = engine.run_all(f"G71 P100 Q200 U0.4 W0.1 {feed}")
-                self.assertEqual(rules(findings, "CYCLE_FEED_ZERO"), [])
+                self.assertEqual(rules(findings, "VALUE_RANGE"), [])
 
     def test_zero_and_negative_feed_are_still_reported(self):
         engine = LintEngine(make_cfg())
@@ -137,14 +137,14 @@ class LintEngineCycleFeedTests(unittest.TestCase):
         for feed in ("F0", "F0.0", "F0.00", "F-0.2"):
             with self.subTest(feed=feed):
                 findings = engine.run_all(f"G71 P100 Q200 {feed}")
-                self.assertEqual(len(rules(findings, "CYCLE_FEED_ZERO")), 1)
+                self.assertEqual(len(rules(findings, "VALUE_RANGE")), 1)
 
     def test_cycle_block_without_a_feed_is_not_reported(self):
         # G71 is two blocks: depth and retract first, P/Q/U/W/F second. F is
         # modal besides, so its absence on one block means nothing.
         engine = LintEngine(make_cfg())
 
-        self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "CYCLE_FEED_ZERO"), [])
+        self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "VALUE_RANGE"), [])
 
 
 class LintEngineThreadingTests(unittest.TestCase):
@@ -428,7 +428,7 @@ class LintEngineCycleDecimalPointTests(unittest.TestCase):
     """P and Q of G70-G76 take no decimal point; the parser would draw them anyway."""
 
     def _findings(self, code):
-        return [f for f in rules(LintEngine(make_cfg()).run_all(code), "PQ_DECIMAL_POINT")
+        return [f for f in rules(LintEngine(make_cfg()).run_all(code), "DECIMAL_POINT")
                 if "decimal point" in f.message]
 
     def test_a_pointed_peck_depth_in_a_groove_is_reported(self):
@@ -472,6 +472,67 @@ class LintEngineCycleDecimalPointTests(unittest.TestCase):
         # G7 with a further digit is not a cycle, and a non-cycle block is not
         # this rule's business.
         self.assertEqual(self._findings("G700 P1.5\nG01 X20. Q1.5"), [])
+
+    def test_a_packed_word_gets_no_guessed_fix(self):
+        # P of the first G76 block is digits, mmrraa; 01.0060 means nothing.
+        findings = self._findings("G76 P01.0060 Q100 R0.05")
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("packed digits (mmrraa)", findings[0].message)
+        self.assertIsNone(findings[0].hint)
+
+
+class CardRuleTests(unittest.TestCase):
+    """The decimal-point and range rules come from the cycle cards in specs/."""
+
+    def found(self, code, rule="VALUE_RANGE", engine=None):
+        engine = engine or LintEngine(make_cfg())
+        return [(f.line, f.token) for f in rules(engine.run_all(code, snippet=True), rule)]
+
+    def test_a_feed_of_zero_or_below_in_any_cycle(self):
+        # The hand-written rule knew G70-G72; the cards give every cycle its F.
+        for code in ("G71 P10 Q20 U0.4 W0.1 F0", "G73 P10 Q20 F0.0", "G74 Z-20. Q2000 F-0.1",
+                     "G75 X25. P1000 F0", "G76 X16.93 Z-30. P1534 Q400 F0"):
+            with self.subTest(code=code):
+                self.assertEqual(len(self.found(code)), 1)
+
+    def test_a_negative_depth_of_cut_is_found_the_parser_reads_it_as_positive(self):
+        self.assertEqual(self.found("G71 U-2. R0.5"), [(1, "U-2.")])
+
+    def test_a_thread_without_height_is_one_finding_not_two(self):
+        # The parser says "nothing to cut" on the same line; the card names P.
+        engine = LintEngine(make_cfg())
+        findings = engine.run_all("G00 X24. Z5.\nG76 P020060 Q100 R0.05\n"
+                                  "G76 X16.93 Z-30. P0 Q400 F2.5", snippet=True)
+
+        self.assertEqual([(f.line, f.rule, f.token) for f in findings], [(3, "VALUE_RANGE", "P0")])
+        self.assertEqual(findings[0].hint, "Give P a value above 0.")
+        self.assertIn("thread height", findings[0].message)
+
+    def test_a_step_of_zero_is_fine_a_peck_of_zero_is_not(self):
+        # G75: P is the peck (above 0), Q the step along Z (0 for one plunge).
+        self.assertEqual(self.found("G00 X42. Z-20.\nG75 X25. Z-20. P1000 Q0 F0.05"), [])
+        self.assertEqual(self.found("G00 X42. Z-20.\nG75 X25. P0 F0.05"), [(2, "P0")])
+
+    def test_the_same_letter_means_what_its_block_says(self):
+        # U of the first G71 block is the depth, U of the second the allowance,
+        # negative when boring.
+        self.assertEqual(self.found("G71 P10 Q20 U-0.4 W0.1 F0.2"), [])
+
+    def test_the_linter_follows_the_card(self):
+        # Change the card, and the finding changes with it: nothing about
+        # G75's P is written in the linter.
+        from dataclasses import replace
+        engine = LintEngine(make_cfg())
+        card = engine.cards["G75"]
+        second = card.blocks[1]
+        lenient = replace(second.words["P"], decimal_point=True, min_exclusive=None)
+        engine.cards = dict(engine.cards, G75=replace(
+            card, blocks=(card.blocks[0], replace(second, words=dict(second.words, P=lenient)))))
+
+        self.assertEqual(self.found("G75 X26. P1.5 F0.05", "DECIMAL_POINT", engine), [])
+        self.assertEqual(self.found("G75 X26. P0 F0.05", "VALUE_RANGE", engine), [])
+        self.assertEqual(len(self.found("G75 X26. P1.5 F0.05", "DECIMAL_POINT")), 1)
 
 
 class LintEngineCycleTests(unittest.TestCase):
@@ -566,8 +627,8 @@ class DiagnosticShapeTests(unittest.TestCase):
 
     def test_a_pointed_p_or_q_says_what_to_write_instead(self):
         engine = LintEngine(make_cfg())
-        groove = rules(engine.run_all("G75 R0.3\nG75 X26. Z-25. P1.5 Q2500 F0.05"), "PQ_DECIMAL_POINT")
-        rough = rules(engine.run_all("G71 U1. R0.5\nG71 P100. Q200 U0.4 W0.1 F0.25"), "PQ_DECIMAL_POINT")
+        groove = rules(engine.run_all("G75 R0.3\nG75 X26. Z-25. P1.5 Q2500 F0.05"), "DECIMAL_POINT")
+        rough = rules(engine.run_all("G71 U1. R0.5\nG71 P100. Q200 U0.4 W0.1 F0.25"), "DECIMAL_POINT")
 
         self.assertEqual([(f.token, f.hint, f.related_code) for f in groove],
                          [("P1.5", "Write P1500.", "G75")])
@@ -656,5 +717,5 @@ class SnippetTests(unittest.TestCase):
 
         found = {f.rule for f in engine.run_all(code, snippet=True)}
 
-        self.assertTrue({"PQ_DECIMAL_POINT", "CYCLE_FEED_ZERO", "PROTECTED_M_CODE",
+        self.assertTrue({"DECIMAL_POINT", "VALUE_RANGE", "PROTECTED_M_CODE",
                          "CHUCK_COLLISION"} <= found, found)

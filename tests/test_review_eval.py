@@ -112,10 +112,10 @@ class FaultTests(unittest.TestCase):
         self.expect("SHAFT", "no_retract", 20, "RETRACT_BEFORE_M30", ["N160", "N170 M05"], [18, 19, 20])
 
     def test_zero_feed(self):
-        self.expect("SHAFT", "feed_zero", 11, "CYCLE_FEED_ZERO", ["N90 G71 P100 Q130 U0.4 W0.1 F0"], [11])
+        self.expect("SHAFT", "feed_zero", 11, "VALUE_RANGE", ["N90 G71 P100 Q130 U0.4 W0.1 F0"], [11])
 
     def test_decimal_point_in_a_block_number(self):
-        self.expect("SHAFT", "pq_point", 11, "PQ_DECIMAL_POINT", ["N90 G71 P100. Q130 U0.4 W0.1 F0.25"], [11])
+        self.expect("SHAFT", "pq_point", 11, "DECIMAL_POINT", ["N90 G71 P100. Q130 U0.4 W0.1 F0.25"], [11])
 
     def test_zero_depth(self):
         # Changed on the first G71 block; the parser reports it on the second.
@@ -174,7 +174,7 @@ class GroundTruthTests(unittest.TestCase):
         # case expects it, because the fault put in is something else.
         program = SHAFT.replace("N160 G00 Z50.", "N160").replace("N170 G00 X100. M05", "N170 M05")
         cases, left_out = cases_of(P=program)
-        self.assertEqual([f.rule for f in cases[("P", "feed_zero")].expected], ["CYCLE_FEED_ZERO"])
+        self.assertEqual([f.rule for f in cases[("P", "feed_zero")].expected], ["VALUE_RANGE"])
         self.assertIn(20, cases[("P", "feed_zero")].known)
         self.assertNotIn(("P", "no_retract"), cases)
         self.assertEqual(cases[("P", ev.CLEAN)].known, [20])

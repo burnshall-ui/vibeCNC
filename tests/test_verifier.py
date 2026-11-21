@@ -71,7 +71,7 @@ class TheLoopTests(unittest.TestCase):
         self.assertEqual(outcome.stop, CLEAN)
         self.assertEqual(outcome.corrections, 1)
         self.assertIs(outcome.best, outcome.attempts[1])
-        self.assertEqual([d.rule for d in outcome.draft.findings], ["PQ_DECIMAL_POINT"])
+        self.assertEqual([d.rule for d in outcome.draft.findings], ["DECIMAL_POINT"])
 
     def test_the_correction_is_asked_for_in_the_same_conversation(self):
         model = Model(answer(G76_POINT), answer(G76_RIGHT))
@@ -87,7 +87,7 @@ class TheLoopTests(unittest.TestCase):
         self.assertEqual([m["role"] for m in second], ["user", "assistant", "user"])
         self.assertEqual(second[1]["content"], answer(G76_POINT))
         correction = second[2]["content"]
-        self.assertIn("Line 2, ERROR PQ_DECIMAL_POINT", correction)
+        self.assertIn("Line 2, ERROR DECIMAL_POINT", correction)
         self.assertIn("Q0.4", correction)
         self.assertIn("Fix: Write Q400.", correction)
 
@@ -337,7 +337,7 @@ class CodeBlockTests(unittest.TestCase):
 
 
 class FingerprintTests(unittest.TestCase):
-    def finding(self, line, rule="PQ_DECIMAL_POINT", severity="ERROR", token="Q0.4"):
+    def finding(self, line, rule="DECIMAL_POINT", severity="ERROR", token="Q0.4"):
         return Diagnostic(line, severity, rule, f"{token} has a decimal point.", token=token)
 
     def test_the_line_does_not_count(self):
