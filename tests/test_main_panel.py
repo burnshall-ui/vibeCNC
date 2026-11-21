@@ -545,5 +545,94 @@ class LayoutTests(PanelCase):
         self.assertEqual(again.dock.current_index(), 1)
 
 
+
+class PlaybackPanelTests(PanelCase):
+    """The position display and the timeline, as the playback drives them."""
+
+    # Line 4 is a G71: one block, several moves.
+    CYCLE = "\n".join([
+        "G18 G21 G99",
+        "G00 X52. Z2.",
+        "G01 Z0. F0.2",
+        "G71 U1.0 R0.5",
+        "G71 P100 Q200 U0.3 W0.1 F0.25",
+        "N100 X20. F0.15",
+        "Z-10.",
+        "X50.",
+        "N200 Z-30.",
+        "G00 X100. Z50.",
+        "M30",
+    ])
+
+    def cycle_window(self):
+        win = self.window()
+        win.editor.setPlainText(self.CYCLE)
+        win.plotter.set_gcode(self.CYCLE)
+        return win
+
+    def step(self, win):
+        win._sim_step()
+        win.plotter._finish_glide()
+
+    def test_the_display_follows_the_playback(self):
+        win = self.window()
+        self.start(win)
+
+        self.step(win)       # G00 X10. Z2.
+        self.step(win)       # G01 Z-5. F0.2
+
+        shown = win.dro.text()
+        self.assertEqual((shown['x'], shown['z']), ("10.000", "\u22125.000"))
+        self.assertEqual(shown['feed'], "0.2 mm/rev")
+        self.assertEqual(shown['codes'][0], 'G01')
+
+    def test_stopping_clears_the_display_and_the_playhead(self):
+        win = self.window()
+        self.start(win)
+        self.step(win)
+
+        win.action_reset()
+
+        self.assertEqual(win.dro.text()['x'], '')
+        self.assertIsNone(win.timeline.made)
+
+    def test_the_timeline_holds_one_stretch_per_move(self):
+        win = self.cycle_window()
+
+        self.assertEqual(len(win.timeline.weights), len(win.plotter.paths_cache['order']))
+
+    def test_seeking_from_a_stopped_simulation_holds_it_there(self):
+        win = self.window()
+
+        win._sim_seek(2)        # after G01 Z-5.
+
+        self.assertEqual(win.sim_state, "PAUSED")
+        self.assertEqual((win.sim_current_line, win.sim_move), (2, 0))
+        self.assertEqual(win.plotter._moves_reached(), 2)
+
+        win.action_cycle_start()
+        win.sim_timer.stop()
+        self.step(win)          # carries on with line 3
+        self.assertEqual(win.sim_shown_line, 3)
+
+    def test_seeking_into_a_cycle_carries_on_with_its_next_move(self):
+        win = self.cycle_window()
+        order = win.plotter.paths_cache['order']
+        first = next(i for i, (_k, _i, line) in enumerate(order) if line == 5)
+
+        win._sim_seek(first + 3)    # three moves into the G71
+
+        self.assertEqual((win.sim_current_line, win.sim_move), (4, 3))
+        self.assertEqual(win.plotter._moves_reached(), first + 3)
+
+    def test_the_speed_buttons_set_the_tempo(self):
+        win = self.window()
+
+        win.timeline.buttons[2.0].click()
+
+        self.assertEqual(win._sim_interval(), 100)
+        self.assertEqual(win._cycle_interval(), 40)
+
+
 if __name__ == "__main__":
     unittest.main()

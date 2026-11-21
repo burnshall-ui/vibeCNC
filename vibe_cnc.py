@@ -26,6 +26,8 @@ from vibe_cnc.gcode_plotter import GCodePlotterWidget
 from vibe_cnc.gcode_completer import install_completer
 from vibe_cnc.fonts import mono_families, mono_css
 from vibe_cnc.fold_panel import FoldPanel
+from vibe_cnc.dro_panel import DroPanel
+from vibe_cnc.timeline import Timeline
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,12 +86,8 @@ class Main(QMainWindow):
         self.sim_timer = QTimer()
         self.sim_timer.timeout.connect(self._sim_step)
 
-        # --- Live Position Tracking ---
-        self.sim_x = 0.0
-        self.sim_z = 0.0
-        self.sim_tool = 0
-        self.sim_s = 0
-        self.sim_f = 0.0
+        # Playback tempo, from the timeline's speed buttons: 1 is the normal pace.
+        self.sim_speed = 1.0
 
         # --- Settings & Managers ---
         cfg_path = os.path.join(HERE, "config.yaml")
@@ -185,7 +183,16 @@ class Main(QMainWindow):
         chuck_diameter = machine.get('chuck_diameter')
         self.plotter = GCodePlotterWidget(self.cfg_colors, chuck_z=chuck_z,
                                           chuck_diameter=chuck_diameter)
-        bottom = TitlePanel("SIMULATION", self.plotter, self.cfg_colors)
+        # The position display above the picture, the timeline below it.
+        self.dro = DroPanel(self.cfg_colors)
+        self.timeline = Timeline(self.cfg_colors)
+        simBox = QWidget(); sv = QVBoxLayout(simBox); sv.setContentsMargins(0, 0, 0, 0); sv.setSpacing(0)
+        sv.addWidget(self.dro); sv.addWidget(self.plotter, 1); sv.addWidget(self.timeline)
+        bottom = TitlePanel("SIMULATION", simBox, self.cfg_colors)
+        self.plotter.parsed.connect(self._on_program_parsed)
+        self.plotter.motion.connect(self._on_tool_moved)
+        self.timeline.seek.connect(self._sim_seek)
+        self.timeline.speed_changed.connect(self._set_sim_speed)
 
         # --- SPLITTERS ---
         # The program and the simulation side by side, each the full height:
@@ -474,6 +481,7 @@ class Main(QMainWindow):
             set_font(tab, 1.0)
         if self.dock.is_folded():
             self.dock.set_folded(True)  # the tab row's height follows the font
+        self.dro.apply_scale(self.base_pt * scale)
         self.editor.setViewportMargins(self.editor.lineNumberAreaWidth(), 0, 0, 0)
 
     def _set_ai_busy(self, busy: bool):
@@ -775,16 +783,11 @@ class Main(QMainWindow):
             self.sim_current_line = 0
             self.sim_move = 0
             self.sim_state = "RUNNING"
-
-            # Reset live position
-            self.sim_x = 0.0
-            self.sim_z = 0.0
-            self.sim_tool = 0
-            self.sim_s = 0
-            self.sim_f = 0.0
+            self.dro.clear()
 
             # Live-Drawing: Start at line 0 (nothing drawn)
             self.plotter.set_live_max_line(0)
+            self.timeline.set_progress(0)
 
             self.sim_timer.start(self._sim_interval())
 
@@ -815,8 +818,12 @@ class Main(QMainWindow):
     GLIDE_SHARE = 0.9
 
     def _sim_interval(self) -> int:
-        """Milliseconds per G-Code line: 200, or 500 in SINGLE BLOCK."""
-        return 500 if self.btnSingleBlock.isChecked() else 200
+        """Milliseconds per G-Code line: 200, or 500 in SINGLE BLOCK, at 1x speed."""
+        return int((500 if self.btnSingleBlock.isChecked() else 200) / self.sim_speed)
+
+    def _cycle_interval(self) -> int:
+        """Milliseconds per move of a cycle, at the timeline's speed."""
+        return int(self.CYCLE_MOVE_MS / self.sim_speed)
 
     def _sim_step(self):
         """Executes one simulation step: one G-Code line, or one move of a cycle"""
@@ -855,9 +862,6 @@ class Main(QMainWindow):
         # Update status
         self.status.showMessage(f"SIM line {line_num}: {line[:30]}{'...' if len(line) > 30 else ''}", 0)
 
-        # Parse current line for live position
-        self._update_sim_position(line)
-
         # Live-Drawing: Draw only up to current line. A cycle is one block that
         # makes dozens of moves; one move per tick shows the passes being cut
         # instead of all of them appearing at once. SINGLE BLOCK keeps it a block.
@@ -865,19 +869,17 @@ class Main(QMainWindow):
         if moves > 1 and not self.btnSingleBlock.isChecked():
             stride = -(-moves // self.CYCLE_MAX_TICKS)  # ceiling division
             self.sim_move = min(self.sim_move + stride, moves)
-            tick = self.CYCLE_MOVE_MS if self.sim_move < moves else self._sim_interval()
+            tick = self._cycle_interval() if self.sim_move < moves else self._sim_interval()
             self.plotter.set_live_step(line_num, self.sim_move,
                                        glide_ms=int(tick * self.GLIDE_SHARE))
-            end = self.plotter.step_end(line_num, self.sim_move)
-            if end is not None:
-                self.sim_x, self.sim_z = end
-                self._push_live_position()
+            self._show_block(line_num)
             if self.sim_move < moves:
-                self.sim_timer.setInterval(self.CYCLE_MOVE_MS)
+                self.sim_timer.setInterval(self._cycle_interval())
                 return  # still on this line; the next tick plays the next move
         else:
             self.plotter.set_live_max_line(
                 line_num, glide_ms=int(self._sim_interval() * self.GLIDE_SHARE))
+            self._show_block(line_num)
         self.sim_move = 0
         self.sim_timer.setInterval(self._sim_interval())
 
@@ -926,56 +928,90 @@ class Main(QMainWindow):
         # Remove yellow marker
         self.editor.clear_sim_line()
 
-        # Remove live position display
-        self.plotter.clear_live_position()
+        # Clear the position display and the playhead
+        self.dro.clear()
+        self.timeline.clear_progress()
 
         # Reset live drawing (show all lines)
         self.plotter.clear_live_max_line()
 
-    def _update_sim_position(self, line: str):
-        """Parses a G-Code line and updates the live position"""
-        # Remove comments
-        line = re.sub(r'\(.*?\)', '', line).strip()
-        if not line:
+    def _modal_at(self, line_num: int):
+        """The parser's modal state after a line, or the nearest one before it."""
+        paths = self.plotter.paths_cache
+        if not paths:
+            return None
+        modal = paths.get('modal', {})
+        for line in range(line_num, 0, -1):
+            if line in modal:
+                return modal[line]
+        return None
+
+    def _show_block(self, line_num: int):
+        """Tells the position display which block runs: its modal state, its tool, its text."""
+        modal = self._modal_at(line_num)
+        tool = self.plotter.parser.tool_items.get((modal or {}).get('tool') or 0)
+        self.dro.set_state(modal, tool)
+        text = self.sim_lines[line_num - 1] if 0 < line_num <= len(self.sim_lines) else ''
+        self.dro.set_block(text)
+
+    def _on_tool_moved(self, x: float, z: float, made: int, gliding: float, move: str):
+        """The simulation moved the tool: the display and the playhead follow."""
+        if self.sim_state == "STOPPED":
             return
+        self.dro.set_position(x, z, move)
+        self.timeline.set_progress(made, gliding)
 
-        # Extract X/Z coordinates
-        x_match = re.search(r'X([-+]?\d*\.?\d+)', line, re.IGNORECASE)
-        z_match = re.search(r'Z([-+]?\d*\.?\d+)', line, re.IGNORECASE)
+    def _on_program_parsed(self):
+        """A program was drawn: the timeline gets its moves, each as long as it plays."""
+        paths = self.plotter.paths_cache
+        if not paths:
+            self.timeline.set_moves([], [])
+            return
+        share = self.CYCLE_MOVE_MS / 200.0
+        weights = [share if self.plotter.steps_in_line(line) > 1 else 1.0
+                   for _kind, _index, line in paths['order']]
+        self.timeline.set_moves(weights, self.plotter.move_colours())
 
-        if x_match:
-            self.sim_x = float(x_match.group(1))
-        if z_match:
-            self.sim_z = float(z_match.group(1))
+    def _set_sim_speed(self, speed: float):
+        self.sim_speed = speed
+        if self.sim_state == "RUNNING":
+            self.sim_timer.setInterval(self._sim_interval())
+        self.status.showMessage(f"Playback at {speed:g}x", 2000)
 
-        # Tool
-        t_match = re.search(r'T(\d+)', line, re.IGNORECASE)
-        if t_match:
-            self.sim_tool = int(t_match.group(1)) // 100  # T0101 -> T1
+    def _sim_seek(self, made: int):
+        """Jumps the playback to the point where `made` moves have been made.
 
-        # Spindle speed
-        s_match = re.search(r'S(\d+)', line, re.IGNORECASE)
-        if s_match:
-            self.sim_s = int(s_match.group(1))
-
-        # Feed rate
-        f_match = re.search(r'F([-+]?\d*\.?\d+)', line, re.IGNORECASE)
-        if f_match:
-            self.sim_f = float(f_match.group(1))
-
-        self._push_live_position()
-
-    def _push_live_position(self):
-        """Hands the current X, Z, tool, speed and feed to the plotter's overlay"""
-        # Always show X and Z, even if 0
-        self.plotter.set_live_position(
-            x=self.sim_x,
-            z=self.sim_z,
-            tool=self.sim_tool if self.sim_tool > 0 else None,
-            s=self.sim_s if self.sim_s > 0 else None,
-            f=self.sim_f if self.sim_f > 0.0 else None
-        )
-
+        From a stopped simulation it starts one, held at that point; a running
+        one carries on from there.
+        """
+        paths = self.plotter.paths_cache
+        if not paths or not paths['order']:
+            return
+        made = max(0, min(made, len(paths['order'])))
+        if self.sim_state == "STOPPED":
+            self.sim_lines = [line.strip() for line in self.editor.toPlainText().split('\n')]
+            self.sim_state = "PAUSED"
+            self.sim_timer.stop()
+            self._append_system_message("Simulation held at the timeline position")
+        if made == 0:
+            self.sim_current_line, self.sim_move = 0, 0
+            self.plotter.set_live_max_line(0)
+            line = 1
+        else:
+            _kind, _index, line = paths['order'][made - 1]
+            step = sum(1 for _k, _i, other in paths['order'][:made] if other == line)
+            if step < self.plotter.steps_in_line(line):
+                # Part way through a cycle: the next tick plays its next move.
+                self.sim_current_line, self.sim_move = line - 1, step
+                self.plotter.set_live_step(line, step)
+            else:
+                self.sim_current_line, self.sim_move = line, 0
+                self.plotter.set_live_max_line(line)
+        self.sim_shown_line = line
+        self.editor.set_sim_line(line)
+        self.plotter.highlight_line(line)
+        self._show_block(line)
+        self._update_run_state()
     def resizeEvent(self, e):
         super().resizeEvent(e); self._apply_scaling()
 

@@ -1838,3 +1838,41 @@ class GCodeParserContourDirectionTests(unittest.TestCase):
                 parser = GCodeParser()
                 parser.parse(handle.read())
                 self.assertEqual([w for w in parser.warnings if w['code'] == self.RULE], [])
+
+
+class ModalStateTests(unittest.TestCase):
+    """The modal state after each block, for the position display."""
+
+    PROGRAM = ("N10 G18 G40 G80 G97 G99\n"
+               "N20 G21 G54\n"
+               "N30 G50 S2500\n"
+               "N40 T0101\n"
+               "N50 G96 S150 M03\n"
+               "N60 G00 X42. Z2.\n"
+               "N70 G01 Z-20. F0.25\n"
+               "N80 G00 X100. M05\n")
+
+    def setUp(self):
+        self.modal = GCodeParser().parse(self.PROGRAM)['modal']
+
+    def test_every_line_leaves_its_state(self):
+        # The text ends in a newline, so its last line is an empty ninth.
+        lines = len(self.PROGRAM.split("\n"))
+        self.assertEqual(sorted(self.modal), list(range(1, lines + 1)))
+
+    def test_the_header_sets_the_groups_it_names(self):
+        first = self.modal[1]
+        self.assertEqual((first['plane'], first['comp'], first['css'], first['feed_mode']),
+                         ('G18', 'G40', 'G97', 'G99'))
+        self.assertIsNone(first['units'])     # not set yet: not guessed
+        self.assertEqual((self.modal[2]['units'], self.modal[2]['wcs']), ('G21', 'G54'))
+
+    def test_g50_s_is_the_cap_and_not_the_speed(self):
+        self.assertEqual((self.modal[3]['s'], self.modal[3]['s_max']), (0, 2500))
+        self.assertEqual((self.modal[5]['s'], self.modal[5]['css']), (150, 'G96'))
+
+    def test_the_spindle_tool_feed_and_motion_follow_the_program(self):
+        self.assertEqual(self.modal[5]['spindle'], 'M03')
+        self.assertEqual(self.modal[4]['tool'], 1)
+        self.assertEqual((self.modal[7]['motion'], self.modal[7]['f']), ('G01', 0.25))
+        self.assertEqual((self.modal[8]['motion'], self.modal[8]['spindle']), ('G00', 'M05'))

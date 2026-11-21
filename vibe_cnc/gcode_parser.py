@@ -135,6 +135,15 @@ class GCodeParser:
         self.k = 0.0  # Arc parameter (Z-offset center)
         # Tool Nose Radius Compensation (G40/G41/G42)
         self.comp = 'G40'   # current: G40=off, G41=left, G42=right (relative to movement direction)
+        # Modal groups the control shows on its position screen. They change
+        # nothing that is drawn. None until the program sets them: what the
+        # machine powers up with is a parameter, not known here.
+        self.plane = None      # G17 / G18 / G19
+        self.units = None      # G20 / G21
+        self.feed_mode = None  # G98 per minute / G99 per revolution
+        self.css = None        # G96 constant surface speed / G97 fixed rpm
+        self.wcs = None        # G54 - G59
+        self.spindle = None    # M03 / M04 / M05
         self.tnr = 0.0      # Corner radius (mm)
         self.nose_direction = 0  # Imaginary tool nose position, Fanuc tip number 0-9
         self.warnings: List[dict] = []  # Geometry the parser could not make sense of
@@ -164,7 +173,10 @@ class GCodeParser:
             # Lines that describe a contour for a roughing cycle rather than
             # move the tool. The cycle has already cut them, so a playback
             # continues after them, the way the control does.
-            'skipped': frozenset()
+            'skipped': frozenset(),
+            # The modal state after each block the program runs, by line: see
+            # _modal(). For the position display, not for drawing.
+            'modal': {},
         }
 
     def parse(self, gcode: str) -> dict:
@@ -186,6 +198,7 @@ class GCodeParser:
             if line_num in self._skip:
                 continue
             self._parse_line(line, line_num)
+            self.paths['modal'][line_num] = self._modal()
             end = PROGRAM_END.search(self._code_of(line))
             if end:
                 code = f"M{int(end.group(1)):02d}"
@@ -227,6 +240,13 @@ class GCodeParser:
                            f'Code after the program end ({code} in line {end_line}): '
                            'the control never runs it, so it is not drawn')
                 return
+
+    def _modal(self) -> dict:
+        """The modal state as the position display shows it, after a block."""
+        return {'motion': self.mode, 'plane': self.plane, 'units': self.units,
+                'comp': self.comp, 'feed_mode': self.feed_mode, 'css': self.css,
+                'wcs': self.wcs, 'spindle': self.spindle, 'tool': self.tool,
+                's': self.s, 's_max': self.s_max, 'f': self.f}
 
     def _warn(self, line_num: int, code: str, message: str):
         """Records a geometry problem instead of silently drawing nothing.
@@ -272,6 +292,16 @@ class GCodeParser:
                 if self.mode != mode:
                     self.cycle_x, self.cycle_z, self.cycle_taper = None, None, 0.0
                 self.mode = mode
+            elif g in (17, 18, 19):
+                self.plane = f'G{g}'
+            elif g in (20, 21):
+                self.units = f'G{g}'
+            elif g in (98, 99):
+                self.feed_mode = f'G{g}'
+            elif g in (96, 97):
+                self.css = f'G{g}'
+            elif 54 <= g <= 59:
+                self.wcs = f'G{g}'
             elif g == 40:
                 self.comp = 'G40'
             elif g == 41:
@@ -320,6 +350,10 @@ class GCodeParser:
                 self.s_max = int(s_match.group(1))
             else:
                 self.s = int(s_match.group(1))
+
+        for m in (int(code) for code in re.findall(r'M(\d+)', line, re.IGNORECASE)):
+            if m in (3, 4, 5):
+                self.spindle = f'M{m:02d}'
 
         if any(g in NON_MOTION_CODES for g in g_codes):
             # Position, mode and paths stay untouched — see NON_MOTION_CODES.

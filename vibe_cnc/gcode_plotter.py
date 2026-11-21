@@ -130,6 +130,13 @@ class GCodePlotterWidget(QWidget):
     """2D visualization for turned parts with Matplotlib"""
 
     line_clicked = pyqtSignal(int)  # Signal: Line was clicked
+    # A program was parsed and drawn: its moves, colours and modal state are
+    # in paths_cache, for the position display and the timeline.
+    parsed = pyqtSignal()
+    # Where the playback has the tool: x (diameter), z, how many moves have
+    # been made, how far the next one has come (0 to 1) while it glides, and
+    # the kind of the move being made ('rapid', 'cut', ... as in paths_cache).
+    motion = pyqtSignal(float, float, int, float, str)
 
     def __init__(self, colors: dict, chuck_z: float = -5.0,
                  chuck_diameter: float = None, parent=None):
@@ -147,14 +154,6 @@ class GCodePlotterWidget(QWidget):
         self._pan_start = None  # Start position for pan
         self._is_panning = False  # Flag: Pan mode active
         self._click_start = None  # Start position for click detection
-
-        # Live-Position Tracking
-        self.live_x = None
-        self.live_z = None
-        self.live_tool = None
-        self.live_s = None
-        self.live_f = None
-        self.live_text = None  # Text artist for live display
 
         # Live-Drawing (only draw up to this line, None = all)
         self.live_max_line = None
@@ -250,7 +249,6 @@ class GCodePlotterWidget(QWidget):
         self._glow = []
         self._tool_art = {}
         self.highlight_artist = None
-        self.live_text = None
         self._invalidate()
         self._setup_plot()
         self.ax.text(0.5, 0.5, 'No Toolpaths\n(G00/G01 with X/Z)',
@@ -499,6 +497,12 @@ class GCodePlotterWidget(QWidget):
             return PATH_COLOURS['drill']
         return PATH_COLOURS['cut' if kind == 'arc' else kind]
 
+    def move_colours(self) -> list:
+        """The colour of every move of the program, in the order they run."""
+        if not self.paths_cache:
+            return []
+        return [self._colour_of(kind, line) for kind, _index, line in self.paths_cache['order']]
+
     def _points_of(self, kind, index):
         """One move as the (X, Z) points it runs through, an arc along its chords."""
         if kind == 'arc':
@@ -541,7 +545,6 @@ class GCodePlotterWidget(QWidget):
         self._tool_art = {}
         self._invalidate()
         self.highlight_artist = None  # Invalid after clear() - will be recreated
-        self.live_text = None  # Invalid after clear() - will be recreated
         self._setup_plot()
 
         self._draw_blank()
@@ -801,12 +804,14 @@ class GCodePlotterWidget(QWidget):
 
         if not self._draw_scene():
             self._draw_empty()
+            self.parsed.emit()
             return
 
         self._fit_view()
         self._update_motion()
         # Async rendering for better performance
         self.canvas.draw_idle()
+        self.parsed.emit()
 
     # --- rendering the layers ----------------------------------------------
 
@@ -835,9 +840,8 @@ class GCodePlotterWidget(QWidget):
         artists = list(self._glow)
         artists += [artist for drawn in self._tool_art.values() for artist in drawn
                     if artist.get_visible()]
-        for artist in (self.highlight_artist, self.live_text):
-            if artist is not None and artist.axes is self.ax:
-                artists.append(artist)
+        if self.highlight_artist is not None and self.highlight_artist.axes is self.ax:
+            artists.append(self.highlight_artist)
         return artists
 
     def _draw_layer(self, artists):
@@ -905,7 +909,12 @@ class GCodePlotterWidget(QWidget):
             collection.set_segments(segments)
         self._place_tool(current)
         self._draw_highlight()
-        self._refresh_live_text()
+        point = self._tool_point()
+        if point is not None:
+            gliding = self._glide['progress'] if self._glide is not None else 0.0
+            kind = current[1] if current is not None else ''
+            self.motion.emit(float(point[0]), float(point[1]), self._moves_reached(),
+                             gliding, kind)
 
     def _place_tool(self, current):
         """Puts the tool of the move being made at its tip; hides the others."""
@@ -991,7 +1000,8 @@ class GCodePlotterWidget(QWidget):
                  for (x0, z0), (x1, z1) in zip(points, points[1:])]
         self._glide = {'index': i, 'points': points, 'steps': steps,
                        'length': sum(steps), 'start': time.monotonic(),
-                       'duration': glide_ms / 1000.0, 'at': points[0], 'done': []}
+                       'duration': glide_ms / 1000.0, 'at': points[0], 'done': [],
+                       'progress': 0.0}
         self._sync_scene()          # the move goes back among the moves ahead
         self._place_glide(0.0)
         self._glide_timer.start()
@@ -1017,6 +1027,7 @@ class GCodePlotterWidget(QWidget):
             break
         glide['at'] = at
         glide['done'] = done
+        glide['progress'] = progress
 
     def _glide_frame(self):
         glide = self._glide
@@ -1295,27 +1306,6 @@ class GCodePlotterWidget(QWidget):
         self.pending_code = gcode
         self._do_update()
 
-    def set_live_position(self, x: float = None, z: float = None, tool: int = None, s: int = None, f: float = None):
-        """Sets the live position for the simulation display"""
-        self.live_x = x
-        self.live_z = z
-        self.live_tool = tool
-        self.live_s = s
-        self.live_f = f
-        self._refresh_live_text()
-        self._render_motion()
-
-    def clear_live_position(self):
-        """Removes the live position display"""
-        self.live_x = None
-        self.live_z = None
-        self.live_tool = None
-        self.live_s = None
-        self.live_f = None
-        if self.live_text:
-            self.live_text.set_visible(False)
-            self._render_motion()
-
     def set_live_max_line(self, line_num: int, glide_ms: int = 0):
         """Sets the maximum line for live drawing (only draws up to this line)
 
@@ -1419,50 +1409,3 @@ class GCodePlotterWidget(QWidget):
             return False
         rank = self._rank.get(move) if move is not None else None
         return self.live_step is None or rank is None or rank < self.live_step
-
-    def _refresh_live_text(self):
-        """The live position box: where the tool is, its tool, speed and feed.
-
-        While a move glides, X and Z follow the tool rather than jump to the
-        end of the move.
-        """
-        if self.live_x is None and self.live_z is None:
-            if self.live_text:
-                self.live_text.set_visible(False)
-            return
-
-        x, z = self.live_x, self.live_z
-        if self._glide is not None:
-            x, z = self._glide['at']
-
-        info_lines = ["LIVE POSITION"]
-        if x is not None:
-            info_lines.append(f"X: {x:.2f} Ø")
-        if z is not None:
-            info_lines.append(f"Z: {z:.2f}")
-        if self.live_tool is not None and self.live_tool > 0:
-            info_lines.append(f"T: {self.live_tool:02d}")
-        if self.live_s is not None and self.live_s > 0:
-            info_lines.append(f"S: {self.live_s}")
-        if self.live_f is not None and self.live_f > 0:
-            info_lines.append(f"F: {self.live_f:.2f}")
-        info_text = "\n".join(info_lines)
-
-        if self.live_text is None or not self.live_text.axes:
-            self.live_text = self.ax.text(
-                0.98, 0.98, info_text,
-                transform=self.ax.transAxes,
-                fontsize=9,
-                verticalalignment='top',
-                horizontalalignment='right',
-                bbox=dict(boxstyle='round,pad=0.6', facecolor=BACKGROUND,
-                          edgecolor=self.colors['FANUC_YELLOW'], linewidth=1.2, alpha=0.95),
-                color=MARKER,
-                family='monospace',
-                weight='bold',
-                zorder=100
-            )
-            self.live_text.set_animated(True)
-        else:
-            self.live_text.set_text(info_text)
-            self.live_text.set_visible(True)
