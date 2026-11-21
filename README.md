@@ -272,6 +272,21 @@ them twice. A failed call (no credits, wrong key) stops the run. The scoring loo
 the block's N number or line number and a word for the fault in the same item of the
 answer. It is a heuristic, so read the saved answers before trusting a number.
 
+### Measuring the loop: the generate eval
+
+How often does **KI: GEN-CODE** end lint clean? `evals/generate_eval.py` sends a
+fixed list of requests (threads, G71/G70, grooving, peck drilling, whole programs,
+English and German) through the same loop and counts how often the first draft was
+lint clean, how often the result is, how many corrections it took and how often the
+delete guard rejected one. It measures lint cleanliness, not whether the code does
+what was asked:
+
+```bash
+python3 -m evals.generate_eval                # lists the tasks, sends nothing
+python3 -m evals.generate_eval --run          # asks the model config.yaml names
+python3 -m evals.generate_eval --summarize _tmp/generate_eval/<file>.jsonl
+```
+
 ### Machine Settings
 ```yaml
 machine:
@@ -357,7 +372,8 @@ vibe_cnc/
 │   └── macros.db               # SQLite macro storage
 │
 ├── evals/
-│   └── review_eval.py          # Does a model find the faults the linter knows?
+│   ├── review_eval.py          # Does a model find the faults the linter knows?
+│   └── generate_eval.py        # How often does the verifier loop end lint clean?
 │
 └── programs/                   # Sample G-Code programs
 ```

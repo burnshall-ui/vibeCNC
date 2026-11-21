@@ -590,7 +590,7 @@ def load_programs(paths: List[str]) -> Dict[str, str]:
     return programs
 
 
-def _model_of(settings) -> Tuple[str, str]:
+def model_of(settings) -> Tuple[str, str]:
     from vibe_cnc.ai_client import (DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, SECTION_OF,
                                         backend_of)
     ai = settings.data.get("ai") or {}
@@ -690,7 +690,7 @@ def main(argv=None) -> int:
         if backend_of(ai) not in SECTION_OF:
             parser.error(f"ai.mode '{backend_of(ai)}' is not known; use --mode")
         ai.setdefault(SECTION_OF[backend_of(ai)], {})["model"] = args.model
-    mode, model = _model_of(settings)
+    mode, model = model_of(settings)
 
     cases, left_out = build_cases(load_programs(paths), LintEngine(settings), faults)
     if args.no_clean:
