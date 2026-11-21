@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from evals import generate_eval
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.specs import load_specs
 
 G76_POINT = "G00 X24. Z5.\nG76 P020060 Q0.4 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
 G76_RIGHT = "G00 X24. Z5.\nG76 P020060 Q100 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
@@ -34,14 +35,14 @@ def fenced(code):
 
 
 class GenerateEvalTests(unittest.TestCase):
-    def run_tasks(self, model, *names):
+    def run_tasks(self, model, *names, specs=None):
         tasks = [generate_eval.TASKS_BY_NAME[n] for n in names]
         linter = LintEngine(SimpleNamespace(data={"policies": {}}))
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "out.jsonl")
             with redirect_stdout(StringIO()):
                 records = generate_eval.run(tasks, model, linter, "openai", "m", 1, path,
-                                            keep_going=True)
+                                            keep_going=True, specs=specs)
             with open(path, encoding="utf-8") as saved:
                 lines = [json.loads(line) for line in saved]
         return records, lines
@@ -77,6 +78,25 @@ class GenerateEvalTests(unittest.TestCase):
 
         self.assertIn("Findings left in the results: DECIMAL_POINT 1",
                       generate_eval.summarize(records))
+
+    def test_the_cards_are_recorded_and_summed_up(self):
+        records, saved = self.run_tasks(Model(fenced(G76_RIGHT), fenced(G76_RIGHT)),
+                                        "thread_m20", "g71_shaft", specs=load_specs())
+
+        self.assertEqual(saved, records)
+        self.assertEqual([(r["with_cards"], r["cards"]) for r in records],
+                         [(True, ["G76"]), (True, ["G71", "G70"])])
+        summary = generate_eval.summarize(records)
+        self.assertIn("With the cycle cards and the dialect sheet.", summary)
+        self.assertIn("cards G71,G70", summary)
+
+    def test_without_specs_the_summary_says_so(self):
+        records, _saved = self.run_tasks(Model(fenced(G76_RIGHT)), "thread_m20")
+
+        self.assertEqual((records[0]["with_cards"], records[0]["cards"]), (False, []))
+        summary = generate_eval.summarize(records)
+        self.assertIn("Without the cycle cards (--no-cards).", summary)
+        self.assertNotIn(" cards ", summary.split("Per request:")[1])
 
     def test_every_task_has_a_name_of_its_own_and_a_request(self):
         names = [t.name for t in generate_eval.TASKS]

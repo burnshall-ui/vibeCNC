@@ -42,6 +42,8 @@ if ROOT not in sys.path:            # run as a file rather than with -m
     sys.path.insert(0, ROOT)
 
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
+from vibe_cnc.spec_context import cards_for_program
+from vibe_cnc.specs import load_specs
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.tool_data import load_tools_json
 
@@ -395,9 +397,17 @@ def build_cases(programs: Dict[str, str], engine, faults=None):
     return cases, left_out
 
 
-def case_prompt(case: Case, policies: str, tools_json: dict) -> str:
-    """What AI ANALYZE would send with this program in the editor and nothing selected."""
-    return build_analysis_prompt(case.code[:MAX_CODE_CHARS], policies, tools_json)
+def case_prompt(case: Case, policies: str, tools_json: dict, specs=None) -> str:
+    """What AI ANALYZE would send with this program in the editor and nothing
+    selected; specs None leaves the cycle cards out (--no-cards)."""
+    return build_analysis_prompt(case.code[:MAX_CODE_CHARS], policies, tools_json, specs)
+
+
+def case_cards(case: Case, specs) -> List[str]:
+    """The cycle cards that go with the case's prompt."""
+    if specs is None:
+        return []
+    return [c.code for c in cards_for_program(case.code[:MAX_CODE_CHARS], specs)]
 
 
 # ---- scoring ---------------------------------------------------------------------
@@ -549,7 +559,8 @@ def summarize(records: List[dict]) -> str:
     out = []
     by_model: Dict[str, List[dict]] = {}
     for r in records:
-        by_model.setdefault(f"{r['model']} ({r['mode']})", []).append(r)
+        cards = {True: ", cards", False: ", no cards"}.get(r.get("with_cards"), "")
+        by_model.setdefault(f"{r['model']} ({r['mode']}{cards})", []).append(r)
     for model, rows in by_model.items():
         answered = [r for r in rows if r["ok"]]
         failed = len(rows) - len(answered)
@@ -602,8 +613,9 @@ def model_of(settings) -> Tuple[str, str]:
 
 
 def run(cases, client, mode: str, model: str, repeat: int, out_path: str,
-        keep_going: bool) -> List[dict]:
-    """Ask client (an AIClient, or anything with ask and review_prompt) about each case."""
+        keep_going: bool, specs=None) -> List[dict]:
+    """Ask client (an AIClient, or anything with ask and review_prompt) about each case;
+    with the cycle cards when specs are given, as the app sends them."""
     system = client.review_prompt()
     policies = read_policies(os.path.join(ROOT, "policies.md"))
     tools_json = load_tools_json()
@@ -614,10 +626,11 @@ def run(cases, client, mode: str, model: str, repeat: int, out_path: str,
         for n in range(total):
             case = cases[n % len(cases)]
             started = time.monotonic()
-            ok, answer = client.ask(case_prompt(case, policies, tools_json), system)
+            ok, answer = client.ask(case_prompt(case, policies, tools_json, specs), system)
             seconds = time.monotonic() - started
             record = {"when": datetime.now().isoformat(timespec="seconds"), "mode": mode,
                       "model": model, "ok": ok, "seconds": round(seconds, 1),
+                      "with_cards": specs is not None, "cards": case_cards(case, specs),
                       "answer": answer, "case": asdict(case),
                       "score": score(answer, case) if ok else None}
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -657,6 +670,8 @@ def main(argv=None) -> int:
     parser.add_argument("--show-prompt", action="store_true",
                         help="print the prompt of the first case")
     parser.add_argument("--rescore", metavar="JSONL", help="score saved answers again, send nothing")
+    parser.add_argument("--no-cards", action="store_true",
+                        help="leave the cycle cards and the dialect sheet out, as before step C")
     args = parser.parse_args(argv)
 
     if args.rescore:
@@ -701,7 +716,8 @@ def main(argv=None) -> int:
 
     policies = read_policies(os.path.join(ROOT, "policies.md"))
     tools_json = load_tools_json()
-    prompts = [case_prompt(c, policies, tools_json) for c in cases]
+    specs = None if args.no_cards else load_specs()
+    prompts = [case_prompt(c, policies, tools_json, specs) for c in cases]
 
     if not args.run:
         print(describe_plan(cases, left_out, [len(p) for p in prompts]))
@@ -718,7 +734,7 @@ def main(argv=None) -> int:
     print(f"Asking {model} ({mode}) {len(cases) * args.repeat} time(s); answers go to {out_path}")
     from vibe_cnc.ai_client import AIClient
     records = run(cases, AIClient(settings), mode, model, args.repeat, out_path,
-                  args.keep_going)
+                  args.keep_going, specs)
     print()
     print(summarize(records))
     return 0

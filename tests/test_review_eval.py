@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from evals import review_eval as ev
 from vibe_cnc.analysis_prompt import FORMAT_RULES, MAX_CODE_CHARS, build_analysis_prompt
+from vibe_cnc.specs import load_specs
 from vibe_cnc.lint_engine import LintEngine
 
 SHOP = {
@@ -211,6 +212,21 @@ class GroundTruthTests(unittest.TestCase):
         self.assertIn("N90 G71 P100 Q130 U0.4 W0.1 F0\n", prompt)
         self.assertIn("POLICIES", prompt)
         self.assertIn(FORMAT_RULES, prompt)
+        self.assertNotIn("G71 -- ", prompt)                 # no specs, no cards (--no-cards)
+
+    def test_with_the_cards_the_prompt_is_still_the_one_the_app_sends(self):
+        cases, _ = cases_of(SHAFT=SHAFT)
+        case = cases[("SHAFT", "feed_zero")]
+        specs = load_specs()
+        prompt = ev.case_prompt(case, "POLICIES", {"tool_table": []}, specs)
+        self.assertEqual(prompt, build_analysis_prompt(case.code[:MAX_CODE_CHARS], "POLICIES",
+                                                       {"tool_table": []}, specs))
+        # The cards of the cycles the program runs, after the tools and before the code.
+        self.assertEqual(ev.case_cards(case, specs), ["G71", "G70"])
+        self.assertIn("Control: FANUC 0i-TF (Plus)", prompt)
+        self.assertLess(prompt.index("Tools(JSON):"), prompt.index("G71 -- "))
+        self.assertLess(prompt.index("G70 -- "), prompt.index("Code:\n```"))
+        self.assertEqual(ev.case_cards(case, None), [])
 
     def test_the_prompt_names_no_material_of_its_own(self):
         # The program's header names it. A fixed one in the prompt contradicted
@@ -380,8 +396,27 @@ class RunTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(ev.main(["--rescore", self.out]), 0)
         report = printed.getvalue()
-        self.assertIn("test-model (claude): 2 answer(s), 0 failed call(s)", report)
+        # run_eval sends no specs, so the answers are labelled as without the cards.
+        self.assertIn("test-model (claude, no cards): 2 answer(s), 0 failed call(s)", report)
         self.assertIn("all              2/2 (100 %)", report)
+
+    def test_answers_saved_before_the_cards_keep_their_label(self):
+        self.run_eval([(True, "• N90: F0 is no feed"), (True, "• N90: decimal point in P")])
+        with open(self.out, encoding="utf-8") as f:
+            records = [json.loads(line) for line in f]
+        for r in records:
+            del r["with_cards"], r["cards"]
+        self.assertIn("test-model (claude): 2 answer(s)", ev.summarize(records))
+
+    def test_with_specs_the_cards_are_sent_and_saved(self):
+        client = FakeClient([(True, "• N90: F0 is no feed"), (True, "• N90: decimal point in P")])
+        with contextlib.redirect_stdout(io.StringIO()):
+            records = ev.run(self.cases, client, "claude", "test-model", 1, self.out, False,
+                             load_specs())
+        self.assertIn("G71 -- ", client.prompts[0][0])
+        self.assertEqual([(r["with_cards"], r["cards"]) for r in records],
+                         [(True, ["G71", "G70"])] * 2)
+        self.assertIn("test-model (claude, cards): 2 answer(s)", ev.summarize(records))
 
     def test_scoring_again_uses_the_words_as_they_are_now(self):
         # The record keeps the words of its run; a corrected list must count.

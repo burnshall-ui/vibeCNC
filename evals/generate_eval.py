@@ -36,6 +36,8 @@ if ROOT not in sys.path:            # run as a file rather than with -m
 
 from vibe_cnc.diagnostics import is_lint_clean
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.spec_context import cards_for_request, reference
+from vibe_cnc.specs import load_specs
 from vibe_cnc.verifier import (
     CLEAN, FAILED, MAX_CORRECTIONS, NO_CODE, OUT_OF_ROUNDS, REPEATED, generation_request, verify,
 )
@@ -109,6 +111,13 @@ def outcome_record(outcome) -> dict:
 def summarize(records: List[dict]) -> str:
     done = [r for r in records if r["stop"] != FAILED or r["attempts"]]
     out = [f"{len(records)} request(s), {len(records) - len(done)} failed before a draft."]
+    with_cards = {r.get("with_cards") for r in records}
+    if with_cards == {True}:
+        out.append("With the cycle cards and the dialect sheet.")
+    elif with_cards == {False}:
+        out.append("Without the cycle cards (--no-cards).")
+    elif len(with_cards) > 1:
+        out.append("Mixed: some requests with the cycle cards, some without.")
     if not done:
         return "\n".join(out)
     n = len(done)
@@ -135,15 +144,17 @@ def summarize(records: List[dict]) -> str:
         code = "-" if r["best"] is None else ("clean" if r["result_clean"] else "findings left")
         out.append(f"  {r['task']:<18} draft {'clean' if r['draft_clean'] else 'not clean':<9}  "
                    f"result {code:<13}  corrections {r['corrections']}  rejected {r['rejections']}"
-                   f"  stop {r['stop']}")
+                   f"  stop {r['stop']}"
+                   + (f"  cards {','.join(r['cards']) or '-'}" if r.get("with_cards") else ""))
     out.append("\nLint clean is not correct: read the saved answers.")
     return "\n".join(out)
 
 
 def run(tasks, client, linter, mode: str, model: str, repeat: int, out_path: str,
-        keep_going: bool) -> List[dict]:
+        keep_going: bool, specs=None) -> List[dict]:
     """Run each task through the loop; client is an AIClient or anything with
-    chat and generate_prompt."""
+    chat and generate_prompt. specs: the cycle cards, as the app sends them,
+    or None to leave them out."""
     system = client.generate_prompt()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     records, total = [], len(tasks) * repeat
@@ -151,11 +162,13 @@ def run(tasks, client, linter, mode: str, model: str, repeat: int, out_path: str
         for n in range(total):
             task = tasks[n % len(tasks)]
             started = time.monotonic()
-            outcome = verify(client, task.request, system, linter, snippet=task.snippet)
+            outcome = verify(client, task.request, system, linter, snippet=task.snippet,
+                             specs=specs)
             seconds = time.monotonic() - started
             record = dict({"when": datetime.now().isoformat(timespec="seconds"), "mode": mode,
                            "model": model, "task": task.name, "request": task.request,
-                           "seconds": round(seconds, 1)}, **outcome_record(outcome))
+                           "seconds": round(seconds, 1), "with_cards": specs is not None,
+                           "cards": list(outcome.cards)}, **outcome_record(outcome))
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
             out.flush()
             records.append(record)
@@ -188,6 +201,8 @@ def main(argv=None) -> int:
     parser.add_argument("--show-prompt", action="store_true",
                         help="print the first request as the model gets it")
     parser.add_argument("--summarize", metavar="JSONL", help="summarize saved outcomes, send nothing")
+    parser.add_argument("--no-cards", action="store_true",
+                        help="leave the cycle cards and the dialect sheet out, as before step C")
     args = parser.parse_args(argv)
 
     if args.summarize:
@@ -215,13 +230,19 @@ def main(argv=None) -> int:
             parser.error(f"ai.mode '{backend_of(ai)}' is not known; use --mode")
         ai.setdefault(SECTION_OF[backend_of(ai)], {})["model"] = args.model
     mode, model = model_of(settings)
+    specs = None if args.no_cards else load_specs()
 
     if not args.run:
-        print(f"{len(tasks)} task(s):")
+        print(f"{len(tasks)} task(s), {'without' if specs is None else 'with'} cycle cards:")
         for t in tasks:
-            print(f"  {t.name:<18} {t.request}")
+            cards = "" if specs is None else \
+                " [" + ", ".join(c.code for c in cards_for_request(t.request, specs)) + "]"
+            print(f"  {t.name:<18} {t.request}{cards}")
         if args.show_prompt:
-            print(f"\n--- {tasks[0].name} as the model gets it ---\n{generation_request(tasks[0].request)}")
+            chosen = [] if specs is None else cards_for_request(tasks[0].request, specs)
+            first = generation_request(
+                tasks[0].request, "" if specs is None else reference(chosen, specs.dialect))
+            print(f"\n--- {tasks[0].name} as the model gets it ---\n{first}")
         most = len(tasks) * args.repeat * (1 + MAX_CORRECTIONS)
         print(f"\nNothing was sent. --run asks {model or '(no model set)'} ({mode}) between "
               f"{len(tasks) * args.repeat} and {most} time(s): one draft per task, and up to "
@@ -235,7 +256,7 @@ def main(argv=None) -> int:
     print(f"Asking {model} ({mode}) for {len(tasks) * args.repeat} task(s); outcomes go to {out_path}")
     from vibe_cnc.ai_client import AIClient
     records = run(tasks, AIClient(settings), LintEngine(settings), mode, model, args.repeat,
-                  out_path, args.keep_going)
+                  out_path, args.keep_going, specs)
     print()
     print(summarize(records))
     return 0
