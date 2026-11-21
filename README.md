@@ -75,7 +75,7 @@
 ##  Installation
 
 ### Prerequisites
-- **Python 3.13** (or 3.10+)
+- **Python 3.13** (or 3.11+: the spec files in `specs/` are read with `tomllib`)
 - **Ollama** (for local AI) - [Download](https://ollama.com)
 - **CAMotics** (optional, for 3D simulation) - [Download](https://camotics.org)
 
@@ -362,10 +362,15 @@ vibe_cnc/
 │   ├── lint_engine.py          # Policy enforcement
 │   ├── diagnostics.py          # One finding: line, severity, rule id, hint
 │   ├── verifier.py             # GEN-CODE: draft, lint, correct
+│   ├── specs.py                # Reads the cycle cards and the dialect
 │   ├── camotics_bridge.py      # 3D simulation integration
 │   ├── settings_manager.py     # Config loader
 │   ├── tool_model.py           # Tool library
 │   └── macro_model.py          # Macro library
+│
+├── specs/fanuc_0i_tf/
+│   ├── dialect.toml            # G- and M-codes of G-code system A (autocomplete)
+│   └── cycles/G70-G76.toml     # Cycle cards: words, units, ranges, assumptions
 │
 ├── tools/
 │   ├── tools.json              # Tool database

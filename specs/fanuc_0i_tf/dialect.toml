@@ -1,0 +1,82 @@
+name = "FANUC 0i-TF (Plus), G-code system A"
+# A turret lathe changes tools with the T word; M06, the chuck, the gear ranges
+# and the external program call are the machine builder's.
+machine_specific = ["M06", "M10", "M11", "M19", "M41", "M42", "M43", "M44", "M78", "M79"]
+
+[source]
+text = """Drafted on 2026-11-21 from the autocomplete table this project had, corrected \
+to G-code system A, which its programs use (G50 S is the speed limit, G98/G99 the \
+feed modes, U/W the incremental moves). From training material and forum posts \
+describing the Fanuc format; the manual itself was not read. The M-codes listed as \
+machine_specific mean what the machine builder made them mean."""
+verified = false
+verified_on = ""
+
+[g]
+G00 = "Rapid traverse (G00 X... Z...)"
+G01 = "Linear interpolation (G01 X... Z... F...)"
+G02 = "Circular interpolation CW (G02 X... Z... R... F...)"
+G03 = "Circular interpolation CCW (G03 X... Z... R... F...)"
+G04 = "Dwell (G04 X... or U... in seconds, P... in milliseconds)"
+G10 = "Programmable data input (G10 P... X... Z... R...)"
+G18 = "ZX plane (lathe)"
+G20 = "Inch input"
+G21 = "Metric input"
+G27 = "Reference point check (G27 X... Z...)"
+G28 = "Return to reference point (G28 U0 W0)"
+G32 = "Simple threading, one pass per block (G32 Z... F...)"
+G40 = "Tool nose radius compensation cancel"
+G41 = "Tool nose radius compensation left (G41)"
+G42 = "Tool nose radius compensation right (G42)"
+G50 = "Spindle speed limit, or coordinate system setting (G50 S... / G50 X... Z...)"
+G54 = "Work offset 1"
+G55 = "Work offset 2"
+G56 = "Work offset 3"
+G57 = "Work offset 4"
+G58 = "Work offset 5"
+G59 = "Work offset 6"
+G65 = "Macro call (G65 P... A... B... C...)"
+G66 = "Macro modal call (G66 P... A... B...)"
+G67 = "Macro modal call cancel"
+# Two blocks each, as the 0i-TF takes them. The one-block form with a D word
+# belongs to older controls; it taught a model that D was the spindle speed.
+G70 = "Finish cycle (G70 P... Q...)"
+G71 = "Roughing cycle OD (G71 U... R... / G71 P... Q... U... W... F...)"
+G72 = "Roughing cycle facing (G72 W... R... / G72 P... Q... U... W... F...)"
+G73 = "Pattern repeat cycle (G73 U... W... R... / G73 P... Q... U... W... F...)"
+G74 = "Face grooving / peck drilling cycle (G74 R... / G74 X... Z... P... Q... R... F...)"
+G75 = "Radial grooving cycle (G75 R... / G75 X... Z... P... Q... R... F...)"
+G76 = "Threading cycle (G76 P... Q... R... / G76 X... Z... R... P... Q... F...)"
+G80 = "Canned cycle cancel"
+# System A: G90, G92 and G94 are one-block cycles. There is no G91 -- U and W
+# are the incremental words -- and the feed modes are G98 and G99.
+G90 = "Outer/inner diameter cutting cycle, one block (G90 X... Z... R... F...)"
+G92 = "Thread cutting cycle, one pass per block (G92 X... Z... R... F...)"
+G94 = "End face cutting cycle, one block (G94 X... Z... R... F...)"
+G96 = "Constant surface speed ON (G96 S...)"
+G97 = "Constant surface speed OFF (G97 S...)"
+G98 = "Feed per minute"
+G99 = "Feed per revolution"
+
+[m]
+M00 = "Program stop"
+M01 = "Optional stop"
+M02 = "Program end"
+M03 = "Spindle CW (M03 S...)"
+M04 = "Spindle CCW (M04 S...)"
+M05 = "Spindle stop"
+M06 = "Tool change (M06 T...)"
+M08 = "Coolant ON"
+M09 = "Coolant OFF"
+M10 = "Chuck open (4th axis)"
+M11 = "Chuck close (4th axis)"
+M19 = "Spindle orientation (M19 R...)"
+M30 = "Program end with reset"
+M41 = "Gear range 1 (low)"
+M42 = "Gear range 2"
+M43 = "Gear range 3"
+M44 = "Gear range 4 (high)"
+M78 = "External program call (M78 P...)"
+M79 = "External program end"
+M98 = "Subprogram call (M98 P...)"
+M99 = "Subprogram end"

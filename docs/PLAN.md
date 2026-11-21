@@ -79,7 +79,7 @@ decimal_point = false
 [block.words.Q]
 unit = "0.001 mm"
 decimal_point = false
-min_exclusive = 0
+min = 0
 meaning = "minimum depth of cut, radius"
 [block.words.R]
 unit = "mm"

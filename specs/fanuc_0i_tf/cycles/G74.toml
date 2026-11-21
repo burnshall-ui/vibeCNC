@@ -1,0 +1,70 @@
+code = "G74"
+name = "Peck drilling and face grooving (pecks along Z)"
+keywords = ["peck", "peck drilling", "drill", "deep hole", "face groove", "tiefbohren", "bohren", "zentrisch bohren", "stirneinstich", "g74"]
+
+[source]
+text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
+already assumed, which came from training material and forum posts describing the \
+Fanuc format. The manual itself was not read."""
+verified = false
+verified_on = ""
+
+[[block]]                   # G74 R(e)
+[block.words.R]
+meaning = "return after each peck, to break the chip"
+unit = "mm"
+
+[[block]]                   # G74 X(U) Z(W) P(di) Q(dk) R(dd) F
+recognized_by = ["X", "U", "Z", "W"]
+[block.words.X]
+meaning = "end diameter of a face groove; left out for a hole on the centre line"
+unit = "mm"
+[block.words.U]
+meaning = "the same, from the start point"
+unit = "mm"
+[block.words.Z]
+meaning = "depth: the bottom of the hole or groove"
+unit = "mm"
+[block.words.W]
+meaning = "the same, from the start point"
+unit = "mm"
+[block.words.P]
+meaning = "step in X between plunges, a radius"
+unit = "0.001 mm"
+decimal_point = false
+min = 0
+[block.words.Q]
+meaning = "depth of each peck along Z"
+unit = "0.001 mm"
+decimal_point = false
+min_exclusive = 0
+[block.words.R]
+meaning = "relief at the bottom"
+unit = "mm"
+[block.words.F]
+meaning = "feed"
+min_exclusive = 0
+
+[[assumption]]
+text = "P and Q without a decimal point are in thousandths of a millimetre: Q5000 is 5 mm."
+verified = false
+
+[[assumption]]
+text = "The return e is modal and comes from a control parameter (5139) when no first block sets it; the same value serves G74 and G75."
+verified = false
+
+[[assumption]]
+text = "The return after a peck and the step to the next plunge are rapids, and the next peck feeds through the returned distance again."
+verified = false
+
+[[assumption]]
+text = "The relief R at the bottom is not drawn: the sources disagree about its direction."
+verified = false
+
+[[example]]
+title = "Hole on the centre line, 25 deep, in pecks of 5 mm"
+code = '''
+G00 X0. Z2.
+G74 R0.5
+G74 Z-25. Q5000 F0.12
+'''

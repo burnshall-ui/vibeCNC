@@ -1,0 +1,70 @@
+code = "G75"
+name = "Grooving in the diameter (pecks along X)"
+keywords = ["groove", "grooving", "recess", "parting", "einstich", "einstechen", "stechen", "nut", "g75"]
+
+[source]
+text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
+already assumed, which came from training material and forum posts describing the \
+Fanuc format. The manual itself was not read."""
+verified = false
+verified_on = ""
+
+[[block]]                   # G75 R(e)
+[block.words.R]
+meaning = "return after each peck, to break the chip"
+unit = "mm"
+
+[[block]]                   # G75 X(U) Z(W) P(di) Q(dk) R(dd) F
+recognized_by = ["X", "U", "Z", "W"]
+[block.words.X]
+meaning = "groove bottom, a diameter"
+unit = "mm"
+[block.words.U]
+meaning = "the same, from the start point"
+unit = "mm"
+[block.words.Z]
+meaning = "end of the groove along Z; left out for a single plunge"
+unit = "mm"
+[block.words.W]
+meaning = "the same, from the start point"
+unit = "mm"
+[block.words.P]
+meaning = "depth of each peck in X, a radius"
+unit = "0.001 mm"
+decimal_point = false
+min_exclusive = 0
+[block.words.Q]
+meaning = "step along Z between plunges"
+unit = "0.001 mm"
+decimal_point = false
+min = 0
+[block.words.R]
+meaning = "relief at the bottom"
+unit = "mm"
+[block.words.F]
+meaning = "feed"
+min_exclusive = 0
+
+[[assumption]]
+text = "P and Q without a decimal point are in thousandths of a millimetre: P1000 is 1 mm."
+verified = false
+
+[[assumption]]
+text = "G75 pecks in X towards the groove bottom with a return of e after each peck, goes back out to the start diameter at the bottom, steps Q along Z and plunges again; the last step is shortened so the last plunge lands on the programmed end."
+verified = false
+
+[[assumption]]
+text = "e is a radius in G75 as well, and the return and the step are rapids."
+verified = false
+
+[[assumption]]
+text = "The width of the tool is not drawn: the path is that of the point the tool is set on."
+verified = false
+
+[[example]]
+title = "Groove to Ø25 between Z-20 and Z-25 on a Ø40 bar, 1 mm pecks"
+code = '''
+G00 X42. Z-20.
+G75 R0.5
+G75 X25. Z-25. P1000 Q2500 F0.05
+'''

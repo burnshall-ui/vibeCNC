@@ -1,0 +1,68 @@
+code = "G71"
+name = "Stock removal in turning (roughing along Z)"
+keywords = ["rough", "roughing", "turning", "outside diameter", "od", "schruppen", "längsschruppen", "längsdrehen", "abspanen", "g71"]
+
+[source]
+text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
+already assumed, which came from training material and forum posts describing the \
+Fanuc format. The manual itself was not read."""
+verified = false
+verified_on = ""
+
+[[block]]                   # G71 U(d) R(e)
+[block.words.U]
+meaning = "depth of cut per pass, a radius"
+unit = "mm"
+min_exclusive = 0
+[block.words.R]
+meaning = "retract after each pass"
+unit = "mm"
+
+[[block]]                   # G71 P(ns) Q(nf) U(du) W(dw) F
+recognized_by = ["P", "Q"]
+[block.words.P]
+meaning = "first block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.Q]
+meaning = "last block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.U]
+meaning = "finishing allowance in X, a diameter; negative for boring"
+unit = "mm"
+[block.words.W]
+meaning = "finishing allowance in Z"
+unit = "mm"
+[block.words.F]
+meaning = "feed of the roughing passes"
+min_exclusive = 0
+
+[[assumption]]
+text = "The passes step 2 * U (U is a radius, X a diameter) from the start point towards the contour; each cuts along Z until the contour stops it."
+verified = false
+
+[[assumption]]
+text = "Each pass retracts by R at 45 degrees, away from the wall that stopped it, and returns to the start Z with a rapid."
+verified = false
+
+[[assumption]]
+text = "The allowance shifts the contour along the axes, U in X and W in Z, not normal to it."
+verified = false
+
+[[assumption]]
+text = "The cycle ends with one cut along the contour shifted by the allowance and a rapid back to the start point."
+verified = false
+
+[[example]]
+title = "Shaft from Ø50 stock: Ø30 for 15 mm, then Ø40 to 30 mm"
+code = '''
+G00 X52. Z2.
+G71 U2. R0.5
+G71 P10 Q20 U0.4 W0.1 F0.25
+N10 G00 X30.
+G01 Z-15. F0.1
+X40.
+Z-30.
+N20 X52.
+'''

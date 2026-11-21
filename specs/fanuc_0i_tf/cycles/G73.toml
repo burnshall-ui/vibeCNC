@@ -1,0 +1,62 @@
+code = "G73"
+name = "Pattern repeating cycle (forgings, castings)"
+keywords = ["pattern", "pattern repeating", "forging", "casting", "near net", "konturparallel", "schmiedeteil", "gussteil", "rohling", "g73"]
+
+[source]
+text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
+already assumed, which came from training material and forum posts describing the \
+Fanuc format. The manual itself was not read."""
+verified = false
+verified_on = ""
+
+[[block]]                   # G73 U(di) W(dk) R(d)
+[block.words.U]
+meaning = "relief in X, the stock to remove, a radius; signed by the direction of the relief"
+unit = "mm"
+[block.words.W]
+meaning = "relief in Z, signed by the direction of the relief"
+unit = "mm"
+[block.words.R]
+meaning = "number of passes"
+unit = "count"
+min_exclusive = 0
+
+[[block]]                   # G73 P(ns) Q(nf) U(du) W(dw) F
+recognized_by = ["P", "Q"]
+[block.words.P]
+meaning = "first block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.Q]
+meaning = "last block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.U]
+meaning = "finishing allowance in X, a diameter"
+unit = "mm"
+[block.words.W]
+meaning = "finishing allowance in Z"
+unit = "mm"
+[block.words.F]
+meaning = "feed of the passes"
+min_exclusive = 0
+
+[[assumption]]
+text = "The contour is cut R times: the first pass lies U and W outside the allowance contour, the last on it, the passes between evenly spaced, U / (R - 1) apart."
+verified = false
+
+[[assumption]]
+text = "Every pass starts at the cycle start point; the approach and the return are rapids, the return straight back to the start point."
+verified = false
+
+[[example]]
+title = "Forged blank, 3 mm stock in X and 2 mm in Z, four passes"
+code = '''
+G00 X52. Z3.
+G73 U3. W2. R4
+G73 P10 Q20 U0.4 W0.1 F0.2
+N10 G00 X30. Z1.
+G01 Z-20. F0.1
+X45.
+N20 Z-35.
+'''

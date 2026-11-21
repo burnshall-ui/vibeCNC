@@ -1,0 +1,59 @@
+code = "G72"
+name = "Stock removal in facing (roughing along X)"
+keywords = ["face", "facing", "face roughing", "plandrehen", "planschruppen", "querschruppen", "g72"]
+
+[source]
+text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
+already assumed, which came from training material and forum posts describing the \
+Fanuc format. The manual itself was not read."""
+verified = false
+verified_on = ""
+
+[[block]]                   # G72 W(d) R(e)
+[block.words.W]
+meaning = "depth of cut per pass along Z"
+unit = "mm"
+min_exclusive = 0
+[block.words.R]
+meaning = "retract after each pass"
+unit = "mm"
+
+[[block]]                   # G72 P(ns) Q(nf) U(du) W(dw) F
+recognized_by = ["P", "Q"]
+[block.words.P]
+meaning = "first block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.Q]
+meaning = "last block of the contour, by its N number"
+unit = "block number"
+decimal_point = false
+[block.words.U]
+meaning = "finishing allowance in X, a diameter"
+unit = "mm"
+[block.words.W]
+meaning = "finishing allowance in Z"
+unit = "mm"
+[block.words.F]
+meaning = "feed of the roughing passes"
+min_exclusive = 0
+
+[[assumption]]
+text = "G72 is G71 turned round: the passes step W along Z from the start point towards the contour and each cuts along X, towards the centre line, until the contour stops it."
+verified = false
+
+[[assumption]]
+text = "Retract, allowance and the last cut along the contour are as in G71."
+verified = false
+
+[[example]]
+title = "Ø80 bar: face down to Z-10 outside Ø40, leave a Ø40 boss faced to Z-5"
+code = '''
+G00 X82. Z2.
+G72 W1.5 R0.5
+G72 P10 Q20 U0.2 W0.1 F0.2
+N10 G00 Z-10.
+G01 X40. F0.1
+Z-5.
+N20 X0.
+'''
