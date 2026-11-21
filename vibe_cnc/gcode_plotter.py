@@ -1,6 +1,7 @@
 # gcode_plotter.py — 2D workpiece visualization for Fanuc lathes
 import math
 import hashlib
+import time
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QMenu
 from PyQt6.QtCore import QTimer, pyqtSignal, Qt
@@ -162,6 +163,22 @@ class GCodePlotterWidget(QWidget):
         # Half section: the part's view drawn below the centre line too. It
         # doubles the height the part needs; the right-click menu turns it off.
         self.mirror = True
+        # The layers (see _draw_scene): the artists of the scene by key, the
+        # moves drawn as made, the two saved backgrounds, the yellow move.
+        self._scene = {}
+        self._done_moves = set()
+        self._ahead_for = None
+        self._tools_shown = None
+        self._stock_drawn = None
+        self._order_index = {}
+        self._static_bg = None
+        self._scene_bg = None
+        self._glow = []
+        # A move running its course: see _start_glide. 50 frames a second at most.
+        self._glide = None
+        self._glide_timer = QTimer(self)
+        self._glide_timer.setInterval(20)
+        self._glide_timer.timeout.connect(self._glide_frame)
 
         # Matplotlib Figure
         self.fig = Figure(figsize=(6, 4), dpi=100, facecolor=colors.get('BG_DARK', '#1A1A1A'))
@@ -175,6 +192,7 @@ class GCodePlotterWidget(QWidget):
         self.canvas.mpl_connect('button_release_event', self._on_mouse_release)
         self.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
         self.canvas.mpl_connect('resize_event', self._on_resize)
+        self.canvas.mpl_connect('draw_event', self._on_draw)
 
         # Layout
         layout = QVBoxLayout(self)
@@ -213,7 +231,13 @@ class GCodePlotterWidget(QWidget):
 
     def _draw_empty(self):
         """Shows empty plot with hint text"""
+        self._stop_glide()
         self.ax.clear()
+        self._scene = {}
+        self._glow = []
+        self.highlight_artist = None
+        self.live_text = None
+        self._invalidate()
         self._setup_plot()
         self.ax.text(0.5, 0.5, 'No Toolpaths\n(G00/G01 with X/Z)',
                      ha='center', va='center', color='#555', fontsize=10,
@@ -260,6 +284,7 @@ class GCodePlotterWidget(QWidget):
             self.ax.set_xlim(self._last_xlim)
             self.ax.set_ylim(self._last_ylim)
         self._match_aspect()
+        self._invalidate()
 
     def _on_resize(self, _event):
         """Keeps the picture to scale when the panel changes shape."""
@@ -276,8 +301,9 @@ class GCodePlotterWidget(QWidget):
         self._do_update()
 
     def shutdown(self):
-        """Stops the debounce timer before the widgets it fires into go away."""
+        """Stops the timers before the widgets they fire into go away."""
         self.update_timer.stop()
+        self._stop_glide()
 
     def _draw_chuck(self):
         """Draws the chuck zone the collision check actually uses.
@@ -320,19 +346,15 @@ class GCodePlotterWidget(QWidget):
         # rotation: a point at angle t in (radius, Z) sits at 90 - t in (Z,
         # diameter). Hence the swapped, mirrored pair -- matplotlib always
         # sweeps counter-clockwise from the first angle to the second.
-        self.ax.add_patch(patches.Arc((cz, cx), 2 * radius, 4 * radius,
-                                      angle=0, theta1=90.0 - theta2,
-                                      theta2=90.0 - theta1, **style))
+        return self.ax.add_patch(patches.Arc((cz, cx), 2 * radius, 4 * radius,
+                                             angle=0, theta1=90.0 - theta2,
+                                             theta2=90.0 - theta1, **style))
 
-    def _draw_stock(self):
-        """Draws the blank behind everything else, when the program names one,
-        and what is left of it at this point of the playback.
+    def _draw_blank(self):
+        """The blank as it came, dashed: part of the static layer.
 
-        The blank stays as a dashed outline, so what has been cut away still
-        shows where it was. What is left comes from stock_model, which says
-        what it assumes about the tools. Above the centre line it is drawn as
-        a section, hatched; below it, when the half section is on, as the
-        turned surface seen from the front.
+        What has been cut away shows where it was; the material left is drawn
+        over it in the scene layer, by _sync_stock.
         """
         stock = self.paths_cache.get('stock') if self.paths_cache else None
         if not stock:
@@ -348,13 +370,6 @@ class GCodePlotterWidget(QWidget):
         if self.mirror:
             self.ax.add_patch(patches.Rectangle((z_back, -diameter), stock['length'],
                                                 diameter, gid='stock_view', **blank))
-        model = (self._stock_playback.at(self._moves_reached())
-                 if self._stock_playback else None)
-        if model is not None:
-            shapes = self._stock_shapes(model)
-            self._draw_section(shapes)
-            if self.mirror:
-                self._draw_view(model, shapes)
         # At the far end, clear of the rapids that arrive at the front face.
         self.ax.text(z_back, diameter, f" STOCK Ø{diameter:g} × {stock['length']:g}",
                      ha='left', va='bottom', color=LABEL, fontsize=7)
@@ -400,26 +415,29 @@ class GCodePlotterWidget(QWidget):
     def _add_shape(self, patch):
         """Adds a patch without matplotlib working out data limits from it.
 
-        That costs milliseconds on an outline of thousands of points, every
-        playback step, and the view is framed by _fit_view anyway.
+        That costs milliseconds on an outline of thousands of points, and the
+        view is framed by _fit_view anyway.
         """
-        self.ax.add_artist(patch)
+        return self.ax.add_artist(patch)
 
-    def _draw_section(self, shapes):
+    def _draw_section(self, shapes) -> list:
         """The material left, above the centre line, as a hatched section."""
+        artists = []
         for xy in shapes['outlines']:
-            self._add_shape(patches.Polygon(xy, closed=True, facecolor=SECTION_FILL,
-                                            edgecolor='none', zorder=0.65, gid='material'))
+            artists.append(self._add_shape(patches.Polygon(
+                xy, closed=True, facecolor=SECTION_FILL, edgecolor='none',
+                zorder=0.65, gid='material')))
             # The hatching on a patch of its own: its colour is the patch's
             # edge colour, and this one has no edge to draw.
-            self._add_shape(patches.Polygon(xy, closed=True, facecolor='none',
-                                            edgecolor=SECTION_HATCH, linewidth=0,
-                                            hatch='////', zorder=0.66))
-        self.ax.add_collection(LineCollection(shapes['section'], colors=SECTION_EDGE,
-                                              linewidths=1.1, zorder=0.7),
-                               autolim=False)
+            artists.append(self._add_shape(patches.Polygon(
+                xy, closed=True, facecolor='none', edgecolor=SECTION_HATCH,
+                linewidth=0, hatch='////', zorder=0.66)))
+        artists.append(self.ax.add_collection(
+            LineCollection(shapes['section'], colors=SECTION_EDGE, linewidths=1.1, zorder=0.7),
+            autolim=False))
+        return artists
 
-    def _draw_view(self, model, shapes):
+    def _draw_view(self, model, shapes) -> list:
         """The material left, below the centre line, as the turned surface.
 
         Lit as a cylinder seen from the front. The bore is hidden in a view,
@@ -432,165 +450,249 @@ class GCodePlotterWidget(QWidget):
                                origin='upper', aspect='auto', interpolation='bilinear',
                                zorder=0.62)
         image.set_gid('view')
-        self.ax.add_collection(LineCollection(shapes['view'], colors=VIEW_EDGE,
-                                              linewidths=0.9, zorder=0.7),
-                               autolim=False)
+        artists = [image, self.ax.add_collection(
+            LineCollection(shapes['view'], colors=VIEW_EDGE, linewidths=0.9, zorder=0.7),
+            autolim=False)]
         if shapes['hidden']:
-            self.ax.add_collection(LineCollection(shapes['hidden'], colors=VIEW_EDGE,
-                                                  linewidths=0.8, linestyles=(0, (3, 2)),
-                                                  alpha=0.55, zorder=0.7),
-                                   autolim=False)
+            artists.append(self.ax.add_collection(
+                LineCollection(shapes['hidden'], colors=VIEW_EDGE, linewidths=0.8,
+                               linestyles=(0, (3, 2)), alpha=0.55, zorder=0.7),
+                autolim=False))
+        return artists
 
-    def _draw_centre_line(self):
-        self.ax.axhline(0.0, color=CENTRE_LINE, linewidth=0.8,
-                        linestyle=(0, (14, 3, 2, 3)), zorder=0.8)
-
-    def _draw_tool_changes(self):
+    def _draw_tool_changes(self, shown) -> list:
         """Marks where each tool change happens, one label per position.
 
         Changes usually start from the same safe point, so labelling each one
         printed T5 and T1 on top of each other.
         """
         at_position = {}
-        for tc in self.paths_cache['tool_changes']:
-            if self._shown(tc['line']):
-                key = (round(tc['z'], 3), round(tc['x'], 3))
-                at_position.setdefault(key, []).append(tc['tool'])
+        for tc in shown:
+            key = (round(tc['z'], 3), round(tc['x'], 3))
+            at_position.setdefault(key, []).append(tc['tool'])
 
+        artists = []
         for (z, x), tools in at_position.items():
             label = ", ".join(f"T{t}" for t in dict.fromkeys(tools))
-            self.ax.plot(z, x, marker='D', color=MARKER, markersize=5, zorder=3)
-            self.ax.text(z, x, f"  {label}", color=AXIS_TEXT, fontsize=8, va='center')
+            artists += self.ax.plot(z, x, marker='D', color=MARKER, markersize=5, zorder=3)
+            artists.append(self.ax.text(z, x, f"  {label}", color=AXIS_TEXT, fontsize=8,
+                                        va='center'))
+        return artists
 
     def _colour_of(self, kind, line):
         """The colour of a move: its kind, and for a cut, whether a drill makes it."""
-        if kind == 'cut' and line in self._drill_lines:
+        if kind in ('cut', 'arc') and line in self._drill_lines:
             return PATH_COLOURS['drill']
-        return PATH_COLOURS[kind]
+        return PATH_COLOURS['cut' if kind == 'arc' else kind]
+
+    def _points_of(self, kind, index):
+        """One move as the (X, Z) points it runs through, an arc along its chords."""
+        if kind == 'arc':
+            return sample_arc(self.paths_cache['arc'][index], ARC_CHORDS)
+        start, end, _line = self.paths_cache[kind][index]
+        return [start, end]
 
     def _segments_of(self, kind, index):
         """One move as ((z, x), (z, x)) segments, an arc along its chords."""
-        if kind == 'arc':
-            points = sample_arc(self.paths_cache['arc'][index], ARC_CHORDS)
-        else:
-            start, end, _line = self.paths_cache[kind][index]
-            points = [start, end]
+        points = self._points_of(kind, index)
         return [((z0, x0), (z1, x1)) for (x0, z0), (x1, z1) in zip(points, points[1:])]
 
+    # --- the picture in three layers ---------------------------------------
+    #
+    # A playback step used to clear the axes and draw everything again: 170 ms
+    # on the machine this was written on, for a timer that wants a step every
+    # 80. Now the picture has three layers:
+    #
+    #   static  axes, grid, chuck zone, the blank. canvas.draw() renders it,
+    #           and only that, when the view or the program changes.
+    #   scene   the material, the moves made and the moves ahead, markers.
+    #           Animated artists, drawn over a copy of the static layer when
+    #           the playback reaches a move, and changed one move at a time.
+    #   motion  the move being made, the cursor ring, the live position. Drawn
+    #           over a copy of the scene many times a second while a move
+    #           glides.
+
     def _draw_scene(self) -> bool:
-        """Clears the axes and draws the program up to live_max_line.
+        """Clears the axes and builds every layer for the program as parsed.
 
-        Shared by the full update and the live redraw, which differ only in
-        what they do with the zoom afterwards. Returns whether any path was
-        drawn.
-
-        During a playback the moves it has not reached are drawn faint, as one
-        collection, so the program ahead stays in view and every move that has
-        been made is still one line of its own.
+        Returns whether the program has any path to draw.
         """
+        self._stop_glide()
         self.ax.clear()
+        self._scene = {}
+        self._done_moves = set()
+        self._ahead_for = None
+        self._tools_shown = None
+        self._stock_drawn = None
+        self._invalidate()
         self.highlight_artist = None  # Invalid after clear() - will be recreated
         self.live_text = None  # Invalid after clear() - will be recreated
         self._setup_plot()
 
-        self._draw_stock()
+        self._draw_blank()
         self._draw_chuck()
-        self._draw_centre_line()
+        self._put('centre', [self.ax.axhline(0.0, color=CENTRE_LINE, linewidth=0.8,
+                                             linestyle=(0, (14, 3, 2, 3)), zorder=0.8)])
+        self._put('origin', self._draw_origin())
+        self._glow = [self.ax.add_collection(
+            LineCollection([], colors=self.colors['FANUC_YELLOW'], alpha=alpha,
+                           linewidths=width, zorder=6, capstyle='round'), autolim=False)
+            for width, alpha in ((7.0, 0.16), (2.2, 1.0))]
+        for collection in self._glow:
+            collection.set_animated(True)
+        self._sync_scene()
 
-        has_paths = False
-        ahead = {'solid': ([], []), 'dotted': ([], [])}  # segments, colours
+        paths = self.paths_cache
+        return bool(paths['order'] or paths.get('comp_cut') or paths.get('comp_arc'))
 
-        def later(style, kind, index, colour):
-            segments = self._segments_of(kind, index)
-            ahead[style][0].extend(segments)
-            ahead[style][1].extend([colour] * len(segments))
+    def _put(self, key, artists):
+        """Files artists in the scene layer under `key`."""
+        artists = list(artists)
+        for artist in artists:
+            artist.set_animated(True)
+        self._scene.setdefault(key, []).extend(artists)
+        return artists
 
-        # Live drawing: only what the playback has reached. _shown decides.
-        for kind, zorder in (('rapid', 1), ('cut', 2), ('thread', 2.4), ('finish', 2.5)):
-            for index, segment in enumerate(self.paths_cache[kind]):
-                (x1, z1), (x2, z2), line = segment
-                colour = self._colour_of(kind, line)
-                has_paths = True
-                if not self._shown(line, (kind, index)):
-                    later('dotted' if kind == 'rapid' else 'solid', kind, index, colour)
-                elif kind == 'rapid':
-                    self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=0.9,
-                                 linestyle=(0, (1.5, 2.5)), alpha=0.8, zorder=zorder)
-                else:
-                    # Thread passes run along Z like turning; the colour is what
-                    # makes them read as a thread. The finishing run lies a
-                    # fraction of a millimetre off the roughing, so it is drawn
-                    # over it in a colour of its own.
-                    self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=1.6,
-                                 zorder=zorder, solid_capstyle='round')
+    def _drop(self, key):
+        for artist in self._scene.pop(key, ()):
+            artist.remove()
 
-        # Circular arcs (G02/G03)
-        for index, arc in enumerate(self.paths_cache['arc']):
-            colour = self._colour_of('cut', arc['line'])
-            has_paths = True
-            if self._shown(arc['line'], ('arc', index)):
-                self._draw_arc(arc, color=colour, linewidth=1.6, zorder=2)
-            else:
-                later('solid', 'arc', index, colour)
+    def _done(self, i, kind, index, line) -> bool:
+        """Whether move i of the program counts as made: reached, and not still gliding."""
+        if self._glide is not None and self._glide['index'] == i:
+            return False
+        return self._shown(line, (kind, index))
 
-        # Compensated paths (G41/G42): where the nose centre runs. Dashed.
+    def _sync_scene(self):
+        """Brings the scene layer to the playback's position.
+
+        Only what changed is touched: a step adds the line of the move it
+        reached and takes it out of the moves ahead. The material is redrawn
+        when the cut changed it.
+        """
+        paths = self.paths_cache
+        order = paths['order']
+        done = {i for i, (kind, index, line) in enumerate(order)
+                if self._done(i, kind, index, line)}
+
+        for i in self._done_moves - done:
+            self._drop(('move', i))
+        for i in sorted(done - self._done_moves):
+            self._put(('move', i), self._draw_move(*order[i]))
+        self._done_moves = done
+        if self._ahead_for != done:
+            self._sync_ahead(done)
+
+        # Compensated paths (G41/G42): where the nose centre runs. Dashed, and
+        # filed under their line only.
         comp = PATH_COLOURS['comp']
-        for segment in self.paths_cache.get('comp_cut', []):
-            (x1, z1), (x2, z2), line = segment
-            if self._shown(line):
-                self.ax.plot([z1, z2], [x1, x2], color=comp, linewidth=1.2,
-                             linestyle='--', alpha=0.9, zorder=3)
-                has_paths = True
-        for arc in self.paths_cache.get('comp_arc', []):
-            if self._shown(arc['line']):
-                self._draw_arc(arc, color=comp, linewidth=1.2, linestyle='--',
-                               alpha=0.9, zorder=3)
-                has_paths = True
-
-        for style, (segments, colours) in ahead.items():
-            if segments:
-                self.ax.add_collection(LineCollection(
-                    segments, colors=colours, alpha=GHOST_ALPHA, zorder=0.9,
-                    linewidths=0.8 if style == 'dotted' else 1.0,
-                    linestyles=(0, (1.5, 2.5)) if style == 'dotted' else 'solid'))
-
-        self._draw_current_move()
+        for name in ('comp_cut', 'comp_arc'):
+            for i, item in enumerate(paths.get(name, [])):
+                line = item['line'] if name == 'comp_arc' else item[2]
+                key = (name, i)
+                if self._shown(line) and key not in self._scene:
+                    if name == 'comp_arc':
+                        arc = item
+                        drawn = [self._draw_arc(arc, color=comp, linewidth=1.2,
+                                                linestyle='--', alpha=0.9, zorder=3)]
+                    else:
+                        (x1, z1), (x2, z2), _line = item
+                        drawn = self.ax.plot([z1, z2], [x1, x2], color=comp, linewidth=1.2,
+                                             linestyle='--', alpha=0.9, zorder=3)
+                    self._put(key, drawn)
+                elif not self._shown(line) and key in self._scene:
+                    self._drop(key)
 
         # Collisions. A straight one is the very segment that was filed under
         # cut or rapid, so it appears with its move.
-        for segment in self.paths_cache['collisions']:
+        for i, segment in enumerate(paths['collisions']):
             (x1, z1), (x2, z2), line = segment
-            if self._shown(line, self._move_of.get(id(segment))):
-                self.ax.plot([z1, z2], [x1, x2], color=PATH_COLOURS['collision'],
-                             linewidth=3, alpha=0.85, zorder=5, label='Collision!')
+            move = self._move_of.get(id(segment))
+            show = (self._order_index[move] in done) if move else self._shown(line)
+            key = ('collision', i)
+            if show and key not in self._scene:
+                self._put(key, self.ax.plot([z1, z2], [x1, x2],
+                                            color=PATH_COLOURS['collision'], linewidth=3,
+                                            alpha=0.85, zorder=5, label='Collision!'))
+            elif not show and key in self._scene:
+                self._drop(key)
 
-        self._draw_tool_changes()
-        self._draw_origin()
+        shown = [tc for tc in paths['tool_changes'] if self._shown(tc['line'])]
+        if self._tools_shown != [tc['line'] for tc in shown]:
+            self._drop('tools')
+            self._put('tools', self._draw_tool_changes(shown))
+            self._tools_shown = [tc['line'] for tc in shown]
 
-        return has_paths
+        self._sync_stock()
 
-    def _draw_current_move(self):
-        """The move the playback has just made, in Fanuc yellow, glowing."""
-        if self.live_max_line is None:
+    def _draw_move(self, kind, index, line) -> list:
+        """The artists of one move made: a line of its own, or an arc."""
+        colour = self._colour_of(kind, line)
+        if kind == 'arc':
+            arc = self.paths_cache['arc'][index]
+            return [self._draw_arc(arc, color=colour, linewidth=1.6, zorder=2)]
+        (x1, z1), (x2, z2), _line = self.paths_cache[kind][index]
+        if kind == 'rapid':
+            return self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=0.9,
+                                linestyle=(0, (1.5, 2.5)), alpha=0.8, zorder=1)
+        # Thread passes run along Z like turning; the colour is what makes
+        # them read as a thread. The finishing run lies a fraction of a
+        # millimetre off the roughing, so it is drawn over it in a colour of
+        # its own.
+        zorder = {'cut': 2, 'thread': 2.4, 'finish': 2.5}[kind]
+        return self.ax.plot([z1, z2], [x1, x2], color=colour, linewidth=1.6,
+                            zorder=zorder, solid_capstyle='round')
+
+    def _sync_ahead(self, done):
+        """The moves not made yet, faint, so the program ahead stays in view.
+
+        One collection per line style rather than a line each: every move
+        that has been made is a line of its own, and only those.
+        """
+        self._drop('ahead')
+        styles = {'solid': ([], []), 'dotted': ([], [])}  # segments, colours
+        for i, (kind, index, line) in enumerate(self.paths_cache['order']):
+            if i in done:
+                continue
+            segments = self._segments_of(kind, index)
+            target = styles['dotted' if kind == 'rapid' else 'solid']
+            target[0].extend(segments)
+            target[1].extend([self._colour_of(kind, line)] * len(segments))
+        for style, (segments, colours) in styles.items():
+            if segments:
+                self._put('ahead', [self.ax.add_collection(LineCollection(
+                    segments, colors=colours, alpha=GHOST_ALPHA, zorder=0.9,
+                    linewidths=0.8 if style == 'dotted' else 1.0,
+                    linestyles=(0, (1.5, 2.5)) if style == 'dotted' else 'solid'),
+                    autolim=False)])
+        self._ahead_for = set(done)
+
+    def _sync_stock(self):
+        """The material left at this point of the playback, redrawn when it changed."""
+        if not self.paths_cache.get('stock') or self._stock_playback is None:
             return
-        reached = self._moves_reached()
-        if not reached:
+        model = self._stock_playback.at(self._moves_reached())
+        if model is None:
             return
-        kind, index, _line = self.paths_cache['order'][reached - 1]
-        segments = self._segments_of(kind, index)
-        accent = self.colors['FANUC_YELLOW']
-        for width, alpha in ((7.0, 0.16), (2.2, 1.0)):
-            self.ax.add_collection(LineCollection(segments, colors=accent, alpha=alpha,
-                                                  linewidths=width, zorder=6,
-                                                  capstyle='round'))
+        shapes = self._stock_shapes(model)
+        if shapes is self._stock_drawn:
+            return
+        self._drop('stock')
+        artists = self._draw_section(shapes)
+        if self.mirror:
+            artists += self._draw_view(model, shapes)
+        self._put('stock', artists)
+        self._stock_drawn = shapes
 
-    def _draw_origin(self):
+    def _draw_origin(self) -> list:
         """The programmed zero, as a drawing marks a datum."""
-        self.ax.plot(0, 0, marker='o', markersize=9, markerfacecolor=BACKGROUND,
-                     markeredgecolor=MARKER, markeredgewidth=1.1, zorder=7)
-        self.ax.plot(0, 0, marker=ORIGIN_MARK, markersize=9, color=MARKER,
-                     markeredgewidth=0, zorder=7.1)
-        self.ax.text(0, 0, '   G54', color=AXIS_TEXT, fontsize=8, va='top', zorder=7)
+        artists = self.ax.plot(0, 0, marker='o', markersize=9, markerfacecolor=BACKGROUND,
+                               markeredgecolor=MARKER, markeredgewidth=1.1, zorder=7)
+        artists += self.ax.plot(0, 0, marker=ORIGIN_MARK, markersize=9, color=MARKER,
+                                markeredgewidth=0, zorder=7.1)
+        artists.append(self.ax.text(0, 0, '   G54', color=AXIS_TEXT, fontsize=8, va='top',
+                                    zorder=7))
+        return artists
 
     def _fit_bounds(self):
         """(z_min, z_max, x_min, x_max) of what the picture should frame.
@@ -685,20 +787,181 @@ class GCodePlotterWidget(QWidget):
             return
 
         self._fit_view()
-
-        # Redraw cursor highlight (if set)
-        if self.current_line is not None:
-            self._draw_highlight()
-
-        # Redraw live position (if active)
-        if self.live_x is not None or self.live_z is not None:
-            self._update_live_display()
-
+        self._update_motion()
         # Async rendering for better performance
         self.canvas.draw_idle()
 
+    # --- rendering the layers ----------------------------------------------
+
+    def _invalidate(self):
+        """The saved layers no longer match the view; the next full draw renews them."""
+        self._static_bg = None
+        self._scene_bg = None
+
+    def _on_draw(self, _event):
+        """After a full draw, which rendered the static layer: keep a copy of
+        it, then draw the scene and the motion over it."""
+        try:
+            self._static_bg = self.canvas.copy_from_bbox(self.fig.bbox)
+            self._draw_layer(self._scene_artists())
+            self._scene_bg = self.canvas.copy_from_bbox(self.fig.bbox)
+            self._draw_layer(self._motion_artists())
+        except Exception:
+            # A canvas without a renderer yet, or one being torn down: the next
+            # full draw tries again.
+            self._invalidate()
+
+    def _scene_artists(self):
+        return [artist for artists in self._scene.values() for artist in artists]
+
+    def _motion_artists(self):
+        artists = list(self._glow)
+        for artist in (self.highlight_artist, self.live_text):
+            if artist is not None and artist.axes is self.ax:
+                artists.append(artist)
+        return artists
+
+    def _draw_layer(self, artists):
+        for artist in sorted(artists, key=lambda a: a.get_zorder()):
+            if artist.get_visible():
+                self.fig.draw_artist(artist)
+
+    def _render_scene(self):
+        """Redraws the scene and the motion over the saved static layer."""
+        if self._static_bg is None or not self.canvas.isVisible():
+            self.canvas.draw_idle()
+            return
+        self.canvas.restore_region(self._static_bg)
+        self._draw_layer(self._scene_artists())
+        self._scene_bg = self.canvas.copy_from_bbox(self.fig.bbox)
+        self._draw_layer(self._motion_artists())
+        self.canvas.blit(self.fig.bbox)
+
+    def _render_motion(self):
+        """Redraws only the motion over the saved scene."""
+        if self._scene_bg is None or not self.canvas.isVisible():
+            self.canvas.draw_idle()
+            return
+        self.canvas.restore_region(self._scene_bg)
+        self._draw_layer(self._motion_artists())
+        self.canvas.blit(self.fig.bbox)
+
+    # --- the move being made -------------------------------------------------
+
+    def _current_move(self):
+        """(order index, kind, index) of the move the playback is on, or None."""
+        if self.live_max_line is None or not self.paths_cache:
+            return None
+        if self._glide is not None:
+            i = self._glide['index']
+        else:
+            i = self._moves_reached() - 1
+            if i < 0:
+                return None
+        kind, index, _line = self.paths_cache['order'][i]
+        return i, kind, index
+
+    def _tool_point(self):
+        """Where the tool is, (x, z): along the gliding move, or at the end of
+        the move just made. None outside a playback."""
+        if self._glide is not None:
+            return self._glide['at']
+        current = self._current_move()
+        if current is None:
+            return None
+        _i, kind, index = current
+        return self._points_of(kind, index)[-1]
+
+    def _update_motion(self):
+        """Puts the motion layer where the playback is."""
+        segments = []
+        current = self._current_move()
+        if current is not None:
+            _i, kind, index = current
+            if self._glide is not None:
+                segments = self._glide['done']
+            else:
+                segments = self._segments_of(kind, index)
+        for collection in self._glow:
+            collection.set_segments(segments)
+        self._draw_highlight()
+        self._refresh_live_text()
+
+    def _start_glide(self, glide_ms, made_before):
+        """Lets the move just reached run its course over glide_ms.
+
+        Only a move newly reached glides: one that was already made before
+        this step -- a jump back, a repeat -- is shown where it is.
+        """
+        current = self._current_move() if glide_ms > 0 else None
+        if current is None:
+            return
+        i, kind, index = current
+        if i in made_before or i not in self._done_moves:
+            return
+        points = self._points_of(kind, index)
+        # Length as drawn on a lathe: X is a diameter, so it counts half.
+        steps = [math.hypot((x1 - x0) / 2.0, z1 - z0)
+                 for (x0, z0), (x1, z1) in zip(points, points[1:])]
+        self._glide = {'index': i, 'points': points, 'steps': steps,
+                       'length': sum(steps), 'start': time.monotonic(),
+                       'duration': glide_ms / 1000.0, 'at': points[0], 'done': []}
+        self._sync_scene()          # the move goes back among the moves ahead
+        self._place_glide(0.0)
+        self._glide_timer.start()
+
+    def _place_glide(self, progress):
+        """Moves the gliding tool to `progress` (0 to 1) of its move."""
+        glide = self._glide
+        points, steps = glide['points'], glide['steps']
+        left = progress * glide['length']
+        done = []
+        at = points[0]
+        for (p0, p1), step in zip(zip(points, points[1:]), steps):
+            if step <= 0.0:
+                continue
+            if left >= step:
+                done.append(((p0[1], p0[0]), (p1[1], p1[0])))
+                left -= step
+                at = p1
+                continue
+            t = left / step
+            at = (p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t)
+            done.append(((p0[1], p0[0]), (at[1], at[0])))
+            break
+        glide['at'] = at
+        glide['done'] = done
+
+    def _glide_frame(self):
+        glide = self._glide
+        if glide is None:
+            self._glide_timer.stop()
+            return
+        progress = (time.monotonic() - glide['start']) / max(glide['duration'], 1e-6)
+        if progress >= 1.0:
+            self._finish_glide()
+            return
+        self._place_glide(progress)
+        self._update_motion()
+        self._render_motion()
+
+    def _finish_glide(self):
+        """The gliding move arrives: it counts as made, and the material follows."""
+        if self._glide is None:
+            return
+        self._stop_glide()
+        if self.paths_cache:
+            self._sync_scene()
+            self._update_motion()
+            self._render_scene()
+
+    def _stop_glide(self):
+        self._glide_timer.stop()
+        self._glide = None
+
     def _draw_highlight(self):
-        """Draws red marker for current cursor position"""
+        """The white ring: at the end of the cursor's line, or on the tool
+        while a playback runs."""
         if self.current_line is None or not self.paths_cache:
             if self.highlight_artist:
                 self.highlight_artist.set_visible(False)
@@ -717,8 +980,8 @@ class GCodePlotterWidget(QWidget):
 
         # During a playback the ring follows the move being drawn, rather than
         # sitting on the first move of the line for the whole cycle.
-        if self.live_step and self.current_line == self.live_max_line:
-            target_pos = self.step_end(self.current_line, self.live_step) or target_pos
+        if self.live_max_line is not None and self.current_line == self.live_max_line:
+            target_pos = self._tool_point() or target_pos
 
         # Check tool changes
         if not target_pos:
@@ -730,15 +993,14 @@ class GCodePlotterWidget(QWidget):
         if target_pos:
             # Create marker or update position
             if self.highlight_artist is None:
-                # Create marker for the first time
                 # White, not red: red already means a collision here.
                 self.highlight_artist = self.ax.plot(target_pos[1], target_pos[0],
                                                      marker='o',
                                                      color=self.colors.get('WHITE', '#EDEDED'),
                                                      markersize=10, markeredgewidth=2,
                                                      markerfacecolor='none', zorder=10)[0]
+                self.highlight_artist.set_animated(True)
             else:
-                # Only update position (much faster!)
                 self.highlight_artist.set_data([target_pos[1]], [target_pos[0]])
                 self.highlight_artist.set_visible(True)
         else:
@@ -808,6 +1070,7 @@ class GCodePlotterWidget(QWidget):
         self._last_ylim = new_ylim
         self._manual_zoom = True  # User zoomed manually
 
+        self._invalidate()
         self.canvas.draw_idle()
 
     def _on_mouse_press(self, event):
@@ -924,6 +1187,7 @@ class GCodePlotterWidget(QWidget):
             # Update pan start for smooth shifting
             self._pan_start = (event.xdata, event.ydata)
 
+            self._invalidate()
             self.canvas.draw_idle()
 
     def highlight_line(self, line_num: int):
@@ -937,9 +1201,8 @@ class GCodePlotterWidget(QWidget):
         if not self.paths_cache:
             return
 
-        # Update highlight (efficient with set_data)
         self._draw_highlight()
-        self.canvas.draw_idle()
+        self._render_motion()
 
     def set_gcode(self, gcode: str):
         """Sets G-code and updates plot immediately"""
@@ -953,7 +1216,8 @@ class GCodePlotterWidget(QWidget):
         self.live_tool = tool
         self.live_s = s
         self.live_f = f
-        self._update_live_display()
+        self._refresh_live_text()
+        self._render_motion()
 
     def clear_live_position(self):
         """Removes the live position display"""
@@ -964,39 +1228,53 @@ class GCodePlotterWidget(QWidget):
         self.live_f = None
         if self.live_text:
             self.live_text.set_visible(False)
-            self.canvas.draw_idle()
+            self._render_motion()
 
-    def set_live_max_line(self, line_num: int):
+    def set_live_max_line(self, line_num: int, glide_ms: int = 0):
         """Sets the maximum line for live drawing (only draws up to this line)
 
         Every move of that line is drawn; set_live_step shows fewer of them.
+        With glide_ms the last of them runs its course over that time, the
+        tool travelling along it, before it counts as made.
         """
         if self.live_max_line != line_num or self.live_step is not None:
             self.live_max_line = line_num
             self.live_step = None
-            # Only redraw plot if paths exist
-            if self.paths_cache:
-                self._redraw_live()
+            self._advance(glide_ms)
 
     def clear_live_max_line(self):
         """Removes the live drawing limit (all lines will be drawn again)"""
         if self.live_max_line is not None or self.live_step is not None:
             self.live_max_line = None
             self.live_step = None
-            if self.paths_cache:
-                self._redraw_live()
+            self._advance(0)
 
-    def set_live_step(self, line_num: int, step: int):
+    def set_live_step(self, line_num: int, step: int, glide_ms: int = 0):
         """Draws everything before `line_num`, and the first `step` moves of it.
 
         For playing a cycle back move by move: a G71 is one block, but the
-        passes it cuts are what the operator is watching.
+        passes it cuts are what the operator is watching. glide_ms as for
+        set_live_max_line.
         """
         if self.live_max_line != line_num or self.live_step != step:
             self.live_max_line = line_num
             self.live_step = step
-            if self.paths_cache:
-                self._redraw_live()
+            self._advance(glide_ms)
+
+    def _advance(self, glide_ms=0):
+        """The playback moved: the scene follows, one move at a time.
+
+        A move still gliding arrives at once, so the scene never falls behind
+        the playback; the move reached now glides in its place.
+        """
+        if not self.paths_cache:
+            return
+        self._stop_glide()
+        made_before = set(self._done_moves)
+        self._sync_scene()
+        self._start_glide(glide_ms, made_before)
+        self._update_motion()
+        self._render_scene()
 
     def steps_in_line(self, line_num: int) -> int:
         """How many moves the line makes: 1 for an ordinary block, many for a cycle."""
@@ -1020,9 +1298,11 @@ class GCodePlotterWidget(QWidget):
         """Works out each move's place in its line, after every parse."""
         self._moves_of_line = {}
         self._rank = {}
-        for kind, index, line in self.paths_cache['order']:
+        self._order_index = {}
+        for i, (kind, index, line) in enumerate(self.paths_cache['order']):
             moves = self._moves_of_line.setdefault(line, [])
             self._rank[(kind, index)] = len(moves)
+            self._order_index[(kind, index)] = i
             moves.append((kind, index))
         # Collisions on straight moves are the same segment object as the
         # move, so they can borrow its place in the line.
@@ -1030,13 +1310,14 @@ class GCodePlotterWidget(QWidget):
                          for (kind, index) in self._rank if kind != 'arc'}
 
     def _moves_reached(self) -> int:
-        """How many moves the playback has reached, in the order they run.
+        """How many moves have been made, in the order they run.
 
-        All of them outside a playback, so the static picture is the finished part.
+        All of them outside a playback, so the static picture is the finished
+        part. A move still gliding is not made yet.
         """
         order = self.paths_cache['order']
         for count, (kind, index, line) in enumerate(order):
-            if not self._shown(line, (kind, index)):
+            if not self._done(count, kind, index, line):
                 return count
         return len(order)
 
@@ -1053,54 +1334,35 @@ class GCodePlotterWidget(QWidget):
         rank = self._rank.get(move) if move is not None else None
         return self.live_step is None or rank is None or rank < self.live_step
 
-    def _redraw_live(self):
-        """Redraws plot without cache check (for live drawing)"""
-        # Jump directly to drawing, without hash check
-        if not self.pending_code or not self.paths_cache:
-            return
+    def _refresh_live_text(self):
+        """The live position box: where the tool is, its tool, speed and feed.
 
-        self._draw_scene()
-
-        # Keep zoom if present
-        self._apply_view()
-
-        # Cursor highlight
-        if self.current_line is not None:
-            self._draw_highlight()
-
-        # Live position
-        if self.live_x is not None or self.live_z is not None:
-            self._update_live_display()
-
-        self.canvas.draw_idle()
-
-    def _update_live_display(self):
-        """Updates the live position overlay"""
-        # If no position is set, hide the display
+        While a move glides, X and Z follow the tool rather than jump to the
+        end of the move.
+        """
         if self.live_x is None and self.live_z is None:
             if self.live_text:
                 self.live_text.set_visible(False)
-                self.canvas.draw_idle()
             return
 
-        # Assemble text
+        x, z = self.live_x, self.live_z
+        if self._glide is not None:
+            x, z = self._glide['at']
+
         info_lines = ["LIVE POSITION"]
-        if self.live_x is not None:
-            info_lines.append(f"X: {self.live_x:.2f} Ø")
-        if self.live_z is not None:
-            info_lines.append(f"Z: {self.live_z:.2f}")
+        if x is not None:
+            info_lines.append(f"X: {x:.2f} Ø")
+        if z is not None:
+            info_lines.append(f"Z: {z:.2f}")
         if self.live_tool is not None and self.live_tool > 0:
             info_lines.append(f"T: {self.live_tool:02d}")
         if self.live_s is not None and self.live_s > 0:
             info_lines.append(f"S: {self.live_s}")
         if self.live_f is not None and self.live_f > 0:
             info_lines.append(f"F: {self.live_f:.2f}")
-
         info_text = "\n".join(info_lines)
 
-        # Create or update text box
         if self.live_text is None or not self.live_text.axes:
-            # Create text box (top right)
             self.live_text = self.ax.text(
                 0.98, 0.98, info_text,
                 transform=self.ax.transAxes,
@@ -1114,9 +1376,7 @@ class GCodePlotterWidget(QWidget):
                 weight='bold',
                 zorder=100
             )
+            self.live_text.set_animated(True)
         else:
-            # Only update text
             self.live_text.set_text(info_text)
             self.live_text.set_visible(True)
-
-        self.canvas.draw_idle()

@@ -805,11 +805,14 @@ class Main(QMainWindow):
             self._update_run_state()
 
     # A cycle plays back quicker than a line: a roughing cycle is dozens of
-    # moves and should not take a minute. Redrawing the plot costs about 100 ms,
-    # so a long cycle shows several moves per tick rather than one -- it never
-    # takes more than CYCLE_MAX_TICKS ticks, however many passes it cuts.
+    # moves and should not take a minute. A very long one shows several moves
+    # per tick rather than one -- it never takes more than CYCLE_MAX_TICKS
+    # ticks, however many passes it cuts.
     CYCLE_MOVE_MS = 80
-    CYCLE_MAX_TICKS = 40
+    CYCLE_MAX_TICKS = 80
+    # Each step glides for this share of its tick: the tool travels along the
+    # move and arrives just before the next one starts.
+    GLIDE_SHARE = 0.9
 
     def _sim_interval(self) -> int:
         """Milliseconds per G-Code line: 200, or 500 in SINGLE BLOCK."""
@@ -862,7 +865,9 @@ class Main(QMainWindow):
         if moves > 1 and not self.btnSingleBlock.isChecked():
             stride = -(-moves // self.CYCLE_MAX_TICKS)  # ceiling division
             self.sim_move = min(self.sim_move + stride, moves)
-            self.plotter.set_live_step(line_num, self.sim_move)
+            tick = self.CYCLE_MOVE_MS if self.sim_move < moves else self._sim_interval()
+            self.plotter.set_live_step(line_num, self.sim_move,
+                                       glide_ms=int(tick * self.GLIDE_SHARE))
             end = self.plotter.step_end(line_num, self.sim_move)
             if end is not None:
                 self.sim_x, self.sim_z = end
@@ -871,7 +876,8 @@ class Main(QMainWindow):
                 self.sim_timer.setInterval(self.CYCLE_MOVE_MS)
                 return  # still on this line; the next tick plays the next move
         else:
-            self.plotter.set_live_max_line(line_num)
+            self.plotter.set_live_max_line(
+                line_num, glide_ms=int(self._sim_interval() * self.GLIDE_SHARE))
         self.sim_move = 0
         self.sim_timer.setInterval(self._sim_interval())
 

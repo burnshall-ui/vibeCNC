@@ -12,6 +12,7 @@ trusting that derivation.
 import math
 import unittest
 
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 import matplotlib.patches as patches
 import matplotlib.lines as lines
@@ -239,6 +240,17 @@ class PlotViewTests(unittest.TestCase):
         self.assertTrue(self.solid(widget, -10.0, 35.0))
 
         widget.set_live_max_line(4)
+        self.assertFalse(self.solid(widget, -10.0, 35.0))
+        self.assertTrue(self.solid(widget, -10.0, 29.5))
+
+    def test_a_gliding_cut_takes_the_material_when_it_arrives(self):
+        widget = self.turned()
+        widget.set_live_max_line(3)
+
+        widget.set_live_max_line(4, glide_ms=60)
+        self.assertTrue(self.solid(widget, -10.0, 35.0))   # still on its way
+
+        QTest.qWait(400)
         self.assertFalse(self.solid(widget, -10.0, 35.0))
         self.assertTrue(self.solid(widget, -10.0, 29.5))
 
@@ -522,6 +534,92 @@ class PlotPlaybackTests(unittest.TestCase):
         self.assertEqual(red(), [])
         widget.set_live_step(self.CALL, total)
         self.assertTrue(red())
+
+    def test_a_step_keeps_the_lines_already_drawn(self):
+        # The scene is changed, not drawn again: the moves made stay the same
+        # artists, and a step adds the line of the one it reached.
+        widget = self.plotter()
+        widget.set_live_step(self.CALL, 2)
+        before = set(map(id, widget.ax.lines))
+
+        widget.set_live_step(self.CALL, 3)
+
+        after = set(map(id, widget.ax.lines))
+        self.assertTrue(before < after)
+        self.assertEqual(len(after - before), 1)
+
+    @staticmethod
+    def picture(widget):
+        """What is drawn, as plain values: the lines, the faint moves, the arcs."""
+        drawn = sorted((ln.get_color(), tuple(ln.get_xdata()), tuple(ln.get_ydata()))
+                       for ln in widget.ax.lines if len(ln.get_xdata()) == 2)
+        ahead = sorted(len(c.get_segments()) for c in widget.ax.collections
+                       if c.get_alpha() == GHOST_ALPHA)
+        arcs = len([p for p in widget.ax.patches if isinstance(p, patches.Arc)])
+        return drawn, ahead, arcs
+
+    def test_stepping_there_draws_what_a_fresh_picture_would(self):
+        widget = self.plotter(code=self.FINISHED)
+        total = widget.steps_in_line(self.CALL)
+        for step in range(1, total + 1):
+            widget.set_live_step(self.CALL, step)
+        widget.set_live_step(self.FINISH_CALL, 3)
+        widget.set_live_step(self.CALL, 3)            # and back again
+
+        fresh = self.plotter(code=self.FINISHED)
+        fresh.set_live_step(self.CALL, 3)
+
+        self.assertEqual(self.picture(widget), self.picture(fresh))
+
+    def test_a_gliding_move_counts_as_made_when_it_arrives(self):
+        widget = self.plotter()
+        widget.set_live_step(self.CALL, 1)
+        before = len(widget.ax.lines)
+
+        widget.set_live_step(self.CALL, 2, glide_ms=60)
+        self.assertEqual(len(widget.ax.lines), before)       # on its way
+
+        QTest.qWait(400)
+        self.assertEqual(len(widget.ax.lines), before + 1)   # arrived
+        x, z = widget.step_end(self.CALL, 2)
+        yellow = [c for c in widget.ax.collections
+                  if to_hex(c.get_edgecolor()[0]) == COLORS['FANUC_YELLOW'].lower()]
+        self.assertIn((z, x), {tuple(round(v, 6) for v in segment[-1])
+                               for c in yellow for segment in c.get_segments()})
+
+    def test_the_tool_glides_along_the_move(self):
+        widget = self.plotter()
+        widget.set_live_step(self.CALL, 1)
+        widget.highlight_line(self.CALL)
+        start = widget.step_end(self.CALL, 1)
+        end = widget.step_end(self.CALL, 2)
+
+        widget.set_live_step(self.CALL, 2, glide_ms=10_000)
+        widget._place_glide(0.5)
+        widget._update_motion()
+
+        ring = widget.highlight_artist
+        z, x = ring.get_xdata()[0], ring.get_ydata()[0]
+        self.assertAlmostEqual(z, (start[1] + end[1]) / 2)
+        self.assertAlmostEqual(x, (start[0] + end[0]) / 2)
+
+    def test_the_next_step_lands_a_move_still_gliding(self):
+        widget = self.plotter()
+        widget.set_live_step(self.CALL, 1)
+        before = len(widget.ax.lines)
+
+        widget.set_live_step(self.CALL, 2, glide_ms=10_000)
+        widget.set_live_step(self.CALL, 3)
+
+        self.assertEqual(len(widget.ax.lines), before + 2)
+
+    def test_going_back_does_not_glide(self):
+        widget = self.plotter()
+        widget.set_live_step(self.CALL, 5)
+
+        widget.set_live_step(self.CALL, 2, glide_ms=10_000)
+
+        self.assertIsNone(widget._glide)
 
     @staticmethod
     def faint(widget):
