@@ -169,7 +169,12 @@ provider behind the model, so think about which programs leave the shop.
 3. **Run Simulation** - Press `CYCLE START` (green button) or `Spacebar`
 4. **Watch Live** - Toolpaths draw progressively with real-time position info
 5. **AI Review** - Click `KI: ANALYZE` for safety checks
-6. **Generate Code** - Use `KI: GEN-CODE` or type in chat
+6. **Generate Code** - Use `KI: GEN-CODE` or type in chat. The model's draft is
+   linted, and what the linter finds is sent back for correction, at most three
+   times. The chat shows the result, "Lint clean – no known faults" or how many
+   findings remain, and the change from the draft. Lint clean means the linter
+   finds nothing it knows about, not that the program is right; nothing is put
+   into the editor, you read it and put it there.
 
 ### Keyboard Shortcuts
 
@@ -340,6 +345,8 @@ vibe_cnc/
 │   ├── gcode_highlighter.py    # Syntax highlighting + editor
 │   ├── gcode_plotter.py        # 2D visualization + live drawing
 │   ├── lint_engine.py          # Policy enforcement
+│   ├── diagnostics.py          # One finding: line, severity, rule id, hint
+│   ├── verifier.py             # GEN-CODE: draft, lint, correct
 │   ├── camotics_bridge.py      # 3D simulation integration
 │   ├── settings_manager.py     # Config loader
 │   ├── tool_model.py           # Tool library

@@ -7,7 +7,8 @@ from .diagnostics import ERROR, INFO, WARNING, Diagnostic, Severity
 _PROGRAM_END = re.compile(r'(?<![A-Z])M0*(?:30|2|99)(?!\d)', re.IGNORECASE)
 
 
-def _code_only(line: str) -> str:
+def code_only(line: str) -> str:
+    """One line without its comments: parentheses, and everything after ';'."""
     return re.sub(r';.*', '', re.sub(r'\(.*?\)', '', line))
 
 
@@ -18,7 +19,7 @@ def is_snippet(code: str) -> bool:
     it: the program it goes into has them. Only the code words count; a
     comment that says M30 ends nothing.
     """
-    return not any(_PROGRAM_END.search(_code_only(ln)) for ln in code.splitlines())
+    return not any(_PROGRAM_END.search(code_only(ln)) for ln in code.splitlines())
 
 
 class LintEngine:

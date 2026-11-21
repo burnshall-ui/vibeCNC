@@ -17,6 +17,7 @@ from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.diagnostics import blocking
 from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc import verifier
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
 from vibe_cnc.ai_client import AIClient, backend_of
 from vibe_cnc.camotics_bridge import CamoticsBridge
@@ -28,7 +29,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 class AIWorkerSignals(QObject):
     """Signals for AIWorker (QRunnable can't have signals directly)"""
-    finished = pyqtSignal(bool, str)
+    # object, not str: a generation hands back the verifier's whole outcome.
+    finished = pyqtSignal(bool, object)
 
 class AIWorker(QRunnable):
     def __init__(self, fn, args, callback):
@@ -550,13 +552,92 @@ class Main(QMainWindow):
             self._append_assistant_message("Error", resp, is_error=True)
             self.status.showMessage("❌ AI Error", 5000)
 
-    def _handle_generate_response(self, ok: bool, resp: str, who: str):
-        if ok:
-            self._append_assistant_message(who, resp)
-            self.status.showMessage("✅ Code generated", 5000)
-        else:
-            self._append_assistant_message("Error", resp, is_error=True)
+    def _generate(self, request: str):
+        """On the worker thread: draft, lint and correct, all of it, so the
+        window gets one result. The linter only reads its config here."""
+        return True, verifier.verify(self.ai, request, self.ai.generate_prompt(), self.linter)
+
+    def _handle_generate_response(self, ok: bool, resp, who: str):
+        """The answer the loop ended with, then what the linter says of it.
+        Nothing goes into the editor: the operator reads it and puts it there."""
+        outcome = resp if ok else None
+        if not isinstance(outcome, verifier.Outcome) or not outcome.attempts:
+            error = outcome.error if isinstance(outcome, verifier.Outcome) else resp
+            self._append_assistant_message("Error", error, is_error=True)
             self.status.showMessage("❌ AI Error", 5000)
+            return
+
+        shown = outcome.best or outcome.draft
+        self._append_assistant_message(who, self._answer_html(shown.answer))
+        self._append_assistant_message("Lint", self._verdict_html(outcome),
+                                       is_error=not outcome.lint_clean)
+        self.status.showMessage(f"{'✅' if outcome.lint_clean else '⚠️'} Code generated — "
+                                f"{self._verdict(outcome)}", 8000)
+
+    @staticmethod
+    def _verdict(outcome) -> str:
+        if outcome.best is None:
+            blocks = outcome.draft.blocks
+            return ("not checked: the answer has no code block" if blocks == 0 else
+                    f"not checked: the answer has {blocks} code blocks, not one")
+        if outcome.lint_clean:
+            return "Lint clean – no known faults"
+        left = len(blocking(outcome.best.findings))
+        return "1 finding remains" if left == 1 else f"{left} findings remain"
+
+    def _verdict_html(self, outcome) -> str:
+        """Status line, what the loop did, the findings left, the diff from the draft."""
+        parts = [f"<b>{html.escape(self._verdict(outcome))}</b>"]
+        done = []
+        if outcome.corrections:
+            done.append(f"{outcome.corrections} correction(s) asked for")
+        if outcome.rejections:
+            done.append(f"{outcome.rejections} rejected for dropping a cycle, tool or M-code "
+                        "of the draft")
+        if outcome.stop == verifier.REPEATED:
+            done.append("stopped: a correction came back with the findings of an earlier one")
+        elif outcome.stop == verifier.OUT_OF_ROUNDS:
+            done.append(f"stopped after {verifier.MAX_CORRECTIONS} corrections")
+        elif outcome.stop == verifier.NO_CODE and outcome.best is not None:
+            done.append("stopped: a correction had no single code block")
+        elif outcome.stop == verifier.FAILED:
+            done.append(f"stopped: {outcome.error}")    # the client's messages are HTML already
+        if done:
+            parts.append("; ".join(done))
+        if outcome.best is not None and outcome.best.findings:
+            parts.append(self._findings_html(outcome.best.findings))
+        diff = verifier.change(outcome)
+        if diff:
+            parts.append("<b>Changed from the draft:</b>" + self._diff_html(diff))
+        parts.append("Not in the editor: read it, then put it there yourself.")
+        return "<br>".join(parts)
+
+    def _code_html(self, code: str) -> str:
+        return (f"<pre style='color:{self.cfg_colors['CRT_GREEN']}; background:#0A0A0A; "
+                f"padding:4px;'>{html.escape(code)}</pre>")
+
+    def _diff_html(self, diff: str) -> str:
+        colours = {"+": self.cfg_colors['CRT_GREEN'], "-": "#FF5555", "@": self.cfg_colors['CYAN']}
+        rows = []
+        for line in diff.splitlines():
+            colour = None if line.startswith(("+++", "---")) else colours.get(line[:1])
+            text = html.escape(line)
+            rows.append(f"<span style='color:{colour}'>{text}</span>" if colour else text)
+        return "<pre style='background:#0A0A0A; padding:4px;'>" + "\n".join(rows) + "</pre>"
+
+    def _answer_html(self, answer: str) -> str:
+        """A model's answer for the chat: each code block as code, escaped; the
+        text between kept as HTML with its line breaks, as the chat has always
+        shown answers -- the client's own notes ("cut off at ...") are HTML."""
+        pieces = verifier.FENCE.split(answer)
+        out = []
+        for index, piece in enumerate(pieces):
+            if index % 2:
+                out.append(self._code_html(piece.strip("\n")))
+            elif piece.strip():
+                text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", piece.strip("\n"))
+                out.append(text.replace("\n", "<br>"))
+        return "".join(out)
 
     def _on_editor_changed(self):
         """Editor change → Plot update (with 500ms debounce)"""
@@ -1021,6 +1102,7 @@ class Main(QMainWindow):
                    "INFO": self.cfg_colors['CYAN']}
         rows = [f"<span style='color:{colours.get(f.severity, self.cfg_colors['CRT_GREEN'])}'>"
                 f"• Line {f.line}: {f.severity}</span> — {html.escape(f.message)}"
+                + (f" <i>Fix: {html.escape(f.hint)}</i>" if f.hint else "")
                 for f in findings]
         return f"<b>{len(findings)} finding(s):</b><br>" + "<br>".join(rows)
 
@@ -1158,33 +1240,13 @@ class Main(QMainWindow):
             self.status.showMessage("⚠️ Offline Mode", 3000)
             return
 
-        # Add formatting rules
-        format_rules = """
-
-IMPORTANT - Response formatting:
-- Use HTML tags (displayed in HTML widget)
-- Headings: <b>Heading</b>
-- Paragraphs: Double line breaks <br><br> between sections
-- Lists: Bullet points with • or numbered (1., 2., ...)
-- G-Code: <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>G-Code here</pre>
-- NO Markdown (**, ##, ```), HTML only!
-
-Example:
-<b>G-Code for Roughing Cycle:</b><br><br>
-<pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>
-G71 U1.0 R0.5
-G71 P10 Q20 U0.4 W0.1 F0.25
-</pre><br>
-<b>Explanation:</b><br>
-• U1.0 R0.5: depth of cut per pass (radius) and retract<br>
-• P10 Q20: first and last block of the contour<br>
-• U0.4 W0.1: finishing allowance in X (diameter) and Z<br>
-• F0.25: feed
-"""
-        enhanced_prompt = user + format_rules
-
+        # The answer format -- one code block, read out and linted -- is the
+        # verifier's: the reader and the request must agree. It asked for HTML
+        # with the code in a styled <pre> before; a fenced block is what every
+        # model writes most reliably, and the chat renders it.
         who = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"
-        self._start_ai_task("⚙️ AI generating code...", self.ai.ask, (enhanced_prompt, self.ai.generate_prompt()), lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
+        self._start_ai_task("⚙️ AI generating code, then linting it...", self._generate, (user,),
+                            lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
 
     # --- Settings ---
     def action_settings(self):

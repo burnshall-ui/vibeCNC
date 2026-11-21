@@ -391,6 +391,73 @@ class AssistBoxKeyTests(PanelCase):
             self.assertNotRegex(line, r"\bD\d", line)
         self.assertNotIn("RPM", calls[0])
 
+    # --- the verifier loop, as the chat shows it ---
+
+    G76_POINT = "G00 X24. Z5.\nG76 P020060 Q0.4 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
+    G76_RIGHT = "G00 X24. Z5.\nG76 P020060 Q100 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
+
+    def generate(self, *answers):
+        """Asks for a thread, the model answering from a script; returns the
+        window and the conversations it was sent."""
+        win = self.window()
+        win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
+        win.input.setText("Cut an M20x2.5 thread")
+        script, sent = list(answers), []
+        win.ai.chat = lambda messages, system=None: sent.append(messages) or script.pop(0)
+        win.action_generate()
+        return win, sent
+
+    def test_a_clean_answer_is_shown_with_its_code_and_said_to_be_lint_clean(self):
+        win, sent = self.generate((True, f"```\n{self.G76_RIGHT}\n```\nM20x2.5, **30 long**."))
+
+        self.assertTrue(self.wait_for_chat(win, "Lint clean – no known faults"))
+        shown = win.chat.toPlainText()
+        self.assertIn("G76 P020060 Q100 R0.05", shown)
+        self.assertNotIn("```", shown)
+        self.assertIn("30 long", shown)
+        self.assertNotIn("**", shown)
+        self.assertEqual(len(sent), 1)
+
+    def test_nothing_is_put_into_the_editor(self):
+        win, _sent = self.generate((True, f"```\n{self.G76_RIGHT}\n```"))
+
+        self.assertTrue(self.wait_for_chat(win, "Lint clean"))
+        self.assertEqual(win.editor.toPlainText(), PROGRAM)
+
+    def test_a_corrected_draft_shows_the_change_from_the_draft(self):
+        win, sent = self.generate((True, f"```\n{self.G76_POINT}\n```"),
+                                  (True, f"```\n{self.G76_RIGHT}\n```\nQ written as Q100."))
+
+        self.assertTrue(self.wait_for_chat(win, "Lint clean – no known faults"))
+        shown = win.chat.toPlainText()
+        self.assertIn("1 correction(s) asked for", shown)
+        self.assertIn("-G76 P020060 Q0.4 R0.05", shown)
+        self.assertIn("+G76 P020060 Q100 R0.05", shown)
+        self.assertEqual(len(sent), 2)
+
+    def test_findings_that_remain_are_counted_and_listed(self):
+        repeat = (True, f"```\n{self.G76_POINT}\n```")
+        win, _sent = self.generate(repeat, repeat)
+
+        self.assertTrue(self.wait_for_chat(win, "1 finding remains"))
+        shown = win.chat.toPlainText()
+        self.assertIn("Line 2: ERROR", shown)
+        self.assertIn("Q0.4", shown)
+        self.assertIn("Fix: Write Q400.", shown)
+        self.assertIn("came back with the findings of an earlier one", shown)
+
+    def test_an_answer_without_a_code_block_is_shown_and_not_checked(self):
+        win, _sent = self.generate((True, "G76 P020060 Q100 R0.05 should do it."))
+
+        self.assertTrue(self.wait_for_chat(win, "not checked: the answer has no code block"))
+        self.assertIn("should do it.", win.chat.toPlainText())
+
+    def test_a_backend_error_is_shown_as_one(self):
+        win, _sent = self.generate((False, "❌ No credit left"))
+
+        self.assertTrue(self.wait_for_chat(win, "❌ No credit left"))
+        self.assertNotIn("Lint clean", win.chat.toPlainText())
+
     def test_the_tooltips_name_the_key_as_this_platform_writes_it(self):
         win = self.window()
         key = QKeySequence("Ctrl+Return").toString(QKeySequence.SequenceFormat.NativeText)
