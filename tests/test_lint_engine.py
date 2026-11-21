@@ -226,6 +226,71 @@ class LintEngineRetractTests(unittest.TestCase):
         self.assertEqual(rules(findings, "RETRACT_BEFORE_M30"), [])
 
 
+class SpindleTests(unittest.TestCase):
+    """The spindle runs before the tool cuts. Three of six programs a model
+    generated on 2026-11-21 never started it and came through lint clean."""
+
+    RULE = "SPINDLE_NOT_STARTED"
+
+    def found(self, code, snippet=False):
+        return [(f.line, f.severity) for f in
+                rules(LintEngine(make_cfg()).run_all(code, snippet=snippet), self.RULE)]
+
+    def test_a_cut_without_m03_is_an_error_at_the_first_cut(self):
+        code = "T0101\nG00 X52. Z2.\nG01 Z-15. F0.2\nX60.\nG00 Z50.\nX200.\nM30"
+
+        self.assertEqual(self.found(code), [(3, "ERROR")])
+
+    def test_a_started_spindle_is_no_finding(self):
+        for start in ("G97 S800 M03", "G96 S180 M3", "G97 S500 M04", "G97 S500 M003"):
+            with self.subTest(start=start):
+                code = f"T0101\n{start}\nG00 X52. Z2.\nG01 Z-15. F0.2\nG00 Z50.\nX200.\nM30"
+                self.assertEqual(self.found(code), [])
+
+    def test_m03_on_the_block_of_the_cut_counts(self):
+        self.assertEqual(self.found("G00 X52. Z2.\nG01 Z-15. F0.2 S500 M03\nM30"), [])
+
+    def test_rapids_alone_need_no_spindle(self):
+        self.assertEqual(self.found("T0101\nG00 X52. Z2.\nG00 X200. Z50.\nM30"), [])
+
+    def test_a_cycle_without_the_spindle_is_found_at_the_cycle(self):
+        code = ("T0101\nG00 X52. Z2.\nG71 U2. R0.5\nG71 P10 Q20 U0.4 W0.1 F0.25\n"
+                "N10 G00 X30.\nN20 G01 Z-15. F0.1\nG00 Z50.\nX200.\nM30")
+
+        self.assertEqual(self.found(code), [(3, "ERROR")])
+
+    def test_a_cut_after_m05_is_found_again(self):
+        code = ("G97 S800 M03\nG00 X52. Z2.\nG01 Z-15. F0.2\nM05\nG00 X52. Z2.\n"
+                "G01 Z-10.\nX60.\nG00 Z50.\nM30")
+
+        self.assertEqual(self.found(code), [(6, "ERROR")])    # modal G01, once
+
+    def test_the_usual_end_after_m05_is_no_cut(self):
+        # G28 U0 W0 has axis words with G01 still active.
+        code = "G97 S800 M03\nG00 X52. Z2.\nG01 Z-15. F0.2\nG00 X60.\nM05\nG28 U0 W0\nM30"
+
+        self.assertEqual(self.found(code), [])
+
+    def test_a_dwell_and_g50_are_no_cuts(self):
+        code = "G50 X200. Z100.\nG01 F0.2\nG04 X1.\nG00 X52. Z2.\nM30"
+
+        self.assertEqual(self.found(code), [])
+
+    def test_m30_is_not_m3_and_m50_is_not_m5(self):
+        self.assertEqual(self.found("M30\nG01 X10. Z-5. F0.2"), [(2, "ERROR")])
+        self.assertEqual(self.found("G97 S800 M03\nM50\nG01 X10. Z-5. F0.2\nM30"), [])
+
+    def test_a_snippet_gets_its_spindle_from_the_program_it_goes_into(self):
+        self.assertEqual(self.found("G00 X52. Z2.\nG01 Z-15. F0.2", snippet=True), [])
+
+    def test_the_sample_programs_start_their_spindles(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in sorted(os.listdir(os.path.join(root, "programs"))):
+            with self.subTest(program=name), \
+                    open(os.path.join(root, "programs", name), encoding="utf-8") as handle:
+                self.assertEqual(self.found(handle.read()), [])
+
+
 class LintEngineParserWarningTests(unittest.TestCase):
     """VC-16: geometry the parser rejects has to reach the operator."""
 

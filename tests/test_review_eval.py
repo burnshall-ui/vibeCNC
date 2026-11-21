@@ -45,11 +45,12 @@ N170 G00 X100. M05
 N180 M30
 """
 
-# Compensation, an arc outside any cycle, a tool change. Clean too.
+# Compensation, an arc outside any cycle, a tool change. Clean too. The
+# spindle starts on the tool's own block, so no line moves.
 COMP = """(COMP - TEST)
 N10 G18 G40 G80 G97 G99
 N20 G21 G54
-N30 T0101
+N30 T0101 S1000 M03
 N40 G00 X50. Z2.
 N50 G42
 N60 G01 X40. Z0. F0.2

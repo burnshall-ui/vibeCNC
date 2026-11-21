@@ -173,6 +173,10 @@ class LintEngine:
                                          related_code="G76"))
             finds.extend(self._cycle_decimal_points(i+1, ln))
 
+        # 5b) The spindle runs before the tool cuts.
+        if not snippet:
+            finds.extend(self._spindle_findings(lines))
+
         # 6) G41/G42 – simple checks (Fanuc TNR)
         comp_active = False
         current_tool = None
@@ -306,6 +310,56 @@ class LintEngine:
 
     # M30, also written M030 or run together as N100M30; not M300.
     _M30 = re.compile(r'(?<![A-Z])M0*30(?!\d)', re.IGNORECASE)
+
+    # Spindle on (M03, M04) and off (M05); not M30, M40 or M50.
+    _SPINDLE = re.compile(r'(?<![A-Z])M0*([345])(?!\d)', re.IGNORECASE)
+    # The motion group: G00 rapid, G01-G03 cutting. G0 and G1 are the same.
+    _MOTION = re.compile(r'(?<![A-Z])G0*([0-3])(?!\d)', re.IGNORECASE)
+    # A cycle cuts whatever motion was active: G70-G76, and G90, G92, G94 on
+    # a block with a target (without one they are another G-code system's
+    # words, which G-code system A does not have).
+    _CUTTING_CYCLE = re.compile(r'(?<![A-Z])G(?:7[0-6]|9[024])(?!\d)', re.IGNORECASE)
+    _AXIS = re.compile(r'(?<![A-Z])[XZUW][-+]?[\d.]', re.IGNORECASE)
+    # Blocks whose X/Z/U/W are no cut, whatever motion is active: the dwell
+    # (G04 X1. is a second), offset setting, the reference returns -- M05 then
+    # G28 U0 W0 is the usual end of a program -- and G50 X Z.
+    _NOT_A_MOVE = re.compile(r'(?<![A-Z])G(?:0*4|10|2[789]|30|50)(?!\d)', re.IGNORECASE)
+
+    def _spindle_findings(self, lines) -> List[Diagnostic]:
+        """A cutting move or a cycle while the spindle is not running: no M03
+        or M04 before it, or an M05 since.
+
+        With feed per revolution (G99) the axes then wait for a spindle that
+        never turns; with feed per minute (G98) the tool is fed into a
+        standing part. Both start a program that cannot be right. One finding
+        per stretch without the spindle, at its first cut: the moves after it
+        are the same fault. A whole program only -- a snippet goes into a
+        program that starts the spindle, as is_snippet explains.
+        """
+        found = []
+        running, reported, motion = False, False, None
+        for i, ln in enumerate(lines):
+            code = self._strip_comments(ln)
+            # An M03 on the block of the move counts: the control turns the
+            # spindle on before it moves.
+            for m in self._SPINDLE.findall(code):
+                running = m in ("3", "4")
+                if not running:
+                    reported = False
+            for g in self._MOTION.findall(code):
+                motion = int(g)
+            cycle = self._CUTTING_CYCLE.search(code)
+            axis = None if self._NOT_A_MOVE.search(code) else self._AXIS.search(code)
+            cuts = bool(cycle and (cycle.group(0)[1] == "7" or axis)) or (motion in (1, 2, 3)
+                                                                          and axis is not None)
+            if cuts and not running and not reported:
+                found.append(self._f(i + 1, ERROR, "SPINDLE_NOT_STARTED",
+                                     "The tool cuts with the spindle not running: no M03 or M04 "
+                                     "before this move, or an M05 since.",
+                                     hint="Start the spindle (G97 S... M03, or G50 S... and G96 "
+                                          "S... M03) before the first cutting move."))
+                reported = True
+        return found
 
     # A G70-G76 block, the cycle number captured; not G700. A digit may come
     # before the G -- N10G75X26. is a legal block without spaces.
