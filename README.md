@@ -173,10 +173,14 @@ provider behind the model, so think about which programs leave the shop.
 5. **AI Review** - Click `KI: ANALYZE` for safety checks
 6. **Generate Code** - Use `KI: GEN-CODE` or type in chat. The model's draft is
    linted, and what the linter finds is sent back for correction, at most three
-   times. The chat shows the result, "Lint clean – no known faults" or how many
-   findings remain, and the change from the draft. Lint clean means the linter
-   finds nothing it knows about, not that the program is right; nothing is put
-   into the editor, you read it and put it there.
+   times. The draft is linted as a whole program -- header, spindle start,
+   retract and M30 are checked -- unless the switch under the assist box says
+   it is a piece of a program; the switch is off at every start. The chat
+   shows the result, "Lint clean – no known faults" (for a piece: "Lint clean
+   as a piece of a program", and what was not checked) or how many findings
+   remain, and the change from the draft. Lint clean means the linter finds
+   nothing it knows about, not that the program is right; nothing is put into
+   the editor, you read it and put it there.
 
 ### Keyboard Shortcuts
 

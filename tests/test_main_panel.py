@@ -396,12 +396,16 @@ class AssistBoxKeyTests(PanelCase):
     G76_POINT = "G00 X24. Z5.\nG76 P020060 Q0.4 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
     G76_RIGHT = "G00 X24. Z5.\nG76 P020060 Q100 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5"
 
-    def generate(self, *answers):
+    PIECE_CLEAN = "Lint clean as a piece of a program"
+
+    def generate(self, *answers, snippet=True):
         """Asks for a thread, the model answering from a script; returns the
-        window and the conversations it was sent."""
+        window and the conversations it was sent. A piece of a program, as
+        the switch in the assist box says, unless snippet=False."""
         win = self.window()
         win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
         win.input.setText("Cut an M20x2.5 thread")
+        win.chkSnippet.setChecked(snippet)
         script, sent = list(answers), []
         win.ai.chat = lambda messages, system=None: sent.append(messages) or script.pop(0)
         win.action_generate()
@@ -410,7 +414,8 @@ class AssistBoxKeyTests(PanelCase):
     def test_a_clean_answer_is_shown_with_its_code_and_said_to_be_lint_clean(self):
         win, sent = self.generate((True, f"```\n{self.G76_RIGHT}\n```\nM20x2.5, **30 long**."))
 
-        self.assertTrue(self.wait_for_chat(win, "Lint clean – no known faults"))
+        self.assertTrue(self.wait_for_chat(win, self.PIECE_CLEAN))
+        self.assertIn("program end not checked", win.chat.toPlainText())
         shown = win.chat.toPlainText()
         self.assertIn("G76 P020060 Q100 R0.05", shown)
         self.assertNotIn("```", shown)
@@ -428,7 +433,7 @@ class AssistBoxKeyTests(PanelCase):
         win, sent = self.generate((True, f"```\n{self.G76_POINT}\n```"),
                                   (True, f"```\n{self.G76_RIGHT}\n```\nQ written as Q100."))
 
-        self.assertTrue(self.wait_for_chat(win, "Lint clean – no known faults"))
+        self.assertTrue(self.wait_for_chat(win, self.PIECE_CLEAN))
         shown = win.chat.toPlainText()
         self.assertIn("1 correction(s) asked for", shown)
         self.assertIn("-G76 P020060 Q0.4 R0.05", shown)
@@ -445,6 +450,18 @@ class AssistBoxKeyTests(PanelCase):
         self.assertIn("Q0.4", shown)
         self.assertIn("Fix: Write Q400.", shown)
         self.assertIn("came back with the findings of an earlier one", shown)
+
+    def test_a_whole_program_is_asked_for_unless_the_switch_says_a_piece(self):
+        # The switch is off at the start. The same thread is then judged as a
+        # program: no header, no spindle, no M30 -- not clean.
+        self.assertFalse(self.window().chkSnippet.isChecked())
+        repeat = (True, f"```\n{self.G76_RIGHT}\n```")
+        win, _sent = self.generate(repeat, repeat, snippet=False)
+
+        self.assertTrue(self.wait_for_chat(win, "findings remain"))
+        shown = win.chat.toPlainText()
+        self.assertIn("No program end", shown)
+        self.assertNotIn("Lint clean", shown)
 
     def test_an_answer_without_a_code_block_is_shown_and_not_checked(self):
         win, _sent = self.generate((True, "G76 P020060 Q100 R0.05 should do it."))

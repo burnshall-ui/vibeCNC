@@ -84,6 +84,12 @@ class GenerateEvalTests(unittest.TestCase):
         for task in generate_eval.TASKS:
             self.assertTrue(task.request.strip(), task.name)
 
+    def test_the_tasks_that_ask_for_a_program_are_linted_as_one(self):
+        # The loop no longer reads it off the draft: a "complete program"
+        # without its M30 was linted as a piece and came through clean.
+        programs = {t.name for t in generate_eval.TASKS if not t.snippet}
+        self.assertEqual(programs, {"face_turn_program", "gewinde_programm"})
+
 
 if __name__ == "__main__":
     unittest.main()

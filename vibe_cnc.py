@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTableView, QTextEdit, QLineEdit, QLabel, QPushButton,
     QHeaderView, QFileDialog, QAbstractItemView, QMessageBox, QStatusBar,
-    QMenu, QGridLayout
+    QMenu, QGridLayout, QCheckBox
 )
 
 from vibe_cnc.settings_manager import SettingsManager
@@ -165,8 +165,18 @@ class Main(QMainWindow):
         # --- RIGHT: Chat ---
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
         self.input = QLineEdit(); self.input.setPlaceholderText("> Write G71 for T2, depth 5.0 ...")
+        # What AI GENERATE is asked for: a whole program, or a piece that goes
+        # into one. The operator says it, not the model's answer -- read off
+        # the answer, a "complete program" that came back without its M30 was
+        # linted as a piece and passed clean. Off at every start: a piece
+        # leaves the header and the program end unchecked.
+        self.chkSnippet = QCheckBox("Generate a piece of a program (header and M30 not checked)")
+        self.chkSnippet.setToolTip("On: AI GENERATE lints the answer as a piece that goes into a "
+                                   "program; the header, the spindle start, the retract and the "
+                                   "program end are not checked.\n"
+                                   "Off: the answer is linted as a whole program.")
         rightBox = QWidget(); rv = QVBoxLayout(rightBox); rv.setContentsMargins(0,0,0,0); rv.setSpacing(6)
-        rv.addWidget(self.chat); rv.addWidget(self.input)
+        rv.addWidget(self.chat); rv.addWidget(self.input); rv.addWidget(self.chkSnippet)
         right = TitlePanel("Vibe CNC — ASSIST", rightBox, self.cfg_colors)
 
         # --- BOTTOM: 2D Plotter ---
@@ -430,6 +440,7 @@ class Main(QMainWindow):
         set_font(self.editor, 0.95)  # Editor: smaller
         set_font(self.chat, 0.9)     # Chat: smaller
         set_font(self.input, 0.9)    # Input: smaller
+        set_font(self.chkSnippet, 0.85)
         # The libraries are read at a glance while the machine runs, so they get
         # the full base size rather than the 0.9 the code panes use.
         set_font(self.table, 1.0)
@@ -451,7 +462,7 @@ class Main(QMainWindow):
 
     def _set_ai_busy(self, busy: bool):
         self._ai_busy = busy
-        for w in [self.btnAna, self.btnGen, self.input]:
+        for w in [self.btnAna, self.btnGen, self.input, self.chkSnippet]:
             w.setEnabled(not busy)
 
     def _start_ai_task(self, status_message: str, fn, args, completion_handler):
@@ -552,10 +563,11 @@ class Main(QMainWindow):
             self._append_assistant_message("Error", resp, is_error=True)
             self.status.showMessage("❌ AI Error", 5000)
 
-    def _generate(self, request: str):
+    def _generate(self, request: str, snippet: bool):
         """On the worker thread: draft, lint and correct, all of it, so the
         window gets one result. The linter only reads its config here."""
-        return True, verifier.verify(self.ai, request, self.ai.generate_prompt(), self.linter)
+        return True, verifier.verify(self.ai, request, self.ai.generate_prompt(), self.linter,
+                                     snippet=snippet)
 
     def _handle_generate_response(self, ok: bool, resp, who: str):
         """The answer the loop ended with, then what the linter says of it.
@@ -580,6 +592,9 @@ class Main(QMainWindow):
             blocks = outcome.draft.blocks
             return ("not checked: the answer has no code block" if blocks == 0 else
                     f"not checked: the answer has {blocks} code blocks, not one")
+        if outcome.lint_clean and outcome.snippet:
+            return ("Lint clean as a piece of a program – header, spindle start, retract "
+                    "and program end not checked")
         if outcome.lint_clean:
             return "Lint clean – no known faults"
         left = len(blocking(outcome.best.findings))
@@ -1245,7 +1260,9 @@ class Main(QMainWindow):
         # with the code in a styled <pre> before; a fenced block is what every
         # model writes most reliably, and the chat renders it.
         who = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"
-        self._start_ai_task("⚙️ AI generating code, then linting it...", self._generate, (user,),
+        snippet = self.chkSnippet.isChecked()
+        self._start_ai_task("⚙️ AI generating code, then linting it...", self._generate,
+                            (user, snippet),
                             lambda ok, resp, who=who: self._handle_generate_response(ok, resp, who))
 
     # --- Settings ---

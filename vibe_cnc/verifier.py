@@ -120,7 +120,8 @@ def _inventory(code: str) -> Tuple[Counter, dict, Counter]:
 def dropped(draft: str, correction: str, snippet: bool, protected=()) -> Tuple[str, ...]:
     """What the draft had and the correction no longer has: cycle blocks,
     tools, protected M-codes, and the program end of a program. A correction
-    that fixes a finding by deleting the cycle it is in has fixed nothing."""
+    that fixes a finding by deleting the cycle it is in has fixed nothing.
+    A draft that never had an M30 cannot lose it; the linter asks for one."""
     had_cycles, had_tools, had_m = _inventory(draft)
     has_cycles, has_tools, has_m = _inventory(correction)
     gone = []
@@ -134,7 +135,7 @@ def dropped(draft: str, correction: str, snippet: bool, protected=()) -> Tuple[s
     for m in sorted({int(code) for code in protected}):
         if has_m[m] < had_m[m]:
             gone.append(f"M{m}")
-    if not snippet and is_snippet(correction):
+    if not snippet and not is_snippet(draft) and is_snippet(correction):
         gone.append("the program end (M30)")
     return tuple(gone)
 
@@ -183,7 +184,7 @@ class Attempt:
 class Outcome:
     attempts: Tuple[Attempt, ...]           # the draft first, then every correction
     best: Optional[Attempt]                 # fewest ERRORs, then fewest WARNINGs; the earlier on a tie
-    snippet: bool                           # linted as a piece of a program, decided by the draft
+    snippet: bool                           # linted as a piece of a program, as the caller asked
     stop: str                               # why the loop ended, one of the names above
     error: Optional[str] = None             # the backend's message when stop is FAILED
 
@@ -206,12 +207,17 @@ class Outcome:
 
 
 def verify(client, request: str, system: Optional[str], linter,
-           corrections: int = MAX_CORRECTIONS) -> Outcome:
+           corrections: int = MAX_CORRECTIONS, *, snippet: bool) -> Outcome:
     """Draft, lint, correct.
 
     client: anything with chat(messages, system) -> (ok, text), as AIClient.
     linter: anything with run_all(code, snippet=...), as LintEngine; its
     protected_m, if it has one, is kept by the delete guard as well.
+    snippet: what was asked for -- a piece that goes into a program, so the
+    rules about a whole program (header, spindle start, retract, program
+    end) do not apply, or a whole program. The caller says it, not the
+    draft: it was read off the draft before, so a "complete program" that
+    came back without its M30 was linted as a piece and passed clean.
 
     Every correction is asked for in the same conversation, so the model
     sees its own earlier answers. A correction is rejected when it drops
@@ -224,12 +230,11 @@ def verify(client, request: str, system: Optional[str], linter,
     conversation = [user(generation_request(request))]
     ok, answer = client.chat(conversation, system)
     if not ok:
-        return Outcome((), None, False, FAILED, answer)
+        return Outcome((), None, snippet, FAILED, answer)
     code, blocks = the_code(answer)
     if code is None:
-        return Outcome((Attempt(answer, None, blocks),), None, False, NO_CODE)
+        return Outcome((Attempt(answer, None, blocks),), None, snippet, NO_CODE)
 
-    snippet = is_snippet(code)
     protected = getattr(linter, "protected_m", ())
     draft = Attempt(answer, code, blocks, tuple(linter.run_all(code, snippet=snippet)))
     attempts = [draft]

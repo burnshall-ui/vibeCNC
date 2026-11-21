@@ -47,6 +47,9 @@ OUT_DIR = os.path.join(ROOT, "_tmp", "generate_eval")
 class Task:
     name: str
     request: str
+    # A piece that goes into a program, or a whole program: the switch in
+    # the assist box. The loop lints each as what was asked for.
+    snippet: bool = True
 
 
 # What a shop asks for, every value a program needs given, so a model has no
@@ -68,11 +71,11 @@ TASKS = [
     Task("face_turn_program",
          "Write a complete program O2001: face a Ø60 bar of 42CrMo4 at Z0 and turn it to "
          "Ø55 for 40 mm, one tool T0101, constant surface speed 180 m/min with a 2500 rpm "
-         "limit, F0.2. With the safety header and a safe end of program."),
+         "limit, F0.2. With the safety header and a safe end of program.", snippet=False),
     Task("gewinde_programm",
          "Schreibe ein komplettes Programm O2002, Werkstoff C45: Außengewinde M24x3, 25 mm "
          "lang, ab Z0, mit G76, Gewindedrehmeißel T0303, Drehzahl 600 U/min. Mit "
-         "Sicherheitsblock am Anfang und sicherem Programmende."),
+         "Sicherheitsblock am Anfang und sicherem Programmende.", snippet=False),
     # It asked for "Ø80 down to Ø40 at Z-5, then Ø40 down to Ø20 at Z-10" until
     # 2026-11-21: deeper inside than outside, a pocket in the face, which G72
     # type I cannot cut. The answers of both runs followed it to the letter.
@@ -148,7 +151,7 @@ def run(tasks, client, linter, mode: str, model: str, repeat: int, out_path: str
         for n in range(total):
             task = tasks[n % len(tasks)]
             started = time.monotonic()
-            outcome = verify(client, task.request, system, linter)
+            outcome = verify(client, task.request, system, linter, snippet=task.snippet)
             seconds = time.monotonic() - started
             record = dict({"when": datetime.now().isoformat(timespec="seconds"), "mode": mode,
                            "model": model, "task": task.name, "request": task.request,

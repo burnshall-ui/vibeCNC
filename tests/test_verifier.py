@@ -65,7 +65,7 @@ class TheLoopTests(unittest.TestCase):
     def test_a_decimal_point_in_g76_q_is_corrected_in_the_second_round(self):
         model = Model(answer(G76_POINT), answer(G76_RIGHT))
 
-        outcome = verify(model, "Cut an M20x2.5 thread, 30 long.", "Be a CNC programmer.", linter())
+        outcome = verify(model, "Cut an M20x2.5 thread, 30 long.", "Be a CNC programmer.", linter(), snippet=True)
 
         self.assertTrue(outcome.lint_clean)
         self.assertEqual(outcome.stop, CLEAN)
@@ -76,7 +76,7 @@ class TheLoopTests(unittest.TestCase):
     def test_the_correction_is_asked_for_in_the_same_conversation(self):
         model = Model(answer(G76_POINT), answer(G76_RIGHT))
 
-        verify(model, "Cut an M20x2.5 thread.", "Be a CNC programmer.", linter())
+        verify(model, "Cut an M20x2.5 thread.", "Be a CNC programmer.", linter(), snippet=True)
 
         (first, system1), (second, system2) = model.sent
         self.assertEqual(system1, "Be a CNC programmer.")
@@ -94,7 +94,7 @@ class TheLoopTests(unittest.TestCase):
     def test_a_clean_draft_is_not_sent_back(self):
         model = Model(answer(G76_RIGHT))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertTrue(outcome.lint_clean)
         self.assertEqual(outcome.corrections, 0)
@@ -106,7 +106,7 @@ class TheLoopTests(unittest.TestCase):
         code = "G00 X24. Z5.\nG76 P020060 Q100\nG76 X16.93 Z-30. P1534 Q400 F2.5"
         model = Model(answer(code))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual([d.severity for d in outcome.best.findings], ["INFO"])
         self.assertTrue(outcome.lint_clean)
@@ -116,7 +116,7 @@ class TheLoopTests(unittest.TestCase):
         # One line more above it: the finding moved, it did not change.
         model = Model(answer(G76_POINT), answer("(M20x2.5)\n" + G76_POINT))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, REPEATED)
         self.assertEqual(len(model.sent), 2)
@@ -127,7 +127,7 @@ class TheLoopTests(unittest.TestCase):
         model = Model(answer(G76_POINT), answer(G76_POINT.replace("Q0.4", "Q0.5")),
                       answer(G76_RIGHT))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, CLEAN)
         self.assertEqual(outcome.corrections, 2)
@@ -135,7 +135,7 @@ class TheLoopTests(unittest.TestCase):
     def test_it_stops_after_three_corrections(self):
         model = Model(*(answer(G76_POINT.replace("Q0.4", f"Q0.{n}")) for n in range(4, 9)))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(MAX_CORRECTIONS, 3)
         self.assertEqual(outcome.stop, OUT_OF_ROUNDS)
@@ -151,7 +151,7 @@ class TheLoopTests(unittest.TestCase):
         worse = PROGRAM.replace("G18 G21 G40 G80 G97 G54", "G40 G97")
         model = Model(answer(bare), answer(better), answer(worse), answer(worse + "\n(again)"))
 
-        outcome = verify(model, "Program", None, linter())
+        outcome = verify(model, "Program", None, linter(), snippet=False)
 
         self.assertIs(outcome.best, outcome.attempts[1])
         self.assertEqual(outcome.best.code, better)
@@ -160,7 +160,7 @@ class TheLoopTests(unittest.TestCase):
     def test_the_diff_runs_from_the_draft_to_the_result(self):
         model = Model(answer(G76_POINT), answer(G76_RIGHT))
 
-        diff = change(verify(model, "Thread", None, linter()))
+        diff = change(verify(model, "Thread", None, linter(), snippet=True))
 
         self.assertIn("--- draft", diff)
         self.assertIn("+++ result", diff)
@@ -172,7 +172,7 @@ class DeleteGuardTests(unittest.TestCase):
     def test_a_correction_that_deletes_the_cycle_is_rejected_and_the_model_told_why(self):
         model = Model(answer(G76_POINT), answer("G00 X24. Z5."), answer(G76_RIGHT))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertTrue(outcome.attempts[1].rejected)
         self.assertEqual(outcome.attempts[1].dropped, ("G76",))
@@ -188,7 +188,7 @@ class DeleteGuardTests(unittest.TestCase):
         # Lint clean, because the cycle with the fault is gone.
         model = Model(answer(G76_POINT), *[answer("G00 X24. Z5.")] * 3)
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, OUT_OF_ROUNDS)
         self.assertEqual(outcome.rejections, 3)
@@ -211,6 +211,11 @@ class DeleteGuardTests(unittest.TestCase):
     def test_a_snippet_need_not_end_the_program(self):
         self.assertEqual(dropped(G76_RIGHT, G76_RIGHT, True), ())
 
+    def test_a_draft_without_m30_cannot_lose_it(self):
+        # A program was asked for and the draft forgot its end; the linter
+        # asks for one, and a correction still without it has dropped nothing.
+        self.assertEqual(dropped("G00 X30.\nG01 Z-5.", "G21 G40\nG00 X30.\nG01 Z-5.", False), ())
+
     def test_g90_g92_and_g94_are_cycles_too(self):
         # G-code system A: turning, threading and facing in one block.
         draft = "G90 X30. Z-20. F0.2\nG92 X19.2 Z-30. F2.5\nG94 X0 Z-1. F0.1"
@@ -226,22 +231,43 @@ class DeleteGuardTests(unittest.TestCase):
         draft = "G00 X30. Z2.\nM62\n" + G76_POINT
         model = Model(answer(draft), answer(G76_RIGHT), answer("G00 X30. Z2.\nM62\n" + G76_RIGHT))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.attempts[1].dropped, ("M62",))
         self.assertEqual(outcome.stop, CLEAN)
 
 
 class SnippetTests(unittest.TestCase):
-    def test_code_without_m30_is_linted_as_a_snippet(self):
-        outcome = verify(Model(answer(G76_RIGHT)), "Thread", None, linter())
+    def test_a_piece_asked_for_is_linted_as_a_piece(self):
+        outcome = verify(Model(answer(G76_RIGHT)), "Thread", None, linter(), snippet=True)
 
         self.assertTrue(outcome.snippet)
         self.assertTrue(outcome.lint_clean)      # no header asked of it
 
+    def test_a_program_asked_for_that_comes_back_without_its_end_is_not_clean(self):
+        # The draft decided it before: no M30, so a piece, so no header, no
+        # spindle and no end were asked of it, and this came through clean.
+        bare = "G00 X50 Z50"
+        model = Model(answer(bare), answer(bare))
+
+        outcome = verify(model, "Write a complete program.", None, linter(), snippet=False)
+
+        self.assertFalse(outcome.snippet)
+        self.assertFalse(outcome.lint_clean)
+        self.assertTrue({"HEADER_CODE", "UNITS", "PROGRAM_END"}
+                        <= {d.rule for d in outcome.draft.findings})
+
+    def test_the_same_code_is_judged_by_what_was_asked_for(self):
+        as_piece = verify(Model(answer(G76_RIGHT)), "Thread", None, linter(), snippet=True)
+        as_program = verify(Model(answer(G76_RIGHT), answer(G76_RIGHT)), "Thread", None,
+                            linter(), snippet=False)
+
+        self.assertTrue(as_piece.lint_clean)
+        self.assertFalse(as_program.lint_clean)
+
     def test_a_program_is_linted_as_one(self):
         bare = PROGRAM.replace("G18 G21 G40 G80 G97 G54", "G97")
-        outcome = verify(Model(answer(bare), answer(PROGRAM)), "Program", None, linter())
+        outcome = verify(Model(answer(bare), answer(PROGRAM)), "Program", None, linter(), snippet=False)
 
         self.assertFalse(outcome.snippet)
         self.assertIn("HEADER_CODE", {d.rule for d in outcome.draft.findings})
@@ -253,7 +279,7 @@ class SnippetTests(unittest.TestCase):
         no_retract = PROGRAM.replace("G00 Z50.\nX200.\n", "G00 X30.\nX200.\nM05\n")
         model = Model(answer(no_retract), answer(no_retract.replace("M30\n", "")), answer(PROGRAM))
 
-        outcome = verify(model, "Program", None, linter())
+        outcome = verify(model, "Program", None, linter(), snippet=False)
 
         self.assertEqual(outcome.attempts[1].dropped, ("the program end (M30)",))
         self.assertEqual(outcome.stop, CLEAN)
@@ -266,7 +292,7 @@ class CollisionTests(unittest.TestCase):
         model = Model(answer(into), answer(clear))
 
         outcome = verify(model, "Turn Ø40", None,
-                         linter(chuck_z_limit=-100.0, chuck_diameter=210.0))
+                         linter(chuck_z_limit=-100.0, chuck_diameter=210.0), snippet=True)
 
         self.assertIn("CHUCK_COLLISION", model.sent[1][0][-1]["content"])
         self.assertTrue(outcome.lint_clean)
@@ -276,7 +302,7 @@ class AnswerTests(unittest.TestCase):
     def test_an_answer_without_a_code_block_is_shown_as_it_came(self):
         model = Model("G00 X30.\nG01 Z-5. F0.2\nThat should do.")
 
-        outcome = verify(model, "Turn", None, linter())
+        outcome = verify(model, "Turn", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, NO_CODE)
         self.assertIsNone(outcome.best)
@@ -287,7 +313,7 @@ class AnswerTests(unittest.TestCase):
     def test_two_code_blocks_are_not_guessed_between(self):
         model = Model(answer(G76_RIGHT) + "\nOr:\n" + answer(G76_RIGHT.replace("Q100", "Q150")))
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, NO_CODE)
         self.assertEqual(outcome.draft.blocks, 2)
@@ -296,13 +322,13 @@ class AnswerTests(unittest.TestCase):
     def test_a_correction_without_a_code_block_ends_with_the_best_so_far(self):
         model = Model(answer(G76_POINT), "I cannot fix that.")
 
-        outcome = verify(model, "Thread", None, linter())
+        outcome = verify(model, "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, NO_CODE)
         self.assertIs(outcome.best, outcome.draft)
 
     def test_a_backend_failure_on_the_draft_is_passed_on(self):
-        outcome = verify(Model((False, "❌ no credit")), "Thread", None, linter())
+        outcome = verify(Model((False, "❌ no credit")), "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, FAILED)
         self.assertEqual(outcome.error, "❌ no credit")
@@ -311,7 +337,7 @@ class AnswerTests(unittest.TestCase):
         self.assertFalse(outcome.lint_clean)
 
     def test_a_backend_failure_later_keeps_what_there_is(self):
-        outcome = verify(Model(answer(G76_POINT), (False, "❌ rate limit")), "Thread", None, linter())
+        outcome = verify(Model(answer(G76_POINT), (False, "❌ rate limit")), "Thread", None, linter(), snippet=True)
 
         self.assertEqual(outcome.stop, FAILED)
         self.assertEqual(outcome.error, "❌ rate limit")

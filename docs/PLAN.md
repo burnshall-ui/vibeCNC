@@ -139,9 +139,13 @@ Severity follows the consequence:
 
 `lint_clean` means no ERROR and no WARNING.
 
-**Snippets.** Code without M30 or M02 is a snippet, not a program. The rules
-about a whole program (header, retract before M30) do not apply to it; the
-rules about cycles, arcs, feeds and collisions always do.
+**Snippets.** A snippet is a piece of a program, not a program. The rules
+about a whole program (header, spindle start, retract before M30, program end)
+do not apply to it; the rules about cycles, arcs, feeds and collisions always
+do. Who says it is a snippet is the caller: the operator's switch for GEN-CODE,
+and an analysis of the editor is always of a program. It was read off the
+draft until 2026-11-21 (no M30, so a snippet), and a "complete program" that
+came back without its M30 passed clean.
 
 ### IR
 
