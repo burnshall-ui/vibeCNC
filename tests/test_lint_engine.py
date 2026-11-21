@@ -353,6 +353,35 @@ class LintEngineParserWarningTests(unittest.TestCase):
         self.assertTrue(any(f.rule.startswith("ARC_R_") for f in findings))
         self.assertIn(M_RULE, [f.rule for f in findings])
 
+    def test_a_parser_that_chokes_keeps_the_program_from_lint_clean(self):
+        # It was caught and dropped: the geometry, chuck and retract checks
+        # were skipped without a word, and a program that only passed the text
+        # rules came out "lint clean -- no known faults".
+        engine = LintEngine(make_cfg())
+        with open(FIXTURE, encoding="utf-8") as f:
+            program = f.read()
+        self.assertTrue(is_lint_clean(engine.run_all(program)))
+
+        with patch("vibe_cnc.gcode_parser.GCodeParser.parse",
+                   side_effect=ValueError("bad arc")):
+            findings = engine.run_all(program)
+            piece = engine.run_all("G01 X30. Z-5. F0.2", snippet=True)
+
+        failed = rules(findings, "PARSER_FAILED")
+        self.assertEqual([(f.line, f.severity) for f in failed], [(1, "ERROR")])
+        self.assertIn("ValueError: bad arc", failed[0].message)
+        self.assertIn("did not run", failed[0].message)
+        self.assertFalse(is_lint_clean(findings))
+        # A piece of a program is drawn by the parser too.
+        self.assertEqual(len(rules(piece, "PARSER_FAILED")), 1)
+
+    def test_a_parser_that_reads_the_program_adds_no_failure(self):
+        engine = LintEngine(make_cfg())
+
+        findings = engine.run_all("G00 X30. Z0.\nG02 X40. Z-5.")
+
+        self.assertEqual(rules(findings, "PARSER_FAILED"), [])
+
     def test_every_finding_carries_the_keys_the_ui_reads(self):
         engine = LintEngine(make_cfg())
 

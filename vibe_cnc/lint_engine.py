@@ -274,11 +274,20 @@ class LintEngine:
 
         # 7) Geometry the parser could not make sense of, moves into the
         #    chuck, and where the tool stands when the program ends
-        parser = self._parse(code)
+        parser, failure = self._parse(code)
         if parser is not None:
             finds.extend(self._parser_findings(parser))
             if not snippet:
                 finds.extend(self._retract_findings(parser, lines))
+        else:
+            # The checks that need the toolpaths did not run. Saying nothing
+            # let such a program come out lint clean -- "no known faults"
+            # after the geometry, chuck and retract checks were skipped.
+            finds.append(self._f(1, ERROR, "PARSER_FAILED",
+                                 f"The simulator could not read the program ({failure}), so "
+                                 "the geometry, chuck and retract checks did not run.",
+                                 hint="Check the program by hand; the other findings are "
+                                      "not all there could be."))
 
         # One list, in program order, without exact repeats -- several
         # protected M-codes on one line used to yield the same text twice.
@@ -476,7 +485,8 @@ class LintEngine:
         return unique
 
     def _parse(self, code: str):
-        """The parser, run over the code; None when it choked."""
+        """(parser, None) with the parser run over the code, or (None, what
+        went wrong) when it choked."""
         try:
             from .gcode_parser import GCodeParser
             if self.chuck_z is not None:
@@ -484,10 +494,11 @@ class LintEngine:
             else:
                 parser = GCodeParser()
             parser.parse(code)
-        except Exception:
-            # Linting must never fail because the parser choked on something.
-            return None
-        return parser
+        except Exception as e:
+            # Linting must never fail because the parser choked on something,
+            # but the caller has to say that it did.
+            return None, f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        return parser, None
 
     # What removes material, as the parser files it.
     _CUTTING_KINDS = ("cut", "finish", "thread")
