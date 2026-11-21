@@ -289,7 +289,7 @@ sample programs look the same (checked by eye, as before).
 | Generate tasks of their own | the eval's parts must differ from the card examples |
 | G71/G72 escape at feed | the manual has the 45° escape after each pass in cutting feed; the parser draws a rapid, and `tests/test_reference.py` has to be worked out again by hand |
 | G75 with Z travel and Q0 | lint-clean today; the manual does not say what the control does |
-| Rapid through stock | needs a model of the material removed so far: stock changes as it is cut, so checking against the blank raises false alarms |
+| Rapid through stock | needs the material removed so far: checking against the blank raises false alarms. `stock_model.py` now keeps it for the picture, but takes each tool body as a square quadrant behind the tip, which removes more than a real insert; a check built on it would miss rapids into what a real insert leaves standing |
 | Machine profile (travel, max rpm) | when the values are measured, not estimated |
 | PDF importer for machine manuals | local only; produces card drafts with `verified = false` for a person to check; the manual never enters the repository |
 

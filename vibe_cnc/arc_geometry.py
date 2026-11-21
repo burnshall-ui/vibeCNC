@@ -1,4 +1,5 @@
-# arc_geometry.py — arc angle maths for the plotter, free of GUI dependencies.
+# arc_geometry.py — arc angle maths for the plotter and the stock model, free of
+# GUI dependencies.
 #
 # Kept out of gcode_plotter so the direction logic can be tested on a bare
 # interpreter, like the parser and the lint engine. Whether an operator sees the
@@ -62,3 +63,27 @@ def arc_sweep(arc: dict) -> float:
     if theta2 != theta1 and eta2 <= theta1:
         eta2 += 360.0
     return eta2 - theta1
+
+
+def sample_arc(arc: dict, steps: int) -> list:
+    """The arc as steps + 1 points (X, Z), both ends included, in travel order.
+
+    X is a diameter, as everywhere in the parsed paths. arc_thetas hands back
+    the pair matplotlib wants, which for a counter-clockwise arc means the end
+    angle first -- fine for a static patch, and fine for the collision check,
+    which only looks at neighbouring pairs. A contour has to come out the way
+    the tool runs it, so that case is turned back round here.
+    """
+    theta1, _theta2 = arc_thetas(arc)
+    sweep = arc_sweep(arc)
+    cr, cz = arc['center'][0] / 2.0, arc['center'][1]
+    radius = arc['radius']
+
+    points = []
+    for step in range(steps + 1):
+        angle = math.radians(theta1 + sweep * step / steps)
+        points.append((2.0 * (cr + radius * math.cos(angle)),
+                       cz + radius * math.sin(angle)))
+    if not arc['cw']:
+        points.reverse()
+    return points

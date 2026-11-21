@@ -6,7 +6,7 @@ import re
 import math
 from typing import List
 
-from .arc_geometry import arc_sweep, arc_thetas
+from .arc_geometry import sample_arc
 from .tool_data import nose_direction_of, nose_offset
 
 # G-codes whose X/Z/U/W/R words are dwell times, offsets or cycle parameters
@@ -1436,27 +1436,8 @@ class GCodeParser:
         return None
 
     def _sample_arc(self, arc):
-        """The arc as a list of points, both ends included, in travel order.
-
-        arc_thetas hands back the pair matplotlib wants, which for a
-        counter-clockwise arc means the end angle first -- fine for a static
-        patch, and fine for the collision check, which only looks at
-        neighbouring pairs. A contour has to come out the way the tool runs it,
-        so that case is turned back round here.
-        """
-        theta1, _theta2 = arc_thetas(arc)
-        sweep = arc_sweep(arc)
-        cr, cz = arc['center'][0] / 2.0, arc['center'][1]
-        radius = arc['radius']
-
-        points = []
-        for step in range(self.ARC_SAMPLE_STEPS + 1):
-            angle = math.radians(theta1 + sweep * step / self.ARC_SAMPLE_STEPS)
-            points.append((2.0 * (cr + radius * math.cos(angle)),
-                           cz + radius * math.sin(angle)))
-        if not arc['cw']:
-            points.reverse()
-        return points
+        """The arc as a list of points, both ends included, in travel order."""
+        return sample_arc(arc, self.ARC_SAMPLE_STEPS)
 
     def _intersect_compensated_corners(self):
         """Intersects corners of compensated paths (Lookahead Corner Handling)"""

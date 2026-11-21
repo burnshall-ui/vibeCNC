@@ -204,6 +204,43 @@ class PlotViewTests(unittest.TestCase):
     def test_without_a_stock_comment_no_blank_is_drawn(self):
         self.assertEqual(self.stock_patches(self.plotter(self.PART)), [])
 
+    # Line 4 cuts X30 from the face to Z-20 with an OD tool (tip 2).
+    TURNED = ("(STOCK D40 L50)\nT0101\nG00 X30. Z2.\nG01 Z-20. F0.2\n"
+              "G00 X100. Z50.")
+
+    def turned(self):
+        widget = GCodePlotterWidget(COLORS, chuck_z=-1000.0)
+        self.addCleanup(widget.deleteLater)
+        widget.parser.tool_items = {1: {"type": "turn_rough", "nose_direction": 2}}
+        widget.set_gcode(self.TURNED)
+        return widget
+
+    @staticmethod
+    def solid(widget, z, x):
+        """Whether the material as drawn covers the point (Z, X)."""
+        return any(p.get_path().contains_point((z, x))
+                   for p in widget.ax.patches if p.get_gid() == 'material')
+
+    def test_the_finished_part_is_drawn_over_the_blank(self):
+        widget = self.turned()
+
+        self.assertTrue(self.solid(widget, -10.0, 29.5))
+        self.assertFalse(self.solid(widget, -10.0, 30.5))
+        self.assertTrue(self.solid(widget, -30.0, 39.5))
+        # The blank stays, as it was, for what has been cut away.
+        (blank,) = self.stock_patches(widget)
+        self.assertEqual(blank.get_height(), 40.0)
+
+    def test_the_playback_cuts_the_material_when_it_reaches_the_cut(self):
+        widget = self.turned()
+
+        widget.set_live_max_line(3)
+        self.assertTrue(self.solid(widget, -10.0, 35.0))
+
+        widget.set_live_max_line(4)
+        self.assertFalse(self.solid(widget, -10.0, 35.0))
+        self.assertTrue(self.solid(widget, -10.0, 29.5))
+
     def test_the_view_makes_room_for_the_stock(self):
         # A short cut on a long blank: the blank is what the part is made of.
         widget = self.plotter("(STOCK D40 L50)\nG00 X30. Z2.\nG01 Z-5. F0.2")

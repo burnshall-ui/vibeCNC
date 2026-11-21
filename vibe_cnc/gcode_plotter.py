@@ -14,6 +14,7 @@ import matplotlib.patches as patches
 # Re-exported here because this module has always been its import site.
 from vibe_cnc.gcode_parser import GCodeParser
 from vibe_cnc.arc_geometry import arc_thetas
+from vibe_cnc.stock_model import StockPlayback
 
 
 
@@ -58,6 +59,8 @@ class GCodePlotterWidget(QWidget):
         self._moves_of_line = {}
         self._rank = {}
         self._move_of = {}  # id() of a straight segment -> (list, index)
+        # What is left of the blank, move by move. Rebuilt after every parse.
+        self._stock_playback = None
 
         # Matplotlib Figure
         self.fig = Figure(figsize=(6, 4), dpi=100, facecolor='#1A1A1A')
@@ -214,7 +217,13 @@ class GCodePlotterWidget(QWidget):
                                       theta2=90.0 - theta1, **style))
 
     def _draw_stock(self):
-        """Draws the blank behind everything else, when the program names one."""
+        """Draws the blank behind everything else, when the program names one,
+        and what is left of it at this point of the playback.
+
+        The blank stays as a dashed outline, so what has been cut away still
+        shows where it was. What is left comes from stock_model, which says
+        what it assumes about the tools.
+        """
         stock = self.paths_cache.get('stock') if self.paths_cache else None
         if not stock:
             return
@@ -224,8 +233,15 @@ class GCodePlotterWidget(QWidget):
         # edge -- the way the control draws a turned part.
         self.ax.add_patch(patches.Rectangle(
             (z_front - stock['length'], 0.0), stock['length'], diameter,
-            linewidth=1, edgecolor='#666666', facecolor='#202020',
+            linewidth=0.8, linestyle='--', edgecolor='#555555', facecolor='none',
             zorder=0.5, gid='stock'))
+        model = (self._stock_playback.at(self._moves_reached())
+                 if self._stock_playback else None)
+        for outline in (model.outline() if model else ()):
+            self.ax.add_patch(patches.Polygon(
+                [(z, x) for x, z in outline], closed=True,
+                linewidth=1, edgecolor='#666666', facecolor='#202020',
+                zorder=0.6, gid='material'))
         # At the far end, clear of the rapids that arrive at the front face.
         self.ax.text(z_front - stock['length'], diameter,
                      f" STOCK Ø{diameter:g} × {stock['length']:g}",
@@ -420,6 +436,7 @@ class GCodePlotterWidget(QWidget):
         # Parse G-Code
         self.paths_cache = self.parser.parse(self.pending_code)
         self._index_moves()
+        self._stock_playback = StockPlayback(self.paths_cache, self.parser.tool_items)
 
         if not self._draw_scene():
             self._draw_empty()
@@ -733,6 +750,17 @@ class GCodePlotterWidget(QWidget):
         # move, so they can borrow its place in the line.
         self._move_of = {id(self.paths_cache[kind][index]): (kind, index)
                          for (kind, index) in self._rank if kind != 'arc'}
+
+    def _moves_reached(self) -> int:
+        """How many moves the playback has reached, in the order they run.
+
+        All of them outside a playback, so the static picture is the finished part.
+        """
+        order = self.paths_cache['order']
+        for count, (kind, index, line) in enumerate(order):
+            if not self._shown(line, (kind, index)):
+                return count
+        return len(order)
 
     def _shown(self, line: int, move=None) -> bool:
         """Whether something filed under `line` is drawn at this point of the playback.
