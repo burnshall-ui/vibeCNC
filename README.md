@@ -16,7 +16,7 @@ system A), with a rule-based checker and optional AI review and generation.
 > and keep a hand on feed hold. The authors accept no liability for crashes,
 > scrapped parts or injury.
 
-![Vibe CNC: a turning program in the editor beside the simulation, which shows the finished shaft as a half section over the dashed blank, with the tools, macros and assist tabs below it](docs/images/vibe-cnc.png)
+![Vibe CNC: a turning program in the editor beside the simulation, which shows the insert cutting a roughing pass of G71 on a half section of the shaft, the position display above it and the timeline below](docs/images/vibe-cnc.png)
 
 ## Features
 
