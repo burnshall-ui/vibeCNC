@@ -13,6 +13,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
+from matplotlib.transforms import Affine2D
 from matplotlib.path import Path
 import matplotlib.patches as patches
 
@@ -22,6 +23,7 @@ import matplotlib.patches as patches
 from vibe_cnc.gcode_parser import GCodeParser
 from vibe_cnc.arc_geometry import arc_thetas, sample_arc
 from vibe_cnc.stock_model import StockPlayback, body_for, tool_at
+from vibe_cnc.tool_shape import drill_outline, turning_outline, turning_tool
 
 # The look: graphite under the part, and Fanuc yellow (`ui.fanuc_yellow` in
 # config.yaml) for the move being made and nothing else, so it stays a signal.
@@ -61,6 +63,15 @@ STEEL = np.array([0.47, 0.52, 0.58])
 # A step in diameter this big (mm) is a shoulder, drawn as a line across the
 # view. Smaller ones are the slices of a chamfer or a radius.
 SHOULDER_MIN = 1.0
+
+# The tool, where the playback has it: holder, insert with a yellow edge, the
+# screw that holds it; or the drill.
+HOLDER_FILL = '#343B45'
+HOLDER_EDGE = '#6A7482'
+INSERT_FILL = '#20242B'
+SCREW_FILL = '#14171B'
+SCREW_EDGE = '#5A626D'
+DRILL_FILL = '#3A414B'
 
 # A datum mark: a circle with two opposite quarters filled.
 ORIGIN_MARK = Path.make_compound_path(Path.wedge(0, 90), Path.wedge(180, 270))
@@ -174,6 +185,8 @@ class GCodePlotterWidget(QWidget):
         self._static_bg = None
         self._scene_bg = None
         self._glow = []
+        self._tool_art = {}   # tool number -> its artists in the motion layer
+        self._changes = []    # (line, tool) of every tool change, by line
         # A move running its course: see _start_glide. 50 frames a second at most.
         self._glide = None
         self._glide_timer = QTimer(self)
@@ -235,6 +248,7 @@ class GCodePlotterWidget(QWidget):
         self.ax.clear()
         self._scene = {}
         self._glow = []
+        self._tool_art = {}
         self.highlight_artist = None
         self.live_text = None
         self._invalidate()
@@ -524,6 +538,7 @@ class GCodePlotterWidget(QWidget):
         self._ahead_for = None
         self._tools_shown = None
         self._stock_drawn = None
+        self._tool_art = {}
         self._invalidate()
         self.highlight_artist = None  # Invalid after clear() - will be recreated
         self.live_text = None  # Invalid after clear() - will be recreated
@@ -780,6 +795,8 @@ class GCodePlotterWidget(QWidget):
         self.paths_cache = self.parser.parse(self.pending_code)
         self._index_moves()
         self._stock_playback = StockPlayback(self.paths_cache, self.parser.tool_items)
+        self._changes = sorted((change['line'], change['tool'])
+                               for change in self.paths_cache['tool_changes'])
         self._drill_lines = self._lines_drilled()
 
         if not self._draw_scene():
@@ -816,6 +833,8 @@ class GCodePlotterWidget(QWidget):
 
     def _motion_artists(self):
         artists = list(self._glow)
+        artists += [artist for drawn in self._tool_art.values() for artist in drawn
+                    if artist.get_visible()]
         for artist in (self.highlight_artist, self.live_text):
             if artist is not None and artist.axes is self.ax:
                 artists.append(artist)
@@ -884,8 +903,75 @@ class GCodePlotterWidget(QWidget):
                 segments = self._segments_of(kind, index)
         for collection in self._glow:
             collection.set_segments(segments)
+        self._place_tool(current)
         self._draw_highlight()
         self._refresh_live_text()
+
+    def _place_tool(self, current):
+        """Puts the tool of the move being made at its tip; hides the others."""
+        number = None
+        point = None
+        if current is not None:
+            line = self.paths_cache['order'][current[0]][2]
+            number = tool_at(line, self._changes)
+            point = self._tool_point()
+        for other, artists in self._tool_art.items():
+            if other != number:
+                for artist in artists:
+                    artist.set_visible(False)
+        if number is None or point is None:
+            return
+        at_tip = Affine2D().translate(point[1], point[0]) + self.ax.transData
+        for artist in self._tool_artists(number):
+            artist.set_transform(at_tip)
+            artist.set_visible(True)
+
+    def _tool_artists(self, number) -> list:
+        """The artists that draw one tool, made the first time it is needed.
+
+        Drawn from tool_shape at the tool's real size, X doubled as everywhere
+        in this plot. A tool whose codes say too little gets none: the ring
+        marks it.
+        """
+        if number in self._tool_art:
+            return self._tool_art[number]
+        record = self.parser.tool_items.get(number)
+        accent = self.colors['FANUC_YELLOW']
+
+        def plotted(points):
+            return [(dz, 2.0 * dr) for dz, dr in points]
+
+        artists = []
+        shape = turning_tool(record)
+        body = body_for(record)
+        if shape is not None:
+            outline = turning_outline(shape)
+            insert = plotted(outline['insert'])
+            artists.append(patches.Polygon(plotted(outline['holder']), closed=True,
+                                           facecolor=HOLDER_FILL, edgecolor=HOLDER_EDGE,
+                                           linewidth=1.0, zorder=7.8, gid='holder'))
+            for width, alpha in ((6.0, 0.08), (3.0, 0.18)):
+                artists.append(patches.Polygon(insert, closed=True, facecolor='none',
+                                               edgecolor=accent, linewidth=width, alpha=alpha,
+                                               joinstyle='round', zorder=7.9))
+            artists.append(patches.Polygon(insert, closed=True, facecolor=INSERT_FILL,
+                                           edgecolor=accent, linewidth=1.3, joinstyle='round',
+                                           zorder=8, gid='insert'))
+            (hz, hr), radius = outline['hole']
+            artists.append(patches.Ellipse((hz, 2.0 * hr), 2.0 * radius, 4.0 * radius,
+                                           facecolor=SCREW_FILL, edgecolor=SCREW_EDGE,
+                                           linewidth=1.0, zorder=8.1))
+        elif body.kind == 'drill':
+            artists.append(patches.Polygon(plotted(drill_outline(2.0 * body.radius)),
+                                           closed=True, facecolor=DRILL_FILL, edgecolor=accent,
+                                           linewidth=1.3, joinstyle='round', zorder=8,
+                                           gid='drill'))
+        for artist in artists:
+            self.ax.add_artist(artist)
+            artist.set_animated(True)
+            artist.set_visible(False)
+        self._tool_art[number] = artists
+        return artists
 
     def _start_glide(self, glide_ms, made_before):
         """Lets the move just reached run its course over glide_ms.

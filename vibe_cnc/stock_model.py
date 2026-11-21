@@ -18,13 +18,13 @@
 # A tool removes what its body passes through. Where the body is comes from the
 # tip number in tools.json: it lies on the side of the programmed point that the
 # nose radius centre is on (tool_data.NOSE_OFFSETS). Tip 2, the OD tool, reaches
-# out and back from the tip; tip 3, the boring bar, in and back. The insert's
-# shape is not in the table, so the body is the whole quadrant: a square
-# shoulder behind the tip. A real insert clears the finished surface behind it
-# by its trailing edge angle -- 5 degrees for a CNMG in a 95 degree holder,
-# more for a 35 degree VBMT --, so a move that runs down towards the chuck shows
-# a gouge here sooner than it would on the machine. `Body.trailing_deg` is the
-# place for that angle once the tool data carries it.
+# out and back from the tip; tip 3, the boring bar, in and back. Behind the
+# tip the insert clears the finished surface by its trailing edge angle -- 5
+# degrees for a CNMG in a 95 degree holder, more for a 35 degree VBMT -- which
+# tool_shape works out from the ISO codes of the holder and the insert. Where
+# the codes do not say, the body is the whole quadrant, a square shoulder
+# behind the tip, and a move that runs down towards the chuck shows a gouge
+# here sooner than it would on the machine.
 #
 # Rapids remove nothing. A rapid through material is a crash, and that is the
 # collision check's business. This is a picture, not a check: the collision
@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 from .arc_geometry import sample_arc
 from .tool_data import NOSE_OFFSETS, nose_direction_of
+from .tool_shape import turning_tool
 
 # A twist drill's usual point. tools.json has no point angle.
 DRILL_POINT_DEG = 118.0
@@ -98,7 +99,9 @@ def body_for(tool) -> Body:
         # 0 and 9 say nothing, 5 to 8 sit square to an axis: a tool pointing
         # straight at the part, whose cut is its width -- unknown here.
         return NO_BODY
-    return Body('outer' if out > 0 else 'inner', towards=1 if back > 0 else -1)
+    shape = turning_tool(tool)
+    return Body('outer' if out > 0 else 'inner', towards=1 if back > 0 else -1,
+                trailing_deg=shape.trailing_deg if shape is not None else 0.0)
 
 
 class StockModel:

@@ -254,6 +254,64 @@ class PlotViewTests(unittest.TestCase):
         self.assertFalse(self.solid(widget, -10.0, 35.0))
         self.assertTrue(self.solid(widget, -10.0, 29.5))
 
+    TOOLED = {1: {"type": "turn_rough", "nose_direction": 2, "holder": "PCLNR2525",
+                  "name": "CNMG1204P-S External", "insert_radius_mm": 0.8},
+              5: {"type": "drill", "d_mm": 8.2}}
+
+    def tooled(self, code):
+        widget = GCodePlotterWidget(COLORS, chuck_z=-1000.0)
+        self.addCleanup(widget.deleteLater)
+        widget.parser.tool_items = self.TOOLED
+        widget.set_gcode(code)
+        return widget
+
+    @staticmethod
+    def drawn_with(widget, gid):
+        return [p for p in widget.ax.patches if p.get_gid() == gid and p.get_visible()]
+
+    @staticmethod
+    def corner(patch):
+        """The lowest Z and the lowest X the patch reaches, where it is drawn."""
+        points = patch.get_transform().transform(patch.get_path().vertices)
+        points = patch.axes.transData.inverted().transform(points)
+        return min(points[:, 0]), min(points[:, 1])
+
+    def test_the_insert_is_drawn_at_the_tip_while_the_program_runs(self):
+        widget = self.tooled(self.TURNED)
+
+        widget.set_live_max_line(4)
+
+        (insert,) = self.drawn_with(widget, 'insert')
+        z, x = self.corner(insert)
+        # The pass ends at X30 Z-20; the nose touches both axes through it.
+        self.assertAlmostEqual(z, -20.0, delta=0.01)
+        self.assertAlmostEqual(x, 30.0, delta=0.02)
+        self.assertTrue(self.drawn_with(widget, 'holder'))
+
+    def test_outside_a_playback_no_tool_is_drawn(self):
+        widget = self.tooled(self.TURNED)
+        widget.set_live_max_line(4)
+
+        widget.clear_live_max_line()
+
+        self.assertEqual(self.drawn_with(widget, 'insert'), [])
+
+    def test_a_drill_is_drawn_as_a_drill(self):
+        widget = self.tooled("T0505\nG00 X0. Z2.\nG01 Z-20. F0.1\nG00 Z2.")
+
+        widget.set_live_max_line(3)
+
+        (drill,) = self.drawn_with(widget, 'drill')
+        self.assertAlmostEqual(self.corner(drill)[0], -20.0)
+        self.assertEqual(self.drawn_with(widget, 'insert'), [])
+
+    def test_a_tool_whose_codes_say_too_little_is_not_drawn(self):
+        widget = self.turned()          # tip number only, no holder
+
+        widget.set_live_max_line(4)
+
+        self.assertEqual(self.drawn_with(widget, 'insert'), [])
+
     def test_the_half_section_shows_the_part_below_the_centre_line_too(self):
         widget = self.turned()
 
