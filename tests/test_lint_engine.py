@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from vibe_cnc import tool_data
-from vibe_cnc.diagnostics import Diagnostic, blocking, is_lint_clean, weight
+from vibe_cnc.diagnostics import Diagnostic, blocking, errors, is_lint_clean, summary, weight
 from vibe_cnc.lint_engine import LintEngine, is_snippet
 
 # Shared so a rename in the engine breaks the positive tests below loudly,
@@ -679,6 +679,19 @@ class DiagnosticShapeTests(unittest.TestCase):
         self.assertEqual(blocking([info, warning, error]), [warning, error])
         # An ERROR outweighs any number of WARNINGs.
         self.assertLess(weight([warning, warning, warning]), weight([error]))
+
+    def test_the_count_names_each_severity_worst_first(self):
+        # The window called every finding an error: three notes read as
+        # "3 errors found", and the simulation asked about them.
+        info = Diagnostic(1, "INFO", "G76_CHECK", "hint")
+        warning = Diagnostic(1, "WARNING", "ORIGIN", "G54 expected.")
+        error = Diagnostic(2, "ERROR", "UNITS", "G21 (mm) expected.")
+
+        self.assertEqual(summary([info, warning, error, warning]), "1 error, 2 warnings, 1 note")
+        self.assertEqual(summary([info, info, info]), "3 notes")
+        self.assertEqual(summary([]), "no findings")
+        self.assertEqual(errors([info, warning, error]), [error])
+        self.assertEqual(errors([info, warning, warning]), [])
 
 
 class ChuckCollisionTests(unittest.TestCase):

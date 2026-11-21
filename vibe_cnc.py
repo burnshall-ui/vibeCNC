@@ -15,7 +15,7 @@ from vibe_cnc.settings_manager import SettingsManager
 from vibe_cnc.tool_model import ToolModel, load_tools_json
 from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
-from vibe_cnc.diagnostics import blocking
+from vibe_cnc.diagnostics import blocking, errors, summary
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.specs import load_specs
 from vibe_cnc import verifier
@@ -1202,20 +1202,25 @@ class Main(QMainWindow):
         if findings:
             # Show error markers
             self._mark_findings(findings)
-            
-            # Warning on critical errors (>2)
-            if len(findings) > 2:
+
+            # Ask only about an ERROR -- an alarm or a crash. Warnings and
+            # notes are marked in the editor; the simulation is where they get
+            # looked at. It asked from three findings on, whatever they were:
+            # one or two errors went to CAMotics without a word, three notes
+            # stopped it.
+            stop = errors(findings)
+            if stop:
                 reply = QMessageBox.question(
-                    self, 
-                    "Lint Errors", 
-                    f"{len(findings)} errors found:\n\n" + 
-                    "\n".join([f"• Line {f.line}: {f.severity} — {f.message}" for f in findings[:5]]) +
-                    ("\n..." if len(findings) > 5 else "") +
+                    self,
+                    "Lint Errors",
+                    f"{summary(findings)} found:\n\n" +
+                    "\n".join([f"• Line {f.line}: {f.message}" for f in stop[:5]]) +
+                    ("\n..." if len(stop) > 5 else "") +
                     "\n\nSimulate anyway?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 if reply != QMessageBox.StandardButton.Yes:
-                    self.status.showMessage(f"❌ Sim cancelled: {len(findings)} errors", 5000)
+                    self.status.showMessage(f"❌ Sim cancelled: {summary(findings)}", 5000)
                     return
         else:
             self.editor.clear_error_lines()
@@ -1239,7 +1244,7 @@ class Main(QMainWindow):
         findings = self.linter.run_all(code)
         if findings:
             self._mark_findings(findings)
-            self.status.showMessage(f"⚠️ {len(findings)} errors — copied to VM anyway", 5000)
+            self.status.showMessage(f"⚠️ {summary(findings)} — copied to VM anyway", 5000)
         else:
             self.editor.clear_error_lines()
         
@@ -1268,7 +1273,7 @@ class Main(QMainWindow):
 
         if findings:
             self._mark_findings(findings)
-            self.status.showMessage(f"⚠️ Lint: {len(findings)} errors found", 5000)
+            self.status.showMessage(f"⚠️ Lint: {summary(findings)}", 5000)
             self._append_assistant_message("Lint", self._findings_html(findings), is_error=True)
         else:
             self.editor.clear_error_lines()

@@ -51,6 +51,29 @@ def is_lint_clean(diagnostics: Iterable[Diagnostic]) -> bool:
     return not blocking(diagnostics)
 
 
+def errors(diagnostics: Iterable[Diagnostic]) -> List[Diagnostic]:
+    """The ERRORs alone: what the control alarms at or the machine crashes on."""
+    return [d for d in diagnostics if d.severity == ERROR]
+
+
+_NAMES = ((ERROR, "error", "errors"), (WARNING, "warning", "warnings"), (INFO, "note", "notes"))
+
+
+def summary(diagnostics: Iterable[Diagnostic]) -> str:
+    """'2 errors, 1 warning', worst first, for a status line or a question.
+
+    The window counted every finding as an error -- three notes read as
+    "3 errors found".
+    """
+    found = list(diagnostics)
+    parts = []
+    for severity, one, many in _NAMES:
+        count = sum(1 for d in found if d.severity == severity)
+        if count:
+            parts.append(f"{count} {one if count == 1 else many}")
+    return ", ".join(parts) or "no findings"
+
+
 def weight(diagnostics: Iterable[Diagnostic]) -> tuple:
     """(errors, warnings): smaller is better, compared as a tuple."""
     counts = [0, 0, 0]
