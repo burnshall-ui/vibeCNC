@@ -211,6 +211,15 @@ class GroundTruthTests(unittest.TestCase):
         self.assertIn("POLICIES", prompt)
         self.assertIn(FORMAT_RULES, prompt)
 
+    def test_the_prompt_names_no_material_of_its_own(self):
+        # The program's header names it. A fixed one in the prompt contradicted
+        # a C45 program, and the model proposed to rewrite the header to match.
+        prompt = build_analysis_prompt("(Material: C45, Stock D40, REV: A1)\nN10 G21\n",
+                                       "POLICIES", {"tool_table": []})
+
+        self.assertNotIn("42CrMo4", prompt)
+        self.assertEqual(prompt.count("Material:"), 1)    # the program's own
+
     def test_a_fault_past_what_is_sent_is_not_used(self):
         padding = "(" + "x" * 98 + ")\n"
         program = SHAFT.replace("N10 G18", padding * (MAX_CODE_CHARS // 100 + 1) + "N10 G18")

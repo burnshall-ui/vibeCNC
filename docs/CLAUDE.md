@@ -25,7 +25,7 @@
 ```
 System: You are a CNC reviewer. Use policies.md. Output only findings + an optional diff.
 User:
-Machine: FANUC 0i‑TF, Material: 42CrMo4
+Machine: FANUC 0i‑TF
 Tools: (JSON attached)
 Code (lines 1–120):
 ```(code here)```

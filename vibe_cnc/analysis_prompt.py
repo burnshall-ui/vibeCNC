@@ -37,8 +37,14 @@ def read_policies(path: str) -> str:
 
 
 def build_analysis_prompt(snippet: str, policies: str, tools_json: dict) -> str:
-    """The user message of a review: machine, shop rules, tools, the code."""
-    return (f"Machine: FANUC 0i-TF, Material: 42CrMo4\nPolicies:\n{policies}\n"
+    """The user message of a review: machine, shop rules, tools, the code.
+
+    No material is named. The program says it in its own header, as the
+    policies ask; a fixed "Material: 42CrMo4" here contradicted every program
+    cut from anything else, and a model then proposed to change the program's
+    material comment to match the prompt.
+    """
+    return (f"Machine: FANUC 0i-TF\nPolicies:\n{policies}\n"
             f"Tools(JSON):\n{json.dumps(tools_json, ensure_ascii=False)}\n\n"
             f"Code:\n```\n{snippet}\n```\n\n"
             "Task: List rule violations (line/rule/fix). Optional unified diff. "
