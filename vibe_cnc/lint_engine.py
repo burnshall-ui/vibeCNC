@@ -50,6 +50,12 @@ class LintEngine:
         "CYCLE_NO_CONTOUR": ERROR,
         "CYCLE_BLOCKS_MISSING": ERROR,
         "CYCLE_CONTOUR_TURNS_BACK": ERROR,
+        # What the manual says the control stops on (B-64604EN-1/01, 4.2):
+        "CONTOUR_FIRST_BLOCK": ERROR,       # PS0065
+        "CONTOUR_START_AXIS": ERROR,        # PS0325
+        "CONTOUR_COMPENSATION": ERROR,      # PS0325
+        "BLOCK_NUMBER_TWICE": ERROR,        # the cycle may run the wrong blocks
+        "THREAD_ALLOWANCE": ERROR,          # the whole thread height in one pass
         "CYCLE_TOO_MANY_PASSES": WARNING,
         "CODE_AFTER_END": WARNING,
     }
@@ -211,6 +217,18 @@ class LintEngine:
                                          "Cancel G40 before tool change.",
                                          hint="Put G40 on a move before the tool change."))
 
+            # G74, G75 and G76 take no compensation (B-64604EN-1/01, 4.2.5 to
+            # 4.2.7). What the control then does is not said, so a WARNING.
+            no_comp = self._NO_COMP_CYCLE.search(code_ln)
+            if (no_comp and not self._G40.search(code_ln)
+                    and (comp_active or self._G41.search(code_ln) or self._G42.search(code_ln))):
+                cycle = f"G{no_comp.group(1)}"
+                finds.append(self._f(i+1, WARNING, "NOSE_COMP_IN_CYCLE",
+                                     f"{cycle} with tool nose radius compensation on: the "
+                                     "manual says this cycle cannot apply it.",
+                                     hint=f"Cancel compensation with G40 before the {cycle}.",
+                                     related_code=cycle))
+
             # Compensation on/off
             if self._G41.search(code_ln) or self._G42.search(code_ln):
                 comp_active = True
@@ -305,6 +323,7 @@ class LintEngine:
     _G00, _G02, _G03 = word("G00"), word("G02"), word("G03")
     _G40, _G41, _G42 = word("G40"), word("G41"), word("G42")
     _G50, _G76, _G96 = word("G50"), word("G76"), word("G96")
+    _NO_COMP_CYCLE = re.compile(r'(?<![A-Z])G(7[4-6])(?!\d)', re.IGNORECASE)
     _G28_G30 = re.compile(r'(?<![A-Z])G0*(?:28|30)(?!\d)', re.IGNORECASE)
     _S_WORD = re.compile(r'(?<![A-Z])S\d', re.IGNORECASE)
     _T_WORD = re.compile(r'(?<![A-Z])T(\d+)', re.IGNORECASE)
@@ -408,6 +427,30 @@ class LintEngine:
                     line_no, ERROR, "VALUE_RANGE",
                     f"{card.code}: {token} — {letter} is the {word.meaning}, and must be {wanted}.",
                     token=token, hint=f"Give {letter} a value {wanted}.", related_code=card.code))
+            elif word.parts:
+                found.extend(self._packed_findings(line_no, card, word, token, text))
+        return found
+
+    def _packed_findings(self, line_no, card, word, token, text) -> List[Diagnostic]:
+        """The fields of a packed word -- the m, r and a of G76 P(mmrraa) --
+        against the card's ranges for them. An ERROR like any other value
+        the control does not take."""
+        fields = word.unpack(int(float(text)))
+        if fields is None:
+            return [self._f(line_no, ERROR, "VALUE_RANGE",
+                            f"{card.code}: {token} has more digits than {word.form}.",
+                            token=token, hint=f"Write {word.letter} as {word.form}.",
+                            related_code=card.code)]
+        found = []
+        for part in word.parts:
+            wanted = part.out_of_range(fields[part.letter])
+            if wanted:
+                name = part.letter * word.form.count(part.letter)
+                found.append(self._f(
+                    line_no, ERROR, "VALUE_RANGE",
+                    f"{card.code}: {token} — {name} is the {part.meaning} "
+                    f"({fields[part.letter]:02d}) and must be {wanted}.",
+                    token=token, hint=f"Give {name} a value {wanted}.", related_code=card.code))
         return found
 
     @staticmethod

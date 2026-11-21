@@ -151,7 +151,7 @@ class ReferenceProgramTests(unittest.TestCase):
         self.assertTrue(lines[PATTERN_LINE - 1].startswith("N1196 G73 P090 Q110"))
 
     def test_the_finishing_cycle_runs_the_contour_exactly_as_programmed(self):
-        # N090 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
+        # N090 G01 X20. from Ø52/Z0 lands on Ø20 at Z0; N100 Z-10. goes to Z-10;
         # N110 X30. Z-15. ends at Ø30/Z-15. No U0.4/W0.1: that allowance is
         # what this cut exists to take off.
         cuts = self.paths["finish"]

@@ -850,3 +850,88 @@ class ProgramEndTests(unittest.TestCase):
 
         self.assertEqual([(f.line, f.rule, f.severity) for f in findings],
                          [(7, "CODE_AFTER_END", "WARNING")])
+
+
+# A G71 whose contour the control takes: G00 and X in the first block, and
+# every block number once. The tests below each break one thing in it.
+ROUGHING = ("G00 X52. Z2.\nG71 U2. R0.5\nG71 P10 Q20 U0.4 W0.1 F0.25\n"
+            "N10 G00 X30.\nG01 Z-15. F0.1\nX40.\nZ-30.\nN20 X52.\nG70 P10 Q20\n")
+THREAD = "G00 X24. Z5.\nG76 P020060 Q100 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5\n"
+
+
+class ManualRuleTests(unittest.TestCase):
+    """What the control refuses, from the 0i-F lathe manual (B-64604EN-1/01,
+    section 4.2); not checked on the machine."""
+
+    def found(self, code):
+        return [(f.line, f.rule, f.severity)
+                for f in LintEngine(make_cfg()).run_all(code, snippet=True)]
+
+    def test_the_programs_these_rules_start_from_are_clean(self):
+        self.assertEqual(self.found(ROUGHING), [])
+        self.assertEqual(self.found(THREAD), [])
+
+    def test_the_first_contour_block_writes_g00_or_g01_itself(self):
+        # A G01 that is still modal from before does not count: PS0065.
+        code = ROUGHING.replace("N10 G00 X30.", "N10 X30.")
+        self.assertEqual(self.found(code), [(4, "CONTOUR_FIRST_BLOCK", "ERROR")])
+        self.assertEqual(self.found(code.replace("N10 X30.", "N10 G1 X30.")), [])
+
+    def test_g70_alone_does_not_ask_for_it(self):
+        # The manual says it of the block P names in G71, G72 and G73.
+        code = "G00 X52. Z2.\nG70 P10 Q20\nN10 X30.\nG01 Z-15. F0.1\nN20 X52.\n"
+        self.assertEqual(rules(LintEngine(make_cfg()).run_all(code, snippet=True),
+                               "CONTOUR_FIRST_BLOCK"), [])
+
+    def test_the_first_contour_block_of_g71_moves_x(self):
+        # PS0325. G72 the same way round: its first block moves Z.
+        code = ROUGHING.replace("N10 G00 X30.\nG01 Z-15. F0.1", "N10 G00 Z0.\nG01 X30. F0.1\nZ-15.")
+        self.assertIn((4, "CONTOUR_START_AXIS", "ERROR"), self.found(code))
+        facing = ("G00 X82. Z2.\nG72 W1.5 R0.5\nG72 P10 Q20 U0.2 W0.1 F0.2\n"
+                  "N10 G00 X40.\nG01 Z-10. F0.1\nN20 X0.\n")
+        self.assertIn((4, "CONTOUR_START_AXIS", "ERROR"), self.found(facing))
+
+    def test_compensation_inside_the_contour(self):
+        # Every G40, G41 or G42 between P and Q: PS0325.
+        code = ROUGHING.replace("G01 Z-15. F0.1", "G42 G01 Z-15. F0.1").replace(
+            "N20 X52.", "N20 G40 X52.")
+        self.assertEqual([f[0] for f in self.found(code) if f[1] == "CONTOUR_COMPENSATION"], [5, 8])
+
+    def test_compensation_before_the_cycle_is_how_it_is_done(self):
+        code = "G42 G01 X52. Z2. F0.2\n" + ROUGHING.split("\n", 1)[1] + "G40 G00 X100.\n"
+        self.assertEqual(rules(LintEngine(make_cfg()).run_all(code, snippet=True),
+                               "CONTOUR_COMPENSATION"), [])
+
+    def test_a_block_number_a_cycle_names_twice(self):
+        code = ROUGHING + "N10 G00 X100.\n"
+        self.assertEqual(self.found(code), [(10, "BLOCK_NUMBER_TWICE", "ERROR")])
+        # A number no cycle names may repeat; the manual says it of P and Q.
+        self.assertEqual(self.found(ROUGHING + "N30 G00 X100.\nN30 Z50.\n"), [])
+
+    def test_the_fields_of_g76_p(self):
+        # m 01 to 99, r 00 to 99, a one of six angles. P20060 is P020060.
+        for p, field in (("P000060", "mm"), ("P020045", "aa"), ("P1020060", None)):
+            with self.subTest(p=p):
+                findings = rules(LintEngine(make_cfg()).run_all(
+                    THREAD.replace("P020060", p), snippet=True), "VALUE_RANGE")
+                self.assertEqual([(f.line, f.token) for f in findings], [(2, p)])
+                if field:
+                    self.assertIn(f"{field} is the", findings[0].message)
+                else:
+                    self.assertIn("more digits than mmrraa", findings[0].message)
+        self.assertEqual(self.found(THREAD.replace("P020060", "P20060")), [])
+        self.assertEqual(self.found(THREAD.replace("P020060", "P019929")), [])
+
+    def test_the_finishing_allowance_is_smaller_than_the_thread_height(self):
+        # R of the first block in mm, P of the second in 0.001 mm: 1.534 here.
+        self.assertEqual(self.found(THREAD.replace("R0.05", "R1.6")),
+                         [(3, "THREAD_ALLOWANCE", "ERROR")])
+        self.assertEqual(self.found(THREAD.replace("R0.05", "R1.5")), [])
+
+    def test_no_nose_compensation_in_g74_g75_g76(self):
+        code = "G42 G01 X24. Z5. F0.2\n" + THREAD.split("\n", 1)[1]
+        self.assertEqual([f for f in self.found(code) if f[1] == "NOSE_COMP_IN_CYCLE"],
+                         [(2, "NOSE_COMP_IN_CYCLE", "WARNING"),
+                          (3, "NOSE_COMP_IN_CYCLE", "WARNING")])
+        cancelled = "G42 G01 X24. Z6. F0.2\nG40 G00 X24. Z5.\n" + THREAD.split("\n", 1)[1]
+        self.assertEqual([f for f in self.found(cancelled) if f[1] == "NOSE_COMP_IN_CYCLE"], [])

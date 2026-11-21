@@ -20,7 +20,7 @@ N060 G01 Z0. F0.2              (cut 1)
 (--- three millimetres apart, then one pass along the roughed contour.)
 N070 G71 U1.5 R0.5
 N080 G71 P090 Q110 U0.4 W0.1 F0.25
-N090 X20. F0.15
+N090 G01 X20. F0.15
 N100 Z-10.
 N110 X30. Z-15.
 

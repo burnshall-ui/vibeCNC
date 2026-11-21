@@ -129,6 +129,7 @@ class GCodeParser:
         self.cycle_retract = 0.0
         self._lines = []
         self._blocks = {}
+        self._block_lines = {}
         self._skip = set()
         self.i = 0.0  # Arc parameter (X-offset center)
         self.k = 0.0  # Arc parameter (Z-offset center)
@@ -176,7 +177,8 @@ class GCodeParser:
         # between P and Q they describe a shape, they are not moves of their
         # own. Fanuc jumps straight past them once the cycle is done.
         self._lines = lines
-        self._blocks = self._index_blocks(lines)
+        self._block_lines = self._index_block_lines(lines)
+        self._blocks = {number: found[0] for number, found in self._block_lines.items()}
         self._skip = set()
         self.paths['stock'] = self._read_stock(gcode)
 
@@ -481,8 +483,10 @@ class GCodeParser:
     # --- Canned cycles ----------------------------------------------------
 
     @staticmethod
-    def _index_blocks(lines) -> dict:
-        """N number -> line number, for the P and Q words of a cycle.
+    def _index_block_lines(lines) -> dict:
+        """N number -> every line that carries it, for the P and Q words of a
+        cycle. The first is the block a cycle runs; more than one is a
+        mistake the manual forbids (B-64604EN-1/01, 4.2.8).
 
         Read as integers so N100 and N0100 are the same block, the way the
         control reads them.
@@ -491,7 +495,7 @@ class GCodeParser:
         for line_num, line in enumerate(lines, 1):
             match = re.match(r'\s*N(\d+)', line, re.IGNORECASE)
             if match:
-                blocks.setdefault(int(match.group(1)), line_num)
+                blocks.setdefault(int(match.group(1)), []).append(line_num)
         return blocks
 
     def _read_roughing_cycle(self, line, code, line_num):
@@ -539,7 +543,7 @@ class GCodeParser:
             # contour to draw.
             return
 
-        found = self._contour_points(int(first_block), int(last_block), line_num)
+        found = self._contour_points(int(first_block), int(last_block), line_num, 70)
         if found is None:
             return
         contour, _contour_lines = found
@@ -559,13 +563,14 @@ class GCodeParser:
     # at the cycle start point, goes to the shifted contour, follows it and
     # comes back. What a G70 then takes off is the allowance.
     #
-    # From training material: di is a radius, signed by the direction of the
-    # relief, dk the same along Z, d the number of passes, du and dw the
-    # allowance as in G71. Not in any source read for this, and drawn as the
-    # usual reading of the cycle: the first pass lies di/dk outside the
-    # allowance contour, the last on it, and the passes in between are evenly
-    # spaced -- di/(d-1) apart. The approach and the return are rapids, the
-    # return straight back to the start point.
+    # From the 0i-F lathe manual (B-64604EN-1/01, 4.2.3): di is a radius,
+    # signed by the direction of the relief, dk the same along Z, d the
+    # number of passes (rounded to a whole number), du and dw the allowance
+    # as in G71; the first pass lies di/dk outside the allowance contour, the
+    # last on it, and the cycle ends at the start point. The manual does not
+    # say how the passes between are spaced; they are drawn evenly spaced,
+    # di/(d-1) apart. The approach and the return are rapids, the return
+    # straight back to the start point. Not checked on the machine.
 
     def _read_pattern_cycle(self, line, line_num):
         """The block with P and Q cuts; the other sets relief and passes."""
@@ -591,7 +596,7 @@ class GCodeParser:
     def _expand_pattern_cycle(self, first_block, last_block,
                               allowance_x, allowance_z, line_num):
         """Turns one G73 call into the passes it cuts."""
-        found = self._contour_points(first_block, last_block, line_num)
+        found = self._contour_points(first_block, last_block, line_num, 73)
         if found is None:
             return
         contour, contour_lines = found
@@ -626,7 +631,7 @@ class GCodeParser:
     def _expand_roughing_cycle(self, code, first_block, last_block,
                                allowance_x, allowance_z, line_num):
         """Turns one G71/G72 call into the passes it actually cuts."""
-        found = self._contour_points(first_block, last_block, line_num)
+        found = self._contour_points(first_block, last_block, line_num, code)
         if found is None:
             return
         contour, contour_lines = found
@@ -697,8 +702,9 @@ class GCodeParser:
         to Ø30 further in -- leaves its passes running straight through the
         finished shape: drawn, they cut into the part. Type II, with both
         axes in the first contour block, is meant for pockets and is not
-        judged here. Said to raise an alarm on the control (PS0064/PS0065);
-        that is from general Fanuc knowledge, not checked on the machine.
+        judged here. The control stops with alarm PS0064 (first axis) or
+        PS0329 (second axis): B-64604EN-1/01, 4.2.1 and 4.2.2, for the 0i-F;
+        not checked on the machine.
         """
         first_line = self._lines[contour_lines.start - 1]
         moves = [letter for letter in 'XUZW' if self._word(first_line, letter) is not None]
@@ -792,8 +798,9 @@ class GCodeParser:
 
         return min(crossings) if forward > 0 else max(crossings)
 
-    def _contour_points(self, first_block, last_block, line_num):
-        """Contour between two N numbers plus its line range, arcs sampled."""
+    def _contour_points(self, first_block, last_block, line_num, code):
+        """Contour between two N numbers plus its line range, arcs sampled.
+        code: the cycle that reads it, 70 to 73."""
         start_line = self._blocks.get(first_block)
         end_line = self._blocks.get(last_block)
         if start_line is None or end_line is None or end_line < start_line:
@@ -801,6 +808,7 @@ class GCodeParser:
                        f'P{first_block}/Q{last_block} do not name a block range '
                        'in this program — the cycle cannot be expanded')
             return None
+        self._check_contour_blocks(code, first_block, last_block, start_line, end_line)
 
         # Walked with a parser of its own so the contour blocks cannot leave
         # anything behind in the real paths -- they are a shape, not moves.
@@ -838,6 +846,47 @@ class GCodeParser:
             return None
         return points, range(start_line, end_line + 1)
 
+    # G00 or G01 written in a block, and the compensation codes.
+    _RAPID_OR_LINEAR = re.compile(r'(?<![A-Z])G0*[01](?!\d)', re.IGNORECASE)
+    _COMPENSATION = re.compile(r'(?<![A-Z])G4[012](?!\d)', re.IGNORECASE)
+
+    def _check_contour_blocks(self, code, first_block, last_block, start_line, end_line):
+        """What the control refuses in the contour of G70 to G73.
+
+        From B-64604EN-1/01, 4.2.1 to 4.2.4 and 4.2.8, for the 0i-F; not
+        checked on the machine:
+        - the first contour block of G71, G72 and G73 carries G00 or G01
+          itself, a modal one from before does not count (PS0065);
+        - it moves X for G71 and Z for G72 (PS0325);
+        - no G40, G41 or G42 between P and Q (PS0325): compensation is
+          switched on before the cycle and off after the contour;
+        - the N numbers P and Q name occur once in the program.
+        """
+        first = self._code_of(self._lines[start_line - 1])
+        if code in (71, 72, 73) and not self._RAPID_OR_LINEAR.search(first):
+            self._warn(start_line, 'CONTOUR_FIRST_BLOCK',
+                       f'G{code}: the first contour block N{first_block} has no G00 or G01 of '
+                       'its own — the control stops with alarm PS0065')
+        if code in (71, 72):
+            axis = 'X' if code == 71 else 'Z'
+            incremental = 'U' if code == 71 else 'W'
+            if self._word(first, axis) is None and self._word(first, incremental) is None:
+                self._warn(start_line, 'CONTOUR_START_AXIS',
+                           f'G{code}: the first contour block N{first_block} does not move '
+                           f'{axis} — the control stops with alarm PS0325')
+        for offset in range(start_line, end_line + 1):
+            if self._COMPENSATION.search(self._code_of(self._lines[offset - 1])):
+                self._warn(offset, 'CONTOUR_COMPENSATION',
+                           f'G40, G41 or G42 between P{first_block} and Q{last_block} — the '
+                           'control stops with alarm PS0325; switch compensation on before '
+                           'the cycle and off after the contour')
+        for number in dict.fromkeys((first_block, last_block)):
+            found = self._block_lines.get(number, [])
+            for again in found[1:]:
+                self._warn(again, 'BLOCK_NUMBER_TWICE',
+                           f'N{number} is in line {found[0]} already, and a cycle names it '
+                           'with P or Q: those numbers must occur once in the program')
+
     def _expand_box_cycle(self, mode, target_x, target_z, has_x, has_z, r_match, line_num):
         """G90, G92 or G94: one pass, drawn as the four moves it really makes.
 
@@ -874,8 +923,8 @@ class GCodeParser:
 
         if mode == 'G94':
             # R is the taper along Z: how far the start of the facing pass
-            # lies from its end (sign as for G90, not checked against the
-            # manual).
+            # lies from its end (sign as for G90; the sign table of the
+            # manual, 4.1.3.2, was not compared).
             entry = (start_x, target_z + self.cycle_taper)
             corner = (target_x, start_z)
         else:
@@ -903,12 +952,11 @@ class GCodeParser:
     #
     # The first block says how the passes are made, the second says where the
     # thread is. Only the second moves anything. What is drawn follows the
-    # control's schedule as it is generally described, not checked against a
-    # manual: the roughing passes get shallower (see _thread_depths), and the
-    # in-feed is drawn straight in. The tool angle `a` makes the real control
-    # feed in along one flank, which shifts each pass a fraction of a
-    # millimetre along Z; which way is not something to guess at, so it is not
-    # drawn.
+    # 0i-F lathe manual (B-64604EN-1/01, 4.2.7): the depth after n passes is
+    # the first cut * sqrt(n) (see _thread_depths), and the control feeds in
+    # along one flank. That shifts each pass a fraction of a millimetre along
+    # Z; which flank is not something to guess at, so the in-feed is drawn
+    # straight in. Not checked on the machine.
 
     @staticmethod
     def _mm(line: str, letter: str):
@@ -945,8 +993,8 @@ class GCodeParser:
         if packed is not None:
             # Six digits with the leading zeros dropped on the way in, so
             # P011060 arrives as 11060: m finishing passes, r run-out in tenths
-            # of the lead, a tool angle. A zero count would mean "whatever the
-            # control's parameter says"; one is the least that finishes.
+            # of the lead, a tool angle. The manual allows m from 1 to 99 and
+            # the linter reports 00; it is drawn as one finishing pass.
             digits = f"{int(packed):06d}"[-6:]
             self.thread_finishes = max(int(digits[0:2]), 1)
             self.thread_runout = int(digits[2:4])
@@ -1013,6 +1061,14 @@ class GCodeParser:
             self._warn(line_num, 'CYCLE_NO_PASS',
                        'G76 without a thread to cut — X and Z end where they start')
             return
+        if self.thread_allowance >= height:
+            # B-64604EN-1/01, 4.2.7: the allowance d must be smaller than the
+            # height k. Otherwise nothing is left to rough, and the first pass
+            # would cut the whole height at once.
+            self._warn(line_num, 'THREAD_ALLOWANCE',
+                       f'G76: the finishing allowance ({self.thread_allowance:g} mm, R of the '
+                       f'first block) is not smaller than the thread height ({height:g} mm, P) '
+                       '— the whole height would be cut in one pass')
 
         depths, complete = self._thread_depths(height, first)
         if not complete:
@@ -1064,17 +1120,16 @@ class GCodeParser:
     # face, or without X a deep hole on the centre line -- and steps di in X.
     # Either way the tool ends where it began.
     #
-    # Read from training material that cites the Fanuc manual, not from the
-    # manual itself: di is a radius in both cycles, P and Q without a decimal
-    # point are in thousandths of a millimetre, e is modal and comes from
-    # parameter 5139 when no first block sets it -- one parameter for both
-    # cycles, so one value here too. Drawn as an assumption: in G75 e is a
-    # radius as well, the return after a peck and the step to the next plunge
-    # are rapids, the next peck feeds through the returned distance again, and
-    # the last step is shortened so the last plunge lands on the programmed
-    # end. Not drawn: the relief dd at the bottom, because the sources
-    # disagree about its direction. The width of the tool is not drawn either;
-    # like every other path this is the path of the point the tool is set on.
+    # From the 0i-F lathe manual (B-64604EN-1/01, 4.2.5 and 4.2.6): di and
+    # dk are radii and take no decimal point, so they are in thousandths of a
+    # millimetre; e is modal and comes from parameter 5139 when no first
+    # block sets it -- one parameter for both cycles, so one value here too;
+    # the return after a peck and the step to the next plunge are rapids, and
+    # the last peck and the last step are shortened so they end on the
+    # programmed point. Not drawn: the relief dd at the bottom, whose
+    # direction the manual gives only for a hole on the centre line. The
+    # width of the tool is not drawn either; like every other path this is
+    # the path of the point the tool is set on. Not checked on the machine.
 
     # How each cycle lies on the axes (0 is X, 1 is Z): the axis it pecks
     # along, the word that is the peck and the word that is the step.
