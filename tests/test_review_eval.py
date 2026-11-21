@@ -12,7 +12,8 @@ import unittest
 from types import SimpleNamespace
 
 from evals import review_eval as ev
-from vibe_cnc.analysis_prompt import FORMAT_RULES, MAX_CODE_CHARS, build_analysis_prompt
+from vibe_cnc.analysis_prompt import (FORMAT_RULES, MAX_CODE_CHARS, build_analysis_prompt,
+                                       code_for_review, cut_note)
 from vibe_cnc.specs import load_specs
 from vibe_cnc.lint_engine import LintEngine
 
@@ -207,8 +208,9 @@ class GroundTruthTests(unittest.TestCase):
         cases, _ = cases_of(SHAFT=SHAFT)
         case = cases[("SHAFT", "feed_zero")]
         prompt = ev.case_prompt(case, "POLICIES", {"tool_table": []})
-        self.assertEqual(prompt, build_analysis_prompt(case.code[:MAX_CODE_CHARS], "POLICIES",
-                                                       {"tool_table": []}))
+        shown = code_for_review(case.code)
+        self.assertEqual(prompt, build_analysis_prompt(shown.code, "POLICIES",
+                                                       {"tool_table": []}, None, shown.total))
         self.assertIn("N90 G71 P100 Q130 U0.4 W0.1 F0\n", prompt)
         self.assertIn("POLICIES", prompt)
         self.assertIn(FORMAT_RULES, prompt)
@@ -219,8 +221,9 @@ class GroundTruthTests(unittest.TestCase):
         case = cases[("SHAFT", "feed_zero")]
         specs = load_specs()
         prompt = ev.case_prompt(case, "POLICIES", {"tool_table": []}, specs)
-        self.assertEqual(prompt, build_analysis_prompt(case.code[:MAX_CODE_CHARS], "POLICIES",
-                                                       {"tool_table": []}, specs))
+        shown = code_for_review(case.code)
+        self.assertEqual(prompt, build_analysis_prompt(shown.code, "POLICIES",
+                                                       {"tool_table": []}, specs, shown.total))
         # The cards of the cycles the program runs, after the tools and before the code.
         self.assertEqual(ev.case_cards(case, specs), ["G71", "G70"])
         self.assertIn("Control: FANUC 0i-TF (Plus)", prompt)
@@ -243,6 +246,76 @@ class GroundTruthTests(unittest.TestCase):
         cases, _ = cases_of(P=program)
         self.assertIn(("P", ev.CLEAN), cases)
         self.assertNotIn(("P", "feed_zero"), cases)
+
+
+class ReviewCutTests(unittest.TestCase):
+    """A long program goes to the model cut short, in whole lines, and both
+    the operator and the model are told. It was code[:8000], mid-block and
+    silent."""
+
+    LINE = "N{:04d} G01 X40. Z-{}. F0.2"
+
+    def program(self, count):
+        return "\n".join(self.LINE.format(n, n % 90) for n in range(count))
+
+    def test_a_short_program_is_sent_whole(self):
+        shown = code_for_review(SHAFT)
+
+        self.assertEqual(shown.code, SHAFT)
+        self.assertFalse(shown.cut)
+        self.assertEqual(shown.lines, shown.total)
+        self.assertEqual(cut_note(shown), "")
+
+    def test_a_long_program_is_cut_between_lines_not_inside_one(self):
+        program = self.program(1000)
+        lines = program.splitlines()
+
+        shown = code_for_review(program)
+
+        self.assertTrue(shown.cut)
+        self.assertEqual(shown.total, 1000)
+        self.assertEqual(shown.code.splitlines(), lines[:shown.lines])
+        self.assertLessEqual(len(shown.code), MAX_CODE_CHARS)
+        # One more line would not have fitted.
+        self.assertGreater(len("\n".join(lines[:shown.lines + 1])), MAX_CODE_CHARS)
+
+    def test_a_program_of_exactly_the_limit_is_not_cut(self):
+        line = "x" * 99
+        program = "\n".join([line] * (MAX_CODE_CHARS // 100))      # 80 x 100 - 1 chars
+        program += "\n" + "y" * (MAX_CODE_CHARS - len(program) - 1)
+
+        self.assertEqual(len(program), MAX_CODE_CHARS)
+        self.assertFalse(code_for_review(program).cut)
+        self.assertTrue(code_for_review(program + "z").cut)
+
+    def test_the_operator_is_told_which_lines_the_ai_saw(self):
+        shown = code_for_review(self.program(1000))
+
+        note = cut_note(shown)
+
+        self.assertIn(f"lines 1–{shown.lines} of 1000", note)
+        self.assertIn("Select", note)
+        self.assertEqual(cut_note(code_for_review(SHAFT)), "")
+
+    def test_the_model_is_told_the_rest_follows(self):
+        shown = code_for_review(self.program(1000))
+
+        cut = build_analysis_prompt(shown.code, "P", {}, None, shown.total)
+        whole = build_analysis_prompt(SHAFT, "P", {}, None, len(SHAFT.splitlines()))
+
+        self.assertIn(f"Only lines 1-{shown.lines} of the program's 1000 are shown", cut)
+        self.assertLess(cut.index("```\n\nOnly lines"), cut.index("Task:"))
+        self.assertNotIn("Only lines", whole)
+        self.assertNotIn("Only lines", build_analysis_prompt(SHAFT, "P", {}))
+
+    def test_the_eval_sends_what_the_app_sends_of_a_long_program(self):
+        padding = "(" + "x" * 98 + ")\n"
+        program = SHAFT.replace("N10 G18", padding * (MAX_CODE_CHARS // 100 + 1) + "N10 G18")
+        cases, _ = cases_of(P=program)
+
+        prompt = ev.case_prompt(cases[("P", ev.CLEAN)], "P", {})
+
+        self.assertIn("Only lines 1-", prompt)
 
 
 class ScoringTests(unittest.TestCase):

@@ -19,7 +19,7 @@ from vibe_cnc.diagnostics import blocking
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.specs import load_specs
 from vibe_cnc import verifier
-from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
+from vibe_cnc.analysis_prompt import build_analysis_prompt, code_for_review, cut_note, read_policies
 from vibe_cnc.ai_client import AIClient, backend_of
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
@@ -1300,12 +1300,21 @@ class Main(QMainWindow):
 
         # Build context
         selected = self.editor.textCursor().selectedText().replace('\u2029', '\n')
-        snippet = selected if selected.strip() else code[:MAX_CODE_CHARS]
+        if selected.strip():
+            snippet, total = selected, 0
+        else:
+            # A long program is cut short. The operator is told how much the
+            # AI reads, as the model is: the linter above read all of it.
+            shown = code_for_review(code)
+            snippet, total = shown.code, shown.total
+            if shown.cut:
+                self._append_assistant_message("VibeCNC", html.escape(cut_note(shown)),
+                                               is_error=True)
         # The same function builds the prompt for evals/review_eval.py, so
         # what the eval measures is what this button sends.
         prompt = build_analysis_prompt(snippet,
                                        read_policies(os.path.join(HERE, "policies.md")),
-                                       load_tools_json(), load_specs())
+                                       load_tools_json(), load_specs(), total)
         # ask() picks the backend, as for a generation. Choosing it here sent
         # every mode but "claude" to Ollama, "anthropic" included.
         role = "Claude" if backend_of(self.cfg.data['ai']) == 'claude' else "LLM"

@@ -41,7 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:            # run as a file rather than with -m
     sys.path.insert(0, ROOT)
 
-from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
+from vibe_cnc.analysis_prompt import build_analysis_prompt, code_for_review, read_policies
 from vibe_cnc.spec_context import cards_for_program
 from vibe_cnc.specs import load_specs
 from vibe_cnc.lint_engine import LintEngine
@@ -377,9 +377,9 @@ def build_cases(programs: Dict[str, str], engine, faults=None):
                 if len(change.lines) != len(lines):
                     raise AssertionError(f"{fault.name} changed the number of lines")
                 tried += 1
-                if len("\n".join(change.lines[:max(change.changed)])) > MAX_CODE_CHARS:
-                    continue            # past what the analysis sends
                 new_code = "\n".join(change.lines) + tail
+                if code_for_review(new_code).lines < max(change.changed):
+                    continue            # past what the analysis sends
                 new = [f for f in engine.run_all(new_code) if _key(f) not in seen]
                 if not new:
                     continue
@@ -400,14 +400,15 @@ def build_cases(programs: Dict[str, str], engine, faults=None):
 def case_prompt(case: Case, policies: str, tools_json: dict, specs=None) -> str:
     """What AI ANALYZE would send with this program in the editor and nothing
     selected; specs None leaves the cycle cards out (--no-cards)."""
-    return build_analysis_prompt(case.code[:MAX_CODE_CHARS], policies, tools_json, specs)
+    shown = code_for_review(case.code)
+    return build_analysis_prompt(shown.code, policies, tools_json, specs, shown.total)
 
 
 def case_cards(case: Case, specs) -> List[str]:
     """The cycle cards that go with the case's prompt."""
     if specs is None:
         return []
-    return [c.code for c in cards_for_program(case.code[:MAX_CODE_CHARS], specs)]
+    return [c.code for c in cards_for_program(code_for_review(case.code).code, specs)]
 
 
 # ---- scoring ---------------------------------------------------------------------
