@@ -67,13 +67,15 @@ class GCodeCompleter(QCompleter):
         "R": "R radius",
     }
     
+    # No D: "D, depth of cut" belonged to the one-block G71 of older controls.
+    # The 0i-TF takes G71 in two blocks, the depth as U of the first, and the
+    # hint taught a model to write a D the control does not read.
     PARAMS = {
         "F": "Feed rate",
         "S": "Spindle speed",
         "T": "Tool",
         "P": "Parameter P",
         "Q": "Parameter Q",
-        "D": "Depth of cut",
         "N": "Sequence number",
     }
     
@@ -163,7 +165,7 @@ class GCodeCompleter(QCompleter):
                         descriptions.append(f"Tool {tool_num}: {tool_name}")
         
         # 4. Parameter Completion (X, Z, F, S, ...)
-        elif len(last_word) == 1 and last_word in "XZUWIKRFSTPQDN":
+        elif len(last_word) == 1 and last_word in "XZUWIKRFSTPQN":
             param = last_word
             # Show parameter hint
             if param in self.AXES:

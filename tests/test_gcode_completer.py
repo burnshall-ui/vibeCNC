@@ -40,6 +40,12 @@ class CompleterTests(unittest.TestCase):
         self.assertIn("machine-specific", offered["M06"])
         self.assertNotIn("machine-specific", offered["M03"])
 
+    def test_d_is_offered_as_nothing_of_its_own(self):
+        # The old one-block G71 took its depth as D; the 0i-TF takes U.
+        offered = self.suggest("G71 U1.5 R0.5 D")
+        self.assertFalse(any(code.startswith("D") for code in offered))
+        self.assertFalse(any("Depth" in text for text in offered.values()))
+
     def test_every_code_the_completer_names_itself_is_in_the_dialect(self):
         # The start list and the fallback name codes by hand; a code missing
         # from the file would fail with a KeyError, or show without a text.
