@@ -48,7 +48,10 @@ N180 M30
 """
 
 # Compensation, an arc outside any cycle, a tool change. Clean too. The
-# spindle starts on the tool's own block, so no line moves.
+# spindle starts on the tool's own block, so no line moves. The second tool
+# goes to Z-10, beside the part: taken out, its retract leaves it standing
+# there. SHAFT ends at the start point of G70, in front of the face, which is
+# a retract already.
 COMP = """(COMP - TEST)
 N10 G18 G40 G80 G97 G99
 N20 G21 G54
@@ -61,7 +64,7 @@ N80 G02 X44. Z-22. R2.
 N90 G40
 N100 G00 X100. Z50.
 N110 T1111
-N120 G00 X50. Z2.
+N120 G00 X50. Z-10.
 N130 G00 Z50.
 N140 G00 X100.
 N150 M30
@@ -111,7 +114,16 @@ class FaultTests(unittest.TestCase):
         self.expect("SHAFT", "css_g50", 8, "G50_BEFORE_G96", ["N30"], [5, 8])
 
     def test_retract(self):
-        self.expect("SHAFT", "no_retract", 20, "RETRACT_BEFORE_M30", ["N160", "N170 M05"], [18, 19, 20])
+        self.expect("COMP", "no_retract", 16, "RETRACT_BEFORE_M30", ["N130", "N140"], [14, 15, 16])
+
+    def test_a_tool_left_at_a_cycle_start_in_front_of_the_face_is_no_fault(self):
+        # G70 hands the tool back at its start point, X42 Z2, in front of the
+        # face. That is a retract (the operator's decision of 2026-11-21); the
+        # rule used to count the shifted G71 pass at Z2.1 as a cut, and found
+        # the tool standing in front of it.
+        self.assertNotIn(("SHAFT", "no_retract"), self.cases)
+        self.assertIn(("SHAFT", "no_retract", "the linter reports nothing new at any of 1 place(s)"),
+                      self.left_out)
 
     def test_zero_feed(self):
         self.expect("SHAFT", "feed_zero", 11, "VALUE_RANGE", ["N90 G71 P100 Q130 U0.4 W0.1 F0"], [11])
@@ -155,9 +167,10 @@ class FaultTests(unittest.TestCase):
 class GroundTruthTests(unittest.TestCase):
 
     def test_a_fault_the_linter_does_not_see_is_left_out(self):
-        # No Z retract to begin with: taking the X retract out as well changes
-        # the program, but the linter already said "no retract" and says no more.
-        program = SHAFT.replace("N160 G00 Z50.", "N160 M09")
+        # The tool goes back along the part instead of away from it, so the
+        # linter says "no retract" to begin with. Taking the retract out
+        # changes the program, but says nothing new.
+        program = SHAFT.replace("N160 G00 Z50.", "N160 G00 Z-30.")
         cases, left_out = cases_of(P=program)
         self.assertNotIn(("P", "no_retract"), cases)
         self.assertEqual([why for _, fault, why in left_out if fault == "no_retract"],
@@ -174,7 +187,7 @@ class GroundTruthTests(unittest.TestCase):
     def test_only_what_is_new_is_expected(self):
         # No retract to begin with: every copy still has that finding, and no
         # case expects it, because the fault put in is something else.
-        program = SHAFT.replace("N160 G00 Z50.", "N160").replace("N170 G00 X100. M05", "N170 M05")
+        program = SHAFT.replace("N160 G00 Z50.", "N160 G00 Z-30.")
         cases, left_out = cases_of(P=program)
         self.assertEqual([f.rule for f in cases[("P", "feed_zero")].expected], ["VALUE_RANGE"])
         self.assertIn(20, cases[("P", "feed_zero")].known)
@@ -322,10 +335,10 @@ class ScoringTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cases, _ = cases_of(SHAFT=SHAFT)
+        cases, _ = cases_of(SHAFT=SHAFT, COMP=COMP)
         cls.feed = cases[("SHAFT", "feed_zero")]
         cls.header = cases[("SHAFT", "header_g40")]
-        cls.retract = cases[("SHAFT", "no_retract")]
+        cls.retract = cases[("COMP", "no_retract")]
         cls.clean = cases[("SHAFT", ev.CLEAN)]
 
     def found(self, answer, case=None):
@@ -395,7 +408,7 @@ class ScoringTests(unittest.TestCase):
 
     def test_a_retract_named_at_m30(self):
         self.assertTrue(self.found("• Before M30 there is no retract to a safe Z", self.retract))
-        self.assertTrue(self.found("• N170: X retract missing", self.retract))
+        self.assertTrue(self.found("• N140: X retract missing", self.retract))
 
     def test_a_program_as_it_is_is_never_found(self):
         self.assertFalse(ev.score("• N90: feed is zero", self.clean)["found"])

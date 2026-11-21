@@ -34,7 +34,10 @@
 - Start the spindle (`M03`/`M04`) before the first cutting move or cycle, and again
   after every `M05`.
 - Before `M30`: move `Z` to a safe plane first, then retract `X`. The linter checks
-  where the tool ends: in front of everything the program cut, or after a `G28`/`G30`.
+  where the tool ends: in front of the part's face, or after a `G28`/`G30`. The face
+  is the one of the `(STOCK ...)` comment, or Z0 without one, or further out where the
+  program cuts further out. A cycle's start point in front of the face counts as
+  retracted; beside the part it does not.
 - A program ends with `M30` (or `M02`). Nothing after the end is run.
 - Do not change cooling air or signals at the end if they are marked "invariant".
 

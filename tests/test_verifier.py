@@ -277,7 +277,8 @@ class SnippetTests(unittest.TestCase):
     def test_a_program_stays_a_program_when_a_correction_drops_m30(self):
         # Without M30 the retract rule has nothing to check; dropping it is
         # not a way to get rid of the finding.
-        no_retract = PROGRAM.replace("G00 Z50.\nX200.\n", "G00 X30.\nX200.\nM05\n")
+        # The tool goes back to Z-10 beside the thread, not away from it.
+        no_retract = PROGRAM.replace("G00 Z50.\nX200.\n", "G00 X30.\nZ-10.\nM05\n")
         model = Model(answer(no_retract), answer(no_retract.replace("M30\n", "")), answer(PROGRAM))
 
         outcome = verify(model, "Program", None, linter(), snippet=False)

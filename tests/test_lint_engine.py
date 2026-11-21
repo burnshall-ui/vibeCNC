@@ -822,8 +822,10 @@ class WhereTheToolEndsTests(unittest.TestCase):
         findings = self.found("G00 X40. Z5.\nG01 X30. Z0 F0.2\nM30")
 
         self.assertEqual([f.line for f in findings], [3])
-        self.assertIn("Z0", findings[0].message)
-        self.assertIn("Z5", findings[0].message)
+        # Where the cut ends, not where it starts: Z5 is where the rapid
+        # stopped, in the air. The rule called that "cut up to Z5".
+        self.assertIn("ends at Z0, and the program cuts at Z0 (line 2)", findings[0].message)
+        self.assertNotIn("Z5", findings[0].message)
 
     def test_in_front_of_everything_cut_is_clear_whichever_axis_went_first(self):
         for ending in ("G00 Z50.\nX200.", "G00 X200.\nZ50.", "G00 X200. Z50."):
@@ -859,6 +861,69 @@ class WhereTheToolEndsTests(unittest.TestCase):
 
     def test_without_a_cut_there_is_nothing_to_stand_clear_of(self):
         self.assertEqual(self.found("G00 X40. Z5.\nM30"), [])
+
+
+class TheFaceTests(unittest.TestCase):
+    """The tool is judged against the face of the part: the STOCK comment's,
+    or Z0 without one. The rule took the highest Z any cutting move touched,
+    the start of a feed move in the air included, and so reported a tool left
+    at a cycle's start point in front of the face (operator's decision of
+    2026-11-21: that is a retract; beside the part is not)."""
+
+    ROUGH = ("G00 X42. Z2.\nG71 U1.5 R0.5\nG71 P10 Q20 U0.4 W0.1 F0.25\n"
+             "N10 G00 X16.\nN20 G01 X40. Z-36. F0.15\nG70 P10 Q20\n")
+
+    def found(self, code):
+        return rules(LintEngine(make_cfg()).run_all(code), "RETRACT_BEFORE_M30")
+
+    def test_a_cycle_start_in_front_of_the_face_is_a_retract(self):
+        # G70 ends at X42 Z2. The last G71 pass, shifted by W0.1, starts at Z2.1.
+        self.assertEqual(self.found("(STOCK D40 L50)\n" + self.ROUGH + "M30"), [])
+        self.assertEqual(self.found(self.ROUGH + "M30"), [])
+
+    def test_a_thread_and_a_drill_start_in_front_of_the_face_too(self):
+        thread = "G00 X24. Z5.\nG76 P020060 Q100 R0.05\nG76 X16.93 Z-30. P1534 Q400 F2.5\nM30"
+        drill = "G00 X0. Z1.\nG74 R0.5\nG74 Z-25. Q5000 F0.12\nM30"
+        self.assertEqual(self.found(thread), [])
+        self.assertEqual(self.found(drill), [])
+
+    def test_a_cycle_start_beside_the_part_is_none(self):
+        groove = "(STOCK D40 L50)\nG00 X42. Z-20.\nG75 R0.5\nG75 X30. P1000 F0.05\nM30"
+
+        findings = self.found(groove)
+
+        self.assertEqual([f.line for f in findings], [5])
+        self.assertIn("ends at Z-20, and the face of the blank (STOCK comment) is at Z0",
+                      findings[0].message)
+
+    def test_without_a_stock_comment_the_face_is_z0(self):
+        beside = "G00 X30. Z2.\nG01 Z-20. F0.2\nG00 X32.\nZ-10.\nM30"
+
+        findings = self.found(beside)
+
+        self.assertEqual(len(findings), 1)
+        self.assertIn("with no STOCK comment the face is taken at the work zero, Z0",
+                      findings[0].message)
+
+    def test_a_cut_further_out_than_the_face_counts(self):
+        # Faced at Z1: the part stands to Z1 at least, whatever the comment says.
+        facing = "G00 X52. Z1.\nG01 X-1. F0.2\nG00 Z0.5\nX100.\nM30"
+        self.assertIn("the program cuts at Z1 (line 2)", self.found(facing)[0].message)
+        self.assertIn("the program cuts at Z1 (line 3)",
+                      self.found("(STOCK D50 L80)\n" + facing)[0].message)
+        self.assertEqual(self.found(facing.replace("G00 Z0.5", "G00 Z1.5")), [])
+
+    def test_the_demo_program_is_told_where_it_cut(self):
+        # It feeds from Z2 onto the face, faces it at Z0 and pulls out in X
+        # alone: still at the face. The finding said "cut up to Z2", the
+        # start of the feed move, where nothing is cut.
+        demo = "G00 X36. Z2.\nG01 Z0. F0.25\nX-5.\nG00 X200.\nM30"
+
+        findings = self.found(demo)
+
+        self.assertEqual([f.line for f in findings], [5])
+        self.assertIn("ends at Z0, and the program cuts at Z0 (line 2)", findings[0].message)
+        self.assertNotIn("Z2", findings[0].message)
 
 
 class ProgramEndTests(unittest.TestCase):

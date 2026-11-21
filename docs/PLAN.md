@@ -266,7 +266,8 @@ times in 24 either way. No measurable gain for that model. The `R0.5` arc was
 missed every time either way; no card covers G02/G03. With the cards the
 model no longer reported a missing retract after a G70 or G76 that returns to
 its start point in front of the face, which the operator decided is a retract
-(the linter does not know that yet). The generate tasks turned out to ask for
+(the linter judged it so only later, against the face of the STOCK comment or
+Z0). The generate tasks turned out to ask for
 the very parts of the card examples, so with the cards a model can copy them.
 
 ### D — IR
@@ -285,7 +286,6 @@ sample programs look the same (checked by eye, as before).
 | Topic | When |
 |---|---|
 | Tool calling | when the evals show the pre-pass is not enough |
-| Retract judged against the face | a cycle start point in front of the part's face counts as a retract before M30, beside the part it does not (operator's decision, 2026-11-21); the rule today counts G01 moves in the air as cuts |
 | Generate tasks of their own | the eval's parts must differ from the card examples |
 | G71/G72 escape at feed | the manual has the 45° escape after each pass in cutting feed; the parser draws a rapid, and `tests/test_reference.py` has to be worked out again by hand |
 | G75 with Z travel and Q0 | lint-clean today; the manual does not say what the control does |

@@ -64,3 +64,8 @@ program that cuts the wrong diameter can be lint clean.
   2026-11-21). For it, first drafts were lint clean 18 times in 24 with and
   without the cards, and reviews found 74 and 76 of 84 faults: no measurable
   difference. See [PLAN.md](PLAN.md), step C.
+- Since the retract rule judges against the part's face, taking the retract
+  out of a program that ends at a cycle's start point in front of the face is
+  no fault any more, and the eval leaves those copies out: the sample programs
+  give 24 fault cases, not 28 (`no_retract` only in O0004, beside the part).
+  Results counted out of 28 per run do not compare with later ones.

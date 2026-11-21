@@ -506,10 +506,23 @@ class LintEngine:
     def _retract_findings(self, parser, lines) -> List[Diagnostic]:
         """Before M30 (or M02) the tool stands clear of the part.
 
-        Clear means in front of it: Z beyond the highest Z the program cut
-        at, or beyond the face of the STOCK comment if that is further out --
-        or a G28/G30 reference return after the last move. Whether Z went
-        before X is not judged, only where the tool ends.
+        Clear means in front of its face: Z beyond the face of the STOCK
+        comment, or beyond Z0, the work zero, when the program names no
+        blank -- and beyond every point a cutting move ends at, should the
+        program cut further out than that. Or a G28/G30 reference return after
+        the last move. Whether Z went before X is not judged, only where the
+        tool ends; a cycle's start point in front of the face is clear, beside
+        the part (a G75 at Z-20) it is not.
+
+        Where a cutting move starts does not count. It is where the move
+        before it ended, often a rapid that stopped in the air: the G01 Z0
+        that feeds onto the face from Z2, the shifted passes of G71 and G73,
+        the run-up of a thread. Counting those put the face at Z2 to Z5 and
+        reported a tool standing at a cycle's start point in front of it.
+
+        Z0 is an assumption, the one the parser makes for a STOCK comment
+        without a Z: where the work zero is not on the face, a tool can stand
+        in the part and pass. The finding says which face it judged by.
 
         It read the text before: an X and a Z word in the last three lines
         were taken as a retract, so a G01 into the part right before M30
@@ -520,14 +533,18 @@ class LintEngine:
         if end is None or end["code"] == "M99":
             return []
         paths = parser.paths
-        cut_z = [z for kind in self._CUTTING_KINDS for segment in paths[kind]
-                 for _x, z in segment[:2]]
-        cut_z += [z for arc in paths["arc"] for _x, z in parser._sample_arc(arc)]
-        if not cut_z:
+        # (z, line) of every point a cut reaches: where each straight move
+        # ends, and every point of an arc after its first.
+        reached = [(segment[1][1], segment[2]) for kind in self._CUTTING_KINDS
+                   for segment in paths[kind]]
+        reached += [(z, arc["line"]) for arc in paths["arc"]
+                    for _x, z in parser._sample_arc(arc)[1:]]
+        if not reached:
             return []                   # nothing cut, nothing to stand clear of
-        front = max(cut_z)
-        if paths.get("stock"):
-            front = max(front, paths["stock"]["z_front"])
+        stock = paths.get("stock")
+        face = stock["z_front"] if stock else 0.0
+        cut_z, cut_line = max(reached, key=lambda point: point[0])
+        front = max(face, cut_z)
         if end["z"] > front + 1e-9:
             return []
         # The reference return moves the tool off to the machine's home; the
@@ -538,9 +555,15 @@ class LintEngine:
                for i in range(last_move, end["line"])):
             return []
         code = end["code"]
+        if cut_z >= face - 1e-9:
+            why = f"the program cuts at Z{cut_z:g} (line {cut_line})"
+        elif stock:
+            why = f"the face of the blank (STOCK comment) is at Z{face:g}"
+        else:
+            why = "with no STOCK comment the face is taken at the work zero, Z0"
         return [self._f(end["line"], ERROR, "RETRACT_BEFORE_M30",
                         f"Before {code} the tool still stands at the part: it ends at "
-                        f"Z{end['z']:g}, and the program cut up to Z{front:g}.",
+                        f"Z{end['z']:g}, and {why}.",
                         hint=f"Before {code}, move Z to a safe plane in front of the part, "
                              "then retract X (or G28 U0 W0).")]
 
