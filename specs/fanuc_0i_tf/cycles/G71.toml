@@ -4,8 +4,9 @@ keywords = ["rough", "roughing", "turning", "outside diameter", "od", "schruppen
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.1 and the restrictions in 4.2.8. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -41,22 +42,32 @@ min_exclusive = 0
 [[assumption]]
 text = "The passes step 2 * U (U is a radius, X a diameter) from the start point towards the contour; each cuts along Z until the contour stops it."
 verified = false
+manual = "4.2.1, fig. 4.2.1 (a)"
 
 [[assumption]]
-text = "Each pass retracts by R at 45 degrees, away from the wall that stopped it, and returns to the start Z with a rapid."
+text = "Each pass escapes by R at 45 degrees, away from the wall that stopped it, and returns to the start Z with a rapid. The manual has the 45-degree escape in cutting feed; it is drawn as a rapid."
 verified = false
+manual = "4.2.1, fig. 4.2.1 (a) and (d)"
 
 [[assumption]]
-text = "The allowance shifts the contour along the axes, U in X and W in Z, not normal to it."
+text = "The allowance shifts the contour along the axes, U (a diameter) in X and W in Z, not normal to it."
 verified = false
+manual = "4.2.1, fig. 4.2.1 (a)"
 
 [[assumption]]
-text = "The cycle ends with one cut along the contour shifted by the allowance and a rapid back to the start point."
+text = "The cycle ends with one cut along the contour shifted by the allowance and a rapid back to the start point. Parameters can leave out that cut (No. 5105 bit 1) or change the way back (No. 5108 bit 1)."
 verified = false
+manual = "4.2.1"
 
 [[assumption]]
-text = "Type I -- only X in the first contour block -- cannot cut a pocket: along the contour X only moves towards the start point's side and Z only one way. Otherwise the passes run through the finished shape; the control is said to stop with an alarm (PS0064/PS0065). From general Fanuc knowledge; the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block, is meant for pockets and is not judged."
+text = "Type I -- only X in the first contour block -- needs a contour that moves one way only in X and one way only in Z: no pocket. Otherwise the control stops with alarm PS0064 (first axis) or PS0329 (second axis); the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block (W0 when Z does not move), may have pockets but still moves one way only in Z; it needs the option for type II and is not judged."
 verified = false
+manual = "4.2.1"
+
+[[assumption]]
+text = "The first contour block carries G00 or G01 (else PS0065) and moves X (else PS0325). G40, G41 or G42 between P and Q stop the control (PS0325): compensation goes before the cycle and is cancelled after the contour. F, S and T in the contour blocks do not count while G71 roughs; those of the G71 block do."
+verified = false
+manual = "4.2.1, 4.2.8"
 
 [[example]]
 title = "Shaft from Ø50 stock: Ø30 for 15 mm, then Ø40 to 30 mm"

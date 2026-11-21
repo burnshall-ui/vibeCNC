@@ -5,8 +5,9 @@ keywords = ["facing", "face roughing", "plandrehen", "planschruppen", "querschru
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.2 and the restrictions in 4.2.8. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -42,14 +43,22 @@ min_exclusive = 0
 [[assumption]]
 text = "G72 is G71 turned round: the passes step W along Z from the start point towards the contour and each cuts along X, towards the centre line, until the contour stops it."
 verified = false
+manual = "4.2.2"
 
 [[assumption]]
 text = "Retract, allowance and the last cut along the contour are as in G71."
 verified = false
+manual = "4.2.2"
 
 [[assumption]]
-text = "Type I -- only Z in the first contour block -- cannot cut a pocket: along the contour Z only moves towards the start point's side and X only one way. Otherwise the passes run through the finished shape; the control is said to stop with an alarm (PS0064/PS0065). From general Fanuc knowledge; the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block, is meant for pockets and is not judged."
+text = "Type I -- only Z in the first contour block -- needs a contour that moves one way only in Z and one way only in X: no pocket. Otherwise the control stops with alarm PS0064 or PS0329; the linter reports it as CYCLE_CONTOUR_TURNS_BACK. Type II, with X and Z in the first contour block (U0 when X does not move), may have pockets but still moves one way only in X; it is not judged."
 verified = false
+manual = "4.2.2"
+
+[[assumption]]
+text = "The first contour block carries G00 or G01 (else PS0065) and moves Z (else PS0325). G40, G41 or G42 between P and Q stop the control (PS0325)."
+verified = false
+manual = "4.2.2, 4.2.8"
 
 [[example]]
 title = "Ø80 bar: face down to Z-10 outside Ø40, leave a Ø40 boss faced to Z-5"

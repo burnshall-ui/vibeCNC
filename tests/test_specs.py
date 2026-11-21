@@ -111,6 +111,21 @@ class DialectTests(unittest.TestCase):
         self.assertIn("per revolution", dialect.g_codes["G99"])
         self.assertIn("speed limit", dialect.g_codes["G50"])
 
+    def test_every_shipped_card_names_the_manual(self):
+        for code, card in load_specs().cycles.items():
+            with self.subTest(code=code):
+                self.assertIn("B-64604EN-1/01", card.source.text)
+                self.assertFalse(card.source.verified)      # the machine, not the manual
+                self.assertTrue(any(a.manual for a in card.assumptions))
+        self.assertIn("B-64604EN-1/01", load_specs().dialect.source.text)
+
+    def test_the_g76_p_fields(self):
+        word = load_specs().cycles["G76"].blocks[0].words["P"]
+        self.assertEqual(word.unpack(20060), {"m": 2, "r": 0, "a": 60})
+        self.assertEqual([(p.letter, p.allowed()) for p in word.parts],
+                         [("m", "01 to 99"), ("r", "00 to 99"),
+                          ("a", "one of 80, 60, 55, 30, 29, 00")])
+
     def test_the_notes_for_a_model_are_read(self):
         notes = load_specs().dialect.notes
         self.assertTrue(notes)
@@ -195,6 +210,53 @@ class BrokenCardTests(unittest.TestCase):
         with self.assertRaises(SpecError) as caught:
             load_dialect(path)
         self.assertIn("notes: expected a list of text", str(caught.exception))
+
+    PACKED = GOOD_CARD + '''
+[block.words.X]
+meaning = "packed"
+form = "mmaa"
+[block.words.X.parts.m]
+meaning = "count"
+min = 1
+max = 99
+[block.words.X.parts.a]
+meaning = "angle"
+values = [60, 0]
+'''
+
+    def test_a_packed_word_loads_with_its_parts(self):
+        word = load_card(self.card(self.PACKED)).blocks[1].words["X"]
+        self.assertEqual([p.letter for p in word.parts], ["m", "a"])
+        self.assertEqual(word.unpack(160), {"m": 1, "a": 60})        # X0160
+        self.assertIsNone(word.unpack(10160))                        # five digits for four
+        self.assertEqual(word.parts[0].out_of_range(0), "01 to 99")
+        self.assertIsNone(word.parts[0].out_of_range(99))
+        self.assertEqual(word.parts[1].out_of_range(45), "one of 60, 00")
+        self.assertIsNone(word.parts[1].out_of_range(0))
+
+    def test_parts_without_a_form(self):
+        self.fails(self.PACKED.replace('form = "mmaa"\n', ""), "block[1].words.X.parts")
+
+    def test_a_part_that_is_not_in_the_form(self):
+        self.fails(self.PACKED.replace("[block.words.X.parts.a]", "[block.words.X.parts.r]"),
+                   "block[1].words.X.parts.r")
+
+    def test_part_values_that_are_not_whole_numbers(self):
+        self.fails(self.PACKED.replace("values = [60, 0]", "values = [60.5]"),
+                   "block[1].words.X.parts.a.values")
+
+    def test_an_assumption_names_where_the_manual_says_it(self):
+        card = load_card(self.card(GOOD_CARD + '''
+[[assumption]]
+text = "said"
+verified = false
+manual = "4.2.7"
+
+[[assumption]]
+text = "not said"
+verified = false
+'''))
+        self.assertEqual([a.manual for a in card.assumptions], ["4.2.7", ""])
 
     def test_the_shipped_files_load(self):
         # Through the cache-free path, so a broken shipped file fails here too.

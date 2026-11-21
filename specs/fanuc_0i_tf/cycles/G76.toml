@@ -6,8 +6,9 @@ keywords = ["thread", "threads", "threading", "pitch", "lead", "gewinde", "auße
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.7. That manual is for the \
+0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -16,6 +17,17 @@ verified_on = ""
 meaning = "finishing passes (mm), run-out in 0.1 of the lead (rr), tool angle in degrees (aa)"
 form = "mmrraa"
 decimal_point = false
+[block.words.P.parts.m]
+meaning = "finishing passes"
+min = 1
+max = 99
+[block.words.P.parts.r]
+meaning = "run-out, in 0.1 of the lead"
+min = 0
+max = 99
+[block.words.P.parts.a]
+meaning = "tool angle in degrees"
+values = [80, 60, 55, 30, 29, 0]
 [block.words.Q]
 meaning = "minimum depth of cut, a radius"
 unit = "0.001 mm"
@@ -58,20 +70,23 @@ unit = "mm"
 min_exclusive = 0
 
 [[assumption]]
-text = "The depth after n passes is the first cut * sqrt(n), so each pass takes about the same material; a pass never adds less than the minimum cut."
+text = "The depth after n passes is the first cut * sqrt(n), so each pass takes about the same material; a pass that would add less than the minimum cut adds the minimum cut."
+verified = false
+manual = "4.2.7, fig. 4.2.7 (b)"
+
+[[assumption]]
+text = "Roughing stops short of the full height by the finishing allowance; the last pass, which takes off the allowance, is repeated mm times at the full height. The allowance must be smaller than the thread height."
+verified = false
+manual = "4.2.7"
+
+[[assumption]]
+text = "F is the lead. The manual does not say whether G98 changes that; it is taken to be the lead in either feed mode."
 verified = false
 
 [[assumption]]
-text = "Roughing stops short of the full height by the finishing allowance; the finishing passes (mm) all run at the full height. mm = 00 is drawn as one finishing pass, where the control would take a parameter."
+text = "The control feeds in along one flank. The run-out rr leaves the thread over rr * 0.1 * lead at the angle in parameter 5131, 45 degrees when that is 0; drawn at 45 degrees. Which flank is not drawn."
 verified = false
-
-[[assumption]]
-text = "F is the lead whether G98 or G99 is active."
-verified = false
-
-[[assumption]]
-text = "The run-out rr leaves the thread at 45 degrees over rr * 0.1 * lead. The tool angle aa makes the control feed in along one flank; which way is not drawn."
-verified = false
+manual = "4.2.7"
 
 [[example]]
 title = "M20x2.5 external, 30 long"

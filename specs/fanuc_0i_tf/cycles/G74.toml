@@ -4,8 +4,9 @@ keywords = ["peck", "peck drilling", "drill", "deep hole", "face groove", "tiefb
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.5. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -46,20 +47,29 @@ meaning = "feed"
 min_exclusive = 0
 
 [[assumption]]
-text = "P and Q without a decimal point are in thousandths of a millimetre: Q5000 is 5 mm."
+text = "P and Q take no decimal point and are in thousandths of a millimetre: Q5000 is 5 mm. Both are radii."
 verified = false
+manual = "4.2.5"
 
 [[assumption]]
-text = "The return e is modal and comes from a control parameter (5139) when no first block sets it; the same value serves G74 and G75."
+text = "The return e is modal and comes from parameter 5139 when no first block sets it; the same value serves G74 and G75."
 verified = false
+manual = "4.2.5, 4.2.6"
 
 [[assumption]]
-text = "The return after a peck and the step to the next plunge are rapids, and the next peck feeds through the returned distance again."
+text = "The return after a peck and the step to the next plunge are rapids, and the next peck feeds through the returned distance again. The last peck and the last step are shortened so they end on the programmed point."
 verified = false
+manual = "4.2.5, fig. 4.2.5 (a)"
 
 [[assumption]]
-text = "The relief R at the bottom is not drawn: the sources disagree about its direction."
+text = "The relief R at the bottom is not drawn. It is normally positive; on a hole on the centre line (no X and no P) its sign says which way the drill escapes, so it is best left out there."
 verified = false
+manual = "4.2.5"
+
+[[assumption]]
+text = "Tool nose radius compensation cannot be applied in this cycle."
+verified = false
+manual = "4.2.5"
 
 [[example]]
 title = "Hole on the centre line, 25 deep, in pecks of 5 mm"

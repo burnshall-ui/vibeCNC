@@ -4,8 +4,9 @@ keywords = ["pattern", "pattern repeating", "forging", "casting", "near net", "k
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.3 and the restrictions in 4.2.8. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -42,12 +43,19 @@ meaning = "feed of the passes"
 min_exclusive = 0
 
 [[assumption]]
-text = "The contour is cut R times: the first pass lies U and W outside the allowance contour, the last on it, the passes between evenly spaced, U / (R - 1) apart."
+text = "The contour is cut R times: the first pass lies U (a radius) and W outside the allowance contour, the last on it. The passes between are taken to be evenly spaced, U / (R - 1) apart; the manual does not say. R is rounded to a whole number."
 verified = false
+manual = "4.2.3, fig. 4.2.3 (a)"
 
 [[assumption]]
-text = "Every pass starts at the cycle start point; the approach and the return are rapids, the return straight back to the start point."
+text = "Every pass starts at the cycle start point; the approach and the return are rapids, and the cycle ends back at the start point."
 verified = false
+manual = "4.2.3, fig. 4.2.3 (a)"
+
+[[assumption]]
+text = "The first contour block carries G00 or G01 (else PS0065). G40, G41 or G42 between P and Q stop the control (PS0325)."
+verified = false
+manual = "4.2.3, 4.2.8"
 
 [[example]]
 title = "Forged blank, 3 mm stock in X and 2 mm in Z, four passes"

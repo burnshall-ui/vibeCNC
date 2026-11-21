@@ -111,6 +111,10 @@ class TextTests(unittest.TestCase):
                       text)
         self.assertIn("  F: lead (mm, above 0)", text)
         self.assertIn("How this simulator reads it (not verified):", text)
+        self.assertIn("    mm: finishing passes (01 to 99)", text)
+        self.assertIn("    aa: tool angle in degrees (one of 80, 60, 55, 30, 29, 00)", text)
+        self.assertIn("[manual 4.2.7, fig. 4.2.7 (b)]", text)
+        self.assertIn("[not in the manual]", text)
         self.assertIn("G76 X16.93 Z-30. P1534 Q400 F2.5", text)
 
     def test_every_card_reads_without_a_gap(self):

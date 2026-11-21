@@ -14,9 +14,11 @@ notes = [
 [source]
 text = """Drafted on 2026-11-21 from the autocomplete table this project had, corrected \
 to G-code system A, which its programs use (G50 S is the speed limit, G98/G99 the \
-feed modes, U/W the incremental moves). From training material and forum posts \
-describing the Fanuc format; the manual itself was not read. The M-codes listed as \
-machine_specific mean what the machine builder made them mean."""
+feed modes, U/W the incremental moves). The G-codes were checked on 2026-11-21 \
+against the FANUC Series 0i-MODEL F operator's manual for the lathe system, \
+B-64604EN-1/01: table 2 (a) for system A, section 4.1 for G90, G92 and G94. That \
+manual is for the 0i-F, not the 0i-TF Plus of the machine. The M-codes are not in \
+it; those listed as machine_specific mean what the machine builder made them mean."""
 verified = false
 verified_on = ""
 

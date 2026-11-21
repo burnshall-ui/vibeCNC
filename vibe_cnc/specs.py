@@ -33,6 +33,35 @@ class Source:
 
 
 @dataclass(frozen=True)
+class Part:
+    """One field of a packed word: the "m" of G76 P(mmrraa)."""
+    letter: str
+    meaning: str
+    min: Optional[int] = None
+    max: Optional[int] = None
+    values: Tuple[int, ...] = ()            # the only values allowed, when given
+
+    def allowed(self) -> str:
+        """What the field may be, in words: "01 to 99", "one of 80, 60, 00"."""
+        if self.values:
+            return "one of " + ", ".join(f"{v:02d}" for v in self.values)
+        if self.min is not None and self.max is not None:
+            return f"{self.min:02d} to {self.max:02d}"
+        if self.min is not None:
+            return f"at least {self.min:02d}"
+        return f"at most {self.max:02d}" if self.max is not None else ""
+
+    def out_of_range(self, value: int) -> Optional[str]:
+        """What the value breaks, as allowed() says it, or None."""
+        if self.values:
+            broken = value not in self.values
+        else:
+            broken = ((self.min is not None and value < self.min)
+                      or (self.max is not None and value > self.max))
+        return self.allowed() if broken else None
+
+
+@dataclass(frozen=True)
 class Word:
     letter: str
     meaning: str
@@ -42,6 +71,21 @@ class Word:
     min: Optional[float] = None             # value >= min
     min_exclusive: Optional[float] = None   # value > min_exclusive
     max: Optional[float] = None             # value <= max
+    parts: Tuple[Part, ...] = ()            # the fields of a packed word, in form order
+
+    def unpack(self, value: int) -> Optional[Dict[str, int]]:
+        """A packed word's fields by letter: P20060 under "mmrraa" is m 2,
+        r 0, a 60 -- leading zeros are dropped as the word is written, so the
+        digits are filled from the left. None when there are more digits than
+        the form has places."""
+        digits = str(abs(int(value)))
+        if len(digits) > len(self.form):
+            return None
+        digits = digits.zfill(len(self.form))
+        fields: Dict[str, str] = {}
+        for letter, digit in zip(self.form, digits):
+            fields[letter] = fields.get(letter, "") + digit
+        return {letter: int(text) for letter, text in fields.items()}
 
     def out_of_range(self, value: float) -> Optional[str]:
         """What the value breaks, in words ("above 0"), or None. Ranges are in
@@ -66,7 +110,8 @@ class Block:
 @dataclass(frozen=True)
 class Assumption:
     text: str
-    verified: bool
+    verified: bool          # true once checked on the machine
+    manual: str = ""        # where the manual says so: "4.2.7, fig. 4.2.7 (b)"; empty when it does not
 
 
 @dataclass(frozen=True)
@@ -197,7 +242,38 @@ def _load(path: str) -> Tuple[_Reader, dict]:
 
 
 _CARD_KEYS = {"code", "name", "keywords", "source", "block", "assumption", "example"}
-_WORD_KEYS = {"meaning", "unit", "decimal_point", "form", "min", "min_exclusive", "max"}
+_WORD_KEYS = {"meaning", "unit", "decimal_point", "form", "min", "min_exclusive", "max", "parts"}
+_PART_KEYS = {"meaning", "min", "max", "values"}
+
+
+def _parts(reader: _Reader, spec: dict, key: str, form: str) -> Tuple[Part, ...]:
+    """The fields of a packed word, in the order its form names them."""
+    if "parts" not in spec:
+        return ()
+    table = reader.table(spec["parts"], f"{key}.parts")
+    if not form:
+        reader.fail(f"{key}.parts", "a word with parts needs a form, such as \"mmrraa\"")
+    parts = {}
+    for letter, part in table.items():
+        where = f"{key}.parts.{letter}"
+        if letter not in form:
+            reader.fail(where, f"not a letter of the form {form!r}")
+        reader.table(part, where)
+        reader.only(part, where, _PART_KEYS)
+        values = part.get("values", [])
+        if not isinstance(values, list) or not all(
+                isinstance(v, int) and not isinstance(v, bool) for v in values):
+            reader.fail(f"{where}.values", "expected a list of whole numbers")
+        bounds = []
+        for name in ("min", "max"):
+            number = reader.number(part, name, where)
+            if number is not None and number != int(number):
+                reader.fail(f"{where}.{name}", "expected a whole number")
+            bounds.append(None if number is None else int(number))
+        parts[letter] = Part(letter, reader.text(part, "meaning", where), bounds[0], bounds[1],
+                             tuple(values))
+    order = list(dict.fromkeys(form))
+    return tuple(parts[letter] for letter in order if letter in parts)
 
 
 def load_card(path: str) -> CycleCard:
@@ -226,13 +302,15 @@ def load_card(path: str) -> CycleCard:
                 reader.fail(key, "not an address letter (G and N are not words of a cycle)")
             reader.table(spec, key)
             reader.only(spec, key, _WORD_KEYS)
+            form = reader.text(spec, "form", key, required=False)
             words[letter] = Word(letter, reader.text(spec, "meaning", key),
                                  reader.text(spec, "unit", key, required=False),
                                  reader.flag(spec, "decimal_point", key, required=False, default=True),
-                                 reader.text(spec, "form", key, required=False),
+                                 form,
                                  reader.number(spec, "min", key),
                                  reader.number(spec, "min_exclusive", key),
-                                 reader.number(spec, "max", key))
+                                 reader.number(spec, "max", key),
+                                 _parts(reader, spec, key, form))
         blocks.append(Block(words, recognized))
     if not blocks:
         reader.fail("block", "missing; a card has at least one [[block]]")
@@ -240,9 +318,10 @@ def load_card(path: str) -> CycleCard:
     assumptions = []
     for index, table in enumerate(reader.tables(data, "assumption")):
         where = f"assumption[{index}]"
-        reader.only(table, where, {"text", "verified"})
+        reader.only(table, where, {"text", "verified", "manual"})
         assumptions.append(Assumption(reader.text(table, "text", where),
-                                      reader.flag(table, "verified", where)))
+                                      reader.flag(table, "verified", where),
+                                      reader.text(table, "manual", where, required=False)))
     examples = []
     for index, table in enumerate(reader.tables(data, "example")):
         where = f"example[{index}]"

@@ -4,8 +4,9 @@ keywords = ["finish", "finishing", "finish pass", "schlichten", "schlichtzyklus"
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.4 and the restrictions in 4.2.8. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -18,17 +19,25 @@ decimal_point = false
 meaning = "last block of the contour, by its N number"
 unit = "block number"
 decimal_point = false
-[block.words.F]
-meaning = "feed, if the block gives one; the contour's own F words otherwise"
-min_exclusive = 0
 
 [[assumption]]
 text = "G70 runs the contour from P to Q once, as programmed, without the allowance the roughing cycle left, and returns to the start point with a rapid."
 verified = false
+manual = "4.2.4"
+
+[[assumption]]
+text = "F, S and T come from the contour blocks; those of the G71, G72 or G73 block do not count here. The G70 block itself takes only P and Q."
+verified = false
+manual = "4.2.4"
 
 [[assumption]]
 text = "The contour blocks are those a G71, G72 or G73 already named; where no roughing cycle stepped past them, they run as ordinary blocks."
 verified = false
+
+[[assumption]]
+text = "Between P and Q there is no G40, G41 or G42 (alarm PS0325): compensation is switched on before the G70 and off after it. The N numbers named by P and Q occur only once in the program."
+verified = false
+manual = "4.2.4, 4.2.8"
 
 [[example]]
 title = "Finish the contour a G71 roughed"

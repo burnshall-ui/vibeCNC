@@ -4,8 +4,9 @@ keywords = ["groove", "grooving", "recess", "parting", "einstich", "einstechen",
 
 [source]
 text = """Drafted on 2026-11-21 from what this project's parser, linter and policies.md \
-already assumed, which came from training material and forum posts describing the \
-Fanuc format. The manual itself was not read."""
+already assumed; checked the same day against the FANUC Series 0i-MODEL F operator's \
+manual for the lathe system, B-64604EN-1/01, section 4.2.6. That manual is \
+for the 0i-F, not the 0i-TF Plus of the machine. Not checked on the machine."""
 verified = false
 verified_on = ""
 
@@ -46,20 +47,28 @@ meaning = "feed"
 min_exclusive = 0
 
 [[assumption]]
-text = "P and Q without a decimal point are in thousandths of a millimetre: P1000 is 1 mm."
+text = "P and Q take no decimal point and are in thousandths of a millimetre: P1000 is 1 mm. Both are radii."
 verified = false
+manual = "4.2.6"
 
 [[assumption]]
 text = "G75 pecks in X towards the groove bottom with a return of e after each peck, goes back out to the start diameter at the bottom, steps Q along Z and plunges again; the last step is shortened so the last plunge lands on the programmed end."
 verified = false
+manual = "4.2.6, fig. 4.2.6 (b)"
 
 [[assumption]]
 text = "e is a radius in G75 as well, and the return and the step are rapids."
 verified = false
+manual = "4.2.6"
 
 [[assumption]]
 text = "The width of the tool is not drawn: the path is that of the point the tool is set on."
 verified = false
+
+[[assumption]]
+text = "Tool nose radius compensation cannot be applied in this cycle."
+verified = false
+manual = "4.2.6"
 
 [[example]]
 title = "Groove to Ø25 between Z-20 and Z-25 on a Ø40 bar, 1 mm pecks"

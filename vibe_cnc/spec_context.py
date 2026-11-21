@@ -20,8 +20,9 @@ MAX_CARDS = 3
 _G_WORD = re.compile(r"(?<![A-Z])G0*(\d+)(?!\d)", re.IGNORECASE)
 
 HEADER = ("Reference from this simulator's spec files: the control's codes, and the cards of "
-          "the cycles concerned. What is marked not verified was drafted from training "
-          "material, not from the Fanuc manual, and was not checked on the machine.")
+          "the cycles concerned. They were checked against the FANUC 0i-F lathe operator's "
+          "manual (B-64604EN-1/01); [manual ...] names the section that says so. What is "
+          "marked not verified was not checked on the machine.")
 
 
 # ---- which cards -------------------------------------------------------------------
@@ -120,7 +121,12 @@ def _word_line(word: Word) -> str:
         details.append(f"packed as {word.form}")
     if not word.decimal_point:
         details.append("no decimal point")
-    return f"  {word.letter}: {word.meaning}" + (f" ({', '.join(details)})" if details else "")
+    line = f"  {word.letter}: {word.meaning}" + (f" ({', '.join(details)})" if details else "")
+    for part in word.parts:
+        allowed = part.allowed()
+        line += (f"\n    {part.letter * word.form.count(part.letter)}: {part.meaning}"
+                 + (f" ({allowed})" if allowed else ""))
+    return line
 
 
 def card_text(card: CycleCard) -> str:
@@ -136,7 +142,9 @@ def card_text(card: CycleCard) -> str:
     if card.assumptions:
         none_verified = not any(a.verified for a in card.assumptions)
         lines.append("How this simulator reads it" + (" (not verified):" if none_verified else ":"))
-        lines += [f"  - {a.text}" + ("" if a.verified or none_verified else " (not verified)")
+        lines += [f"  - {a.text}"
+                  + (f" [manual {a.manual}]" if a.manual else " [not in the manual]")
+                  + ("" if a.verified or none_verified else " (not verified)")
                   for a in card.assumptions]
     for example in card.examples:
         lines.append(f"Example, {example.title}:")
