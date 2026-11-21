@@ -73,10 +73,13 @@ TASKS = [
          "Schreibe ein komplettes Programm O2002, Werkstoff C45: Außengewinde M24x3, 25 mm "
          "lang, ab Z0, mit G76, Gewindedrehmeißel T0303, Drehzahl 600 U/min. Mit "
          "Sicherheitsblock am Anfang und sicherem Programmende."),
+    # It asked for "Ø80 down to Ø40 at Z-5, then Ø40 down to Ø20 at Z-10" until
+    # 2026-11-21: deeper inside than outside, a pocket in the face, which G72
+    # type I cannot cut. The answers of both runs followed it to the letter.
     Task("g72_face",
-         "Rough a stepped face with G72 on a Ø80 bar: from Ø80 down to Ø40 at Z-5, then "
-         "Ø40 down to Ø20 at Z-10. T0101, 1.5 mm depth of cut, F0.2, finishing allowance "
-         "0.2 in X and 0.1 in Z."),
+         "Rough a stepped face with G72 on a Ø80 bar whose face is at Z0: outside Ø40 "
+         "face it down to Z-10, inside Ø40 down to Z-5, so a Ø40 boss stands 5 mm proud. "
+         "T0101, 1.5 mm depth of cut, F0.2, finishing allowance 0.2 in X and 0.1 in Z."),
     Task("g73_blank",
          "Rough a forged blank with G73 in 4 passes, 3 mm stock in X (radius) and 2 mm in "
          "Z: contour Ø30 to Z-20, then Ø45 to Z-35. T0101, F0.2, then finish with G70."),
