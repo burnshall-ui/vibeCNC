@@ -30,7 +30,7 @@ python3 -m unittest tests.test_lint_engine tests.test_gcode_parser \
     tests.test_reference tests.test_arc_geometry tests.test_tool_data \
     tests.test_collision tests.test_macro_data tests.test_gcode_text \
     tests.test_review_eval tests.test_verifier tests.test_generate_eval \
-    tests.test_specs tests.test_spec_context
+    tests.test_specs tests.test_spec_context tests.test_stock_model
 
 # 2. Everything, including the Qt tests (needs requirements.txt)
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests

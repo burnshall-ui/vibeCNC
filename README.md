@@ -16,15 +16,20 @@ system A), with a rule-based checker and optional AI review and generation.
 > and keep a hand on feed hold. The authors accept no liability for crashes,
 > scrapped parts or injury.
 
-![Vibe CNC: a turning program in the editor, its toolpath drawn over the stock, and the linter's and the model's review in the assist pane](docs/images/vibe-cnc.png)
+![Vibe CNC: a turning program in the editor beside the simulation, which shows the finished shaft as a half section over the dashed blank, with the tools, macros and assist tabs below it](docs/images/vibe-cnc.png)
 
 ## Features
 
 - **Editor**: syntax highlighting, line numbers, find and replace,
   autocomplete, tool and macro libraries with their own editors.
 - **Simulation**: the toolpath drawn to scale and played back block by block,
-  with CYCLE START, FEED HOLD, SINGLE BLOCK and OPT STOP. Moves into the chuck
-  are reported.
+  with CYCLE START, FEED HOLD, SINGLE BLOCK and OPT STOP. The stock is cut as
+  the program runs, shown as a half section: hatched above the centre line,
+  the turned part below it. Moves ahead of the playback are drawn faint, the
+  move just made in yellow. Moves into the chuck are reported.
+- **Layout**: the program and the simulation side by side, each the full
+  height of the window; the tool and macro libraries and the assist share a
+  panel under the simulation that folds away (Ctrl+J).
 - **Cycles**: G70–G76 and the one-block cycles G90, G92 and G94 are expanded
   into the moves they make. G32 threading and G41/G42 nose radius
   compensation are drawn as well.
@@ -94,6 +99,9 @@ programs may leave the shop.
 | Space · F · Esc | Cycle start · feed hold · reset |
 | Ctrl+O · Ctrl+S | Open · save |
 | Ctrl+L | Lint only |
+| Ctrl+J | Fold or open the tools, macros and assist panel |
+| Right click on the simulation | Menu: half section on or off, fit the view |
+| Double click on the simulation | Fit the view again |
 | Ctrl+F · Ctrl+H | Find · find and replace |
 | Ctrl+Space | Autocomplete: G- and M-codes, tools after `T`, macros after `M98 P`. ↑/↓ to choose, Enter or Tab to insert, Esc to close |
 | Enter · Ctrl+Enter | In the assist box: analyse · generate |
@@ -151,6 +159,12 @@ yet, so every card says `verified = false`. Known simplifications:
 - The 45° escape after each G71/G72 pass is drawn as a rapid; the control
   makes it at cutting feed.
 - Inch input (G20) is not supported.
+- The material removed takes each tool's body as a square shoulder behind
+  its tip, on the side its tip number gives, because the tool table has no
+  insert shape. A move running down towards the chuck therefore shows a
+  gouge sooner than a real insert would cut one. Drills bore their `d_mm`
+  with a 118° point. Grooving, parting and thread tools remove nothing (the
+  table has no width), and neither do thread passes.
 
 ## Development
 
