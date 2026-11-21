@@ -1,5 +1,5 @@
 # vibe_cnc.py — Main program (UI + Wiring) — Vibe CNC
-import os, sys, re
+import html, os, sys, re
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QSize, QTimer, QSettings, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot
@@ -15,6 +15,7 @@ from vibe_cnc.settings_manager import SettingsManager
 from vibe_cnc.tool_model import ToolModel, load_tools_json
 from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
+from vibe_cnc.diagnostics import blocking
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
 from vibe_cnc.ai_client import AIClient, backend_of
@@ -1005,6 +1006,24 @@ class Main(QMainWindow):
         self._add_to_recent_files(target_path)
 
     # --- Quick Sim (F5) ---
+    def _mark_findings(self, findings):
+        """Marks the lines of ERROR and WARNING findings in the editor. A hint
+        (INFO) is no fault and leaves its line alone."""
+        lines = [f.line for f in blocking(findings)]
+        if lines:
+            self.editor.set_error_lines(lines)
+        else:
+            self.editor.clear_error_lines()
+
+    def _findings_html(self, findings) -> str:
+        """The findings for the chat, each with its severity in its own colour."""
+        colours = {"ERROR": "#FF5555", "WARNING": self.cfg_colors['FANUC_YELLOW'],
+                   "INFO": self.cfg_colors['CYAN']}
+        rows = [f"<span style='color:{colours.get(f.severity, self.cfg_colors['CRT_GREEN'])}'>"
+                f"• Line {f.line}: {f.severity}</span> — {html.escape(f.message)}"
+                for f in findings]
+        return f"<b>{len(findings)} finding(s):</b><br>" + "<br>".join(rows)
+
     def quick_sim(self):
         """F5: Quick Sim with CAMotics (Hot-Reload)"""
         code = self.editor.toPlainText()
@@ -1013,8 +1032,7 @@ class Main(QMainWindow):
         findings = self.linter.run_all(code)
         if findings:
             # Show error markers
-            error_lines = [f['line'] for f in findings]
-            self.editor.set_error_lines(error_lines)
+            self._mark_findings(findings)
             
             # Warning on critical errors (>2)
             if len(findings) > 2:
@@ -1022,7 +1040,7 @@ class Main(QMainWindow):
                     self, 
                     "Lint Errors", 
                     f"{len(findings)} errors found:\n\n" + 
-                    "\n".join([f"• Line {f['line']}: {f['rule']}" for f in findings[:5]]) +
+                    "\n".join([f"• Line {f.line}: {f.severity} — {f.message}" for f in findings[:5]]) +
                     ("\n..." if len(findings) > 5 else "") +
                     "\n\nSimulate anyway?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -1051,8 +1069,7 @@ class Main(QMainWindow):
         # Lint-Check
         findings = self.linter.run_all(code)
         if findings:
-            error_lines = [f['line'] for f in findings]
-            self.editor.set_error_lines(error_lines)
+            self._mark_findings(findings)
             self.status.showMessage(f"⚠️ {len(findings)} errors — copied to VM anyway", 5000)
         else:
             self.editor.clear_error_lines()
@@ -1081,13 +1098,9 @@ class Main(QMainWindow):
         findings = self.linter.run_all(code)
 
         if findings:
-            error_lines = [f['line'] for f in findings]
-            self.editor.set_error_lines(error_lines)
+            self._mark_findings(findings)
             self.status.showMessage(f"⚠️ Lint: {len(findings)} errors found", 5000)
-            lint_text = f"<b>{len(findings)} finding(s):</b><br>"
-            for f in findings:
-                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Line {f['line']}: {f['rule']}</span> — {f['message']}<br>"
-            self._append_assistant_message("Lint", lint_text.rstrip('<br>'), is_error=True)
+            self._append_assistant_message("Lint", self._findings_html(findings), is_error=True)
         else:
             self.editor.clear_error_lines()
             self.status.showMessage("✅ Lint: OK", 3000)
@@ -1105,12 +1118,8 @@ class Main(QMainWindow):
         findings = self.linter.run_all(code)
         
         if findings:
-            error_lines = [f['line'] for f in findings]
-            self.editor.set_error_lines(error_lines)
-            lint_text = f"<b>{len(findings)} finding(s):</b><br>"
-            for f in findings:
-                lint_text += f"<span style='color:{self.cfg_colors['CRT_GREEN']}'>• Line {f['line']}: {f['rule']}</span> — {f['message']}<br>"
-            self._append_assistant_message("Lint", lint_text.rstrip('<br>'), is_error=True)
+            self._mark_findings(findings)
+            self._append_assistant_message("Lint", self._findings_html(findings), is_error=True)
         else:
             self.editor.clear_error_lines()
             self._append_assistant_message("Lint", "✅ No issues found")

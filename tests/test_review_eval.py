@@ -87,7 +87,7 @@ class FaultTests(unittest.TestCase):
 
     def expect(self, program, fault, line, rule, after, where):
         case = self.case(program, fault)
-        self.assertIn((line, rule), [(f["line"], f["rule"]) for f in case.expected])
+        self.assertIn((line, rule), [(f.line, f.rule) for f in case.expected])
         self.assertEqual(case.after, after)
         self.assertEqual(case.where, where)
 
@@ -101,42 +101,42 @@ class FaultTests(unittest.TestCase):
 
     def test_header(self):
         # The linter puts header findings on line 1; the change is on line 3.
-        self.expect("SHAFT", "header_g40", 1, "Header", ["N10 G18 G80 G97 G99"], [1, 3])
+        self.expect("SHAFT", "header_g40", 1, "HEADER_CODE", ["N10 G18 G80 G97 G99"], [1, 3])
 
     def test_spindle_limit(self):
         # G50 S2500 goes from line 5; the G96 it guarded is line 8.
-        self.expect("SHAFT", "css_g50", 8, "CSS", ["N30"], [5, 8])
+        self.expect("SHAFT", "css_g50", 8, "G50_BEFORE_G96", ["N30"], [5, 8])
 
     def test_retract(self):
-        self.expect("SHAFT", "no_retract", 20, "Retract", ["N160", "N170 M05"], [18, 19, 20])
+        self.expect("SHAFT", "no_retract", 20, "RETRACT_BEFORE_M30", ["N160", "N170 M05"], [18, 19, 20])
 
     def test_zero_feed(self):
-        self.expect("SHAFT", "feed_zero", 11, "G7x", ["N90 G71 P100 Q130 U0.4 W0.1 F0"], [11])
+        self.expect("SHAFT", "feed_zero", 11, "CYCLE_FEED_ZERO", ["N90 G71 P100 Q130 U0.4 W0.1 F0"], [11])
 
     def test_decimal_point_in_a_block_number(self):
-        self.expect("SHAFT", "pq_point", 11, "G7x", ["N90 G71 P100. Q130 U0.4 W0.1 F0.25"], [11])
+        self.expect("SHAFT", "pq_point", 11, "PQ_DECIMAL_POINT", ["N90 G71 P100. Q130 U0.4 W0.1 F0.25"], [11])
 
     def test_zero_depth(self):
         # Changed on the first G71 block; the parser reports it on the second.
-        self.expect("SHAFT", "depth_zero", 11, "Cycle", ["N80 G71 U0 R0.5"], [10, 11])
+        self.expect("SHAFT", "depth_zero", 11, "CYCLE_NO_DEPTH", ["N80 G71 U0 R0.5"], [10, 11])
 
     def test_missing_block(self):
         # Q130 + 5; there is no N135.
-        self.expect("SHAFT", "blocks_missing", 11, "Cycle",
+        self.expect("SHAFT", "blocks_missing", 11, "CYCLE_BLOCKS_MISSING",
                     ["N90 G71 P100 Q135 U0.4 W0.1 F0.25"], [11])
 
     def test_protected_m_code(self):
-        self.expect("SHAFT", "protected_m", 17, "M-Invariant", ["N150 (M62)"], [17])
+        self.expect("SHAFT", "protected_m", 17, "PROTECTED_M_CODE", ["N150 (M62)"], [17])
 
     def test_arc_radius(self):
         # Chord from (r20, z-20) to (r22, z-22) is 2.83, so R0.2 cannot reach.
-        self.expect("COMP", "arc_radius", 9, "Arc R", ["N80 G02 X44. Z-22. R0.2"], [9])
+        self.expect("COMP", "arc_radius", 9, "ARC_R_TOO_SMALL", ["N80 G02 X44. Z-22. R0.2"], [9])
 
     def test_rapid_lead_in(self):
-        self.expect("COMP", "leadin_rapid", 7, "G41/G42", ["N60 G00 X40. Z0. F0.2"], [7])
+        self.expect("COMP", "leadin_rapid", 7, "TNR_LEADIN_RAPID", ["N60 G00 X40. Z0. F0.2"], [7])
 
     def test_tool_change_with_compensation_on(self):
-        self.expect("COMP", "g40_toolchange", 12, "G41/G42", ["N90"], [10, 12, 16])
+        self.expect("COMP", "g40_toolchange", 12, "TNR_TOOL_CHANGE", ["N90"], [10, 12, 16])
 
     def test_no_change_alters_the_number_of_lines(self):
         for (program, fault), case in self.cases.items():
@@ -165,15 +165,15 @@ class GroundTruthTests(unittest.TestCase):
         program = SHAFT.replace("N120 Z-18.", "N120 G02 X24. Z-20. R2.")
         cases, _ = cases_of(P=program)
         self.assertEqual(cases[("P", "arc_radius")].after, ["N120 G02 X24. Z-20. R0.2"])
-        self.assertEqual([(f["line"], f["rule"]) for f in cases[("P", "arc_radius")].expected],
-                         [(14, "Arc R")])
+        self.assertEqual([(f.line, f.rule) for f in cases[("P", "arc_radius")].expected],
+                         [(14, "ARC_R_TOO_SMALL")])
 
     def test_only_what_is_new_is_expected(self):
         # No retract to begin with: every copy still has that finding, and no
         # case expects it, because the fault put in is something else.
         program = SHAFT.replace("N160 G00 Z50.", "N160").replace("N170 G00 X100. M05", "N170 M05")
         cases, left_out = cases_of(P=program)
-        self.assertEqual([f["rule"] for f in cases[("P", "feed_zero")].expected], ["G7x"])
+        self.assertEqual([f.rule for f in cases[("P", "feed_zero")].expected], ["CYCLE_FEED_ZERO"])
         self.assertIn(20, cases[("P", "feed_zero")].known)
         self.assertNotIn(("P", "no_retract"), cases)
         self.assertEqual(cases[("P", ev.CLEAN)].known, [20])

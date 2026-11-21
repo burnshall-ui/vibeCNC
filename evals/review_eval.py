@@ -338,7 +338,8 @@ class Case:
     fault: str              # a Fault name, or CLEAN
     summary: str
     code: str               # the program as sent
-    expected: List[dict]    # what the linter reports that it did not before
+    expected: list          # what the linter reports that it did not before: Diagnostics,
+                            # or their dicts in a case read back from a JSONL file
     where: List[int]        # the lines an answer may name: the findings and the change
     known: List[int]        # every line the linter reports, baseline included
     about: str
@@ -348,7 +349,7 @@ class Case:
 
 
 def _key(finding):
-    return (finding["line"], finding["rule"], finding["message"])
+    return (finding.line, finding.rule, finding.message)
 
 
 def build_cases(programs: Dict[str, str], engine, faults=None):
@@ -360,7 +361,7 @@ def build_cases(programs: Dict[str, str], engine, faults=None):
         tail = "\n" if code.endswith("\n") else ""
         baseline = engine.run_all(code)
         seen = {_key(f) for f in baseline}
-        base_lines = sorted({f["line"] for f in baseline})
+        base_lines = sorted({f.line for f in baseline})
         said = "the linter reports nothing" if not baseline else \
             f"the linter reports {len(baseline)} thing(s) already"
         cases.append(Case(label, CLEAN, f"as it is ({said})", code, [], base_lines,
@@ -380,7 +381,7 @@ def build_cases(programs: Dict[str, str], engine, faults=None):
                 new = [f for f in engine.run_all(new_code) if _key(f) not in seen]
                 if not new:
                     continue
-                where = sorted({f["line"] for f in new} | set(change.changed))
+                where = sorted({f.line for f in new} | set(change.changed))
                 cases.append(Case(
                     label, fault.name, fault.summary, new_code, new, where,
                     sorted(set(where) | set(base_lines)), fault.about, fault.places,
@@ -514,7 +515,7 @@ def describe_plan(cases, left_out, prompt_chars: List[int]) -> str:
             for before, after in zip(c.before, c.after):
                 out.append(f"  {'':<15}   {before.strip()!r} -> {after.strip()!r}")
             for f in c.expected:
-                out.append(f"  {'':<15}   linter: line {f['line']} {f['rule']}: {f['message']}")
+                out.append(f"  {'':<15}   linter: line {f.line} {f.rule}: {f.message}")
     unseen = [(p, f, why) for p, f, why in left_out if why != NO_PLACE]
     if unseen:
         out.append("\nLeft out, the linter does not see them there:")

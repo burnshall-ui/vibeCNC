@@ -5,11 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from vibe_cnc import tool_data
-from vibe_cnc.lint_engine import LintEngine
+from vibe_cnc.diagnostics import Diagnostic, blocking, is_lint_clean, weight
+from vibe_cnc.lint_engine import LintEngine, is_snippet
 
 # Shared so a rename in the engine breaks the positive tests below loudly,
 # instead of quietly emptying the filters and turning these tests green.
-M_RULE = "M-Invariant"
+M_RULE = "PROTECTED_M_CODE"
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "reference.nc")
 
@@ -33,7 +34,10 @@ def make_cfg(**policy_overrides):
 
 
 def rules(findings, rule):
-    return [f for f in findings if f["rule"] == rule]
+    """The findings of one rule; a name ending in "_" takes every rule it begins."""
+    if rule.endswith("_"):
+        return [f for f in findings if f.rule.startswith(rule)]
+    return [f for f in findings if f.rule == rule]
 
 
 class LintEngineProtectedMTests(unittest.TestCase):
@@ -56,8 +60,8 @@ class LintEngineProtectedMTests(unittest.TestCase):
 
         findings = engine.run_all("(M8)\n; M8\nG01 X1 ; M8")
 
-        self.assertEqual([f["line"] for f in rules(findings, M_RULE)], [1, 2, 3])
-        self.assertIn("commented out", findings[0]["message"])
+        self.assertEqual([f.line for f in rules(findings, M_RULE)], [1, 2, 3])
+        self.assertIn("commented out", findings[0].message)
 
     def test_unprotected_m_code_in_a_comment_is_ignored(self):
         engine = LintEngine(make_cfg(protected_m_codes=[8]))
@@ -69,7 +73,7 @@ class LintEngineProtectedMTests(unittest.TestCase):
 
         findings = engine.run_all("(M62 M63)")
 
-        seen = [(f["line"], f["rule"], f["message"]) for f in findings]
+        seen = [(f.line, f.rule, f.message) for f in findings]
         self.assertEqual(len(seen), len(set(seen)))
 
 
@@ -81,7 +85,7 @@ class LintEngineHeaderTests(unittest.TestCase):
 
         findings = engine.run_all("(G18 ist hier nicht noetig)\nG21 G40 G80 G97 G54")
 
-        self.assertEqual([f["message"] for f in rules(findings, "Header")],
+        self.assertEqual([f.message for f in rules(findings, "HEADER_CODE")],
                          ["G18 expected in header."])
 
     def test_a_longer_code_does_not_satisfy_a_shorter_one(self):
@@ -89,7 +93,7 @@ class LintEngineHeaderTests(unittest.TestCase):
 
         findings = engine.run_all("G180 G21 G40 G80 G97 G54")
 
-        self.assertEqual([f["message"] for f in rules(findings, "Header")],
+        self.assertEqual([f.message for f in rules(findings, "HEADER_CODE")],
                          ["G18 expected in header."])
 
     def test_comment_block_does_not_push_the_header_out_of_range(self):
@@ -98,18 +102,18 @@ class LintEngineHeaderTests(unittest.TestCase):
         with open(FIXTURE, "r", encoding="utf-8") as handle:
             findings = engine.run_all(handle.read())
 
-        self.assertEqual(rules(findings, "Header"), [])
-        self.assertEqual(rules(findings, "Units"), [])
-        self.assertEqual(rules(findings, "Origin"), [])
+        self.assertEqual(rules(findings, "HEADER_CODE"), [])
+        self.assertEqual(rules(findings, "UNITS"), [])
+        self.assertEqual(rules(findings, "ORIGIN"), [])
 
     def test_a_genuinely_missing_header_is_still_reported(self):
         engine = LintEngine(LintEngineHeaderTests._cfg())
 
         findings = engine.run_all("G00 X50. Z2.\nG01 Z0. F0.2")
 
-        self.assertEqual(len(rules(findings, "Header")), 4)
-        self.assertEqual(len(rules(findings, "Units")), 1)
-        self.assertEqual(len(rules(findings, "Origin")), 1)
+        self.assertEqual(len(rules(findings, "HEADER_CODE")), 4)
+        self.assertEqual(len(rules(findings, "UNITS")), 1)
+        self.assertEqual(len(rules(findings, "ORIGIN")), 1)
 
     @staticmethod
     def _cfg():
@@ -125,7 +129,7 @@ class LintEngineCycleFeedTests(unittest.TestCase):
         for feed in ("F0.25", "F0.15", "F0.08"):
             with self.subTest(feed=feed):
                 findings = engine.run_all(f"G71 P100 Q200 U0.4 W0.1 {feed}")
-                self.assertEqual(rules(findings, "G7x"), [])
+                self.assertEqual(rules(findings, "CYCLE_FEED_ZERO"), [])
 
     def test_zero_and_negative_feed_are_still_reported(self):
         engine = LintEngine(make_cfg())
@@ -133,14 +137,14 @@ class LintEngineCycleFeedTests(unittest.TestCase):
         for feed in ("F0", "F0.0", "F0.00", "F-0.2"):
             with self.subTest(feed=feed):
                 findings = engine.run_all(f"G71 P100 Q200 {feed}")
-                self.assertEqual(len(rules(findings, "G7x")), 1)
+                self.assertEqual(len(rules(findings, "CYCLE_FEED_ZERO")), 1)
 
     def test_cycle_block_without_a_feed_is_not_reported(self):
         # G71 is two blocks: depth and retract first, P/Q/U/W/F second. F is
         # modal besides, so its absence on one block means nothing.
         engine = LintEngine(make_cfg())
 
-        self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "G7x"), [])
+        self.assertEqual(rules(engine.run_all("G71 U1.5 R0.5"), "CYCLE_FEED_ZERO"), [])
 
 
 class LintEngineThreadingTests(unittest.TestCase):
@@ -153,7 +157,7 @@ class LintEngineThreadingTests(unittest.TestCase):
 
         findings = engine.run_all(self.SETUP + "G76 X17.4 Z-30. P1300 Q400 F2.")
 
-        self.assertEqual(rules(findings, "Cycle"), [])
+        self.assertEqual(rules(findings, "CYCLE_"), [])
 
     def test_a_runaway_pass_count_is_reported(self):
         # A first cut of one micron would be hundreds of thousands of passes --
@@ -164,15 +168,15 @@ class LintEngineThreadingTests(unittest.TestCase):
         findings = engine.run_all("G00 X24. Z2.\nG76 P010060 Q0 R0.05\n"
                                   "G76 X17.4 Z-30. P1300 Q1 F2.")
 
-        self.assertEqual(len(rules(findings, "Cycle")), 1)
-        self.assertIn("passes", rules(findings, "Cycle")[0]["message"])
+        self.assertEqual(len(rules(findings, "CYCLE_")), 1)
+        self.assertIn("passes", rules(findings, "CYCLE_")[0].message)
 
     def test_a_thread_with_no_height_is_reported(self):
         engine = LintEngine(make_cfg())
 
         findings = engine.run_all(self.SETUP + "G76 X17.4 Z-30. Q400 F2.")
 
-        self.assertEqual(len(rules(findings, "Cycle")), 1)
+        self.assertEqual(len(rules(findings, "CYCLE_")), 1)
 
 
 class LintEngineRetractTests(unittest.TestCase):
@@ -182,20 +186,20 @@ class LintEngineRetractTests(unittest.TestCase):
         engine = LintEngine(make_cfg())
 
         self.assertEqual(rules(engine.run_all("G01 X10. Z-5.\nG28 U0 W0\nM30"),
-                               "Retract"), [])
+                               "RETRACT_BEFORE_M30"), [])
 
     def test_incremental_retract_counts(self):
         engine = LintEngine(make_cfg())
 
         self.assertEqual(rules(engine.run_all("G00 W50.\nG00 U150.\nM30"),
-                               "Retract"), [])
+                               "RETRACT_BEFORE_M30"), [])
 
     def test_program_that_never_pulls_z_clear_is_still_reported(self):
         engine = LintEngine(make_cfg())
 
         findings = engine.run_all("G01 X-5.\nG00 X200.\nM30")
 
-        self.assertEqual(len(rules(findings, "Retract")), 1)
+        self.assertEqual(len(rules(findings, "RETRACT_BEFORE_M30")), 1)
 
 
 class LintEngineParserWarningTests(unittest.TestCase):
@@ -206,10 +210,10 @@ class LintEngineParserWarningTests(unittest.TestCase):
 
         findings = engine.run_all("G00 X0. Z0.\nG02 X40. Z-15. R1.")
 
-        arc = rules(findings, "Arc R")
+        arc = rules(findings, "ARC_R_")
         self.assertEqual(len(arc), 1)
-        self.assertEqual(arc[0]["line"], 2)
-        self.assertIn("half the chord", arc[0]["message"])
+        self.assertEqual(arc[0].line, 2)
+        self.assertIn("half the chord", arc[0].message)
 
     def test_impossible_r_in_a_cycle_contour_is_reported(self):
         # The contour is read by a parser of its own, whose warnings used to
@@ -227,22 +231,22 @@ class LintEngineParserWarningTests(unittest.TestCase):
             "G70 P100 Q200",
         ]))
 
-        arc = rules(findings, "Arc R")
-        self.assertEqual([f["line"] for f in arc], [6])
+        arc = rules(findings, "ARC_R_")
+        self.assertEqual([f.line for f in arc], [6])
 
     def test_arc_without_a_centre_is_reported(self):
         engine = LintEngine(make_cfg())
 
         findings = engine.run_all("G00 X30. Z0.\nG02 X40. Z-5.")
 
-        self.assertEqual(len(rules(findings, "Arc")), 1)
+        self.assertEqual(len(rules(findings, "ARC_NO_CENTER")), 1)
 
     def test_valid_geometry_produces_no_arc_finding(self):
         engine = LintEngine(make_cfg())
 
         findings = engine.run_all("G00 X30. Z0.\nG02 X40. Z-5. R5.")
 
-        self.assertEqual([f for f in findings if f["rule"].startswith("Arc")], [])
+        self.assertEqual([f for f in findings if f.rule.startswith("ARC")], [])
 
     def test_findings_come_back_in_program_order(self):
         engine = LintEngine(make_cfg(protected_m_codes=[8]))
@@ -255,10 +259,10 @@ class LintEngineParserWarningTests(unittest.TestCase):
             "G02 X40. Z-5.",        # parser: no centre
         ]))
 
-        lines = [f["line"] for f in findings]
+        lines = [f.line for f in findings]
         self.assertEqual(lines, sorted(lines))
-        self.assertIn("Arc R", [f["rule"] for f in findings])
-        self.assertIn(M_RULE, [f["rule"] for f in findings])
+        self.assertTrue(any(f.rule.startswith("ARC_R_") for f in findings))
+        self.assertIn(M_RULE, [f.rule for f in findings])
 
     def test_every_finding_carries_the_keys_the_ui_reads(self):
         engine = LintEngine(make_cfg())
@@ -267,9 +271,9 @@ class LintEngineParserWarningTests(unittest.TestCase):
 
         self.assertTrue(findings)
         for finding in findings:
-            self.assertIsInstance(finding["line"], int)
-            self.assertIsInstance(finding["rule"], str)
-            self.assertIsInstance(finding["message"], str)
+            self.assertIsInstance(finding.line, int)
+            self.assertIsInstance(finding.rule, str)
+            self.assertIsInstance(finding.message, str)
 
 
 class LintEngineCleanProgramTests(unittest.TestCase):
@@ -295,14 +299,14 @@ class LintEngineNoseDirectionTests(unittest.TestCase):
             with patch.object(tool_data, "TOOLS_JSON", path):
                 tool_data.save_tools_json({"tool_table": [tool]})
                 findings = LintEngine(make_cfg()).run_all(self.PROGRAM)
-        return rules(findings, "G41/G42")
+        return rules(findings, "TNR_")
 
     def test_a_tool_without_a_tip_number_is_reported(self):
         findings = self._compensation_findings({"t": 1, "insert_radius_mm": 0.8})
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("nose_direction", findings[0]["message"])
-        self.assertEqual(findings[0]["line"], 2)   # the G42 block
+        self.assertIn("nose_direction", findings[0].message)
+        self.assertEqual(findings[0].line, 2)   # the G42 block
 
     def test_a_tool_with_a_tip_number_is_not(self):
         self.assertEqual(
@@ -320,7 +324,7 @@ class LintEngineNoseDirectionTests(unittest.TestCase):
                                                 "nose_direction": 12})
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("nose_direction", findings[0]["message"])
+        self.assertIn("nose_direction", findings[0].message)
 
     def test_a_missing_radius_is_reported_instead_not_as_well(self):
         # Without a radius nothing is offset at all, so the tip number makes no
@@ -328,22 +332,22 @@ class LintEngineNoseDirectionTests(unittest.TestCase):
         findings = self._compensation_findings({"t": 1, "name": "no radius"})
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("insert_radius_mm", findings[0]["message"])
+        self.assertIn("insert_radius_mm", findings[0].message)
 
 
 class LintEngineCycleDecimalPointTests(unittest.TestCase):
     """P and Q of G70-G76 take no decimal point; the parser would draw them anyway."""
 
     def _findings(self, code):
-        return [f for f in rules(LintEngine(make_cfg()).run_all(code), "G7x")
-                if "decimal point" in f["message"]]
+        return [f for f in rules(LintEngine(make_cfg()).run_all(code), "PQ_DECIMAL_POINT")
+                if "decimal point" in f.message]
 
     def test_a_pointed_peck_depth_in_a_groove_is_reported(self):
         findings = self._findings("G00 X32. Z-10.\nG75 R0.5\nG75 X26. P1.5 F0.05")
 
-        self.assertEqual([f["line"] for f in findings], [3])
-        self.assertIn("G75: P1.5", findings[0]["message"])
-        self.assertIn("P1500 = 1.5 mm", findings[0]["message"])
+        self.assertEqual([f.line for f in findings], [3])
+        self.assertIn("G75: P1.5", findings[0].message)
+        self.assertIn("P1500 = 1.5 mm", findings[0].message)
 
     def test_the_same_groove_without_points_is_not(self):
         self.assertEqual(self._findings("G00 X32. Z-20.\nG75 R0.5\nG75 X26. Z-27. P1500 Q3000 F0.05"), [])
@@ -356,21 +360,21 @@ class LintEngineCycleDecimalPointTests(unittest.TestCase):
         # Q. at the end and .4 without a leading digit both count.
         findings = self._findings("G76 P010060 Q100. R0.05\nG76 X17.4 Z-30. P1300 Q.4 F2.")
 
-        self.assertEqual([(f["line"], f["message"].split(" has")[0]) for f in findings],
+        self.assertEqual([(f.line, f.message.split(" has")[0]) for f in findings],
                          [(1, "G76: Q100."), (2, "G76: Q.4")])
 
     def test_block_numbers_of_a_roughing_cycle_are_reported_as_block_numbers(self):
         findings = self._findings("G71 U1.5 R0.5\nG71 P100. Q200 U0.4 W0.1 F0.25")
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("G71: P100.", findings[0]["message"])
-        self.assertIn("block numbers", findings[0]["message"])
+        self.assertIn("G71: P100.", findings[0].message)
+        self.assertIn("block numbers", findings[0].message)
 
     def test_a_block_written_without_spaces_is_read(self):
         findings = self._findings("N10G75X26.P1.5F0.05")
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("G75: P1.5", findings[0]["message"])
+        self.assertIn("G75: P1.5", findings[0].message)
 
     def test_a_point_inside_a_comment_is_not_code(self):
         self.assertEqual(self._findings("G75 X26. P1500 F0.05 (NOT P1.5)"), [])
@@ -385,7 +389,7 @@ class LintEngineCycleTests(unittest.TestCase):
     """VC-13/VC-15: a cycle that cannot be expanded says why."""
 
     def _cycle_findings(self, code):
-        return rules(LintEngine(make_cfg()).run_all(code), "Cycle")
+        return rules(LintEngine(make_cfg()).run_all(code), "CYCLE_")
 
     def test_a_roughing_cycle_without_a_depth_is_reported(self):
         findings = self._cycle_findings("\n".join([
@@ -396,7 +400,7 @@ class LintEngineCycleTests(unittest.TestCase):
         ]))
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("depth of cut", findings[0]["message"])
+        self.assertIn("depth of cut", findings[0].message)
 
     def test_block_numbers_that_name_nothing_are_reported(self):
         findings = self._cycle_findings("\n".join([
@@ -407,13 +411,13 @@ class LintEngineCycleTests(unittest.TestCase):
         ]))
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("P900/Q950", findings[0]["message"])
+        self.assertIn("P900/Q950", findings[0].message)
 
     def test_a_thread_block_with_nowhere_to_go_is_reported(self):
         findings = self._cycle_findings("G00 X22. Z2.\nG92 X22. Z2. F1.5")
 
         self.assertEqual(len(findings), 1)
-        self.assertIn("nothing to cut", findings[0]["message"])
+        self.assertIn("nothing to cut", findings[0].message)
 
     def test_a_cycle_that_expands_says_nothing(self):
         findings = self._cycle_findings("\n".join([
@@ -425,3 +429,143 @@ class LintEngineCycleTests(unittest.TestCase):
         ]))
 
         self.assertEqual(findings, [])
+
+
+def machine_cfg(chuck_z=-50.0, chuck_diameter=60.0, **policy_overrides):
+    cfg = make_cfg(**policy_overrides)
+    cfg.data["machine"] = {"chuck_z_limit": chuck_z, "chuck_diameter": chuck_diameter}
+    return cfg
+
+
+class DiagnosticShapeTests(unittest.TestCase):
+    """Every finding is a Diagnostic with a stable id and a severity."""
+
+    def test_every_finding_is_a_diagnostic(self):
+        findings = LintEngine(make_cfg(**SHOP_HEADER)).run_all(
+            "G96 S150 M03\nG71 U1. R0.5\nG71 P10 Q20 U0.4 W0.1 F0\nG76 X17. Z-30.\nM30")
+
+        self.assertTrue(findings)
+        for f in findings:
+            self.assertIsInstance(f, Diagnostic)
+            self.assertIn(f.severity, ("ERROR", "WARNING", "INFO"))
+            self.assertRegex(f.rule, r"^[A-Z0-9_]+$")
+
+    def test_severity_follows_the_consequence(self):
+        engine = LintEngine(make_cfg(require_header_codes=["G18", "G40"], require_units="G21",
+                                     require_origin="G54"))
+        findings = engine.run_all("G96 S150 M03\nG00 X30. Z2.\nG76 X17. Z-30.\nM30")
+        severity = {(f.rule, f.token): f.severity for f in findings}
+
+        # Compensation or inch mode left over from another program can crash.
+        self.assertEqual(severity[("HEADER_CODE", "G40")], "ERROR")
+        self.assertEqual(severity[("UNITS", "G21")], "ERROR")
+        # A rule about form.
+        self.assertEqual(severity[("HEADER_CODE", "G18")], "WARNING")
+        self.assertEqual(severity[("ORIGIN", "G54")], "WARNING")
+        # Overspeed near the centre.
+        self.assertEqual(severity[("G50_BEFORE_G96", "G96")], "ERROR")
+        # A hint, not a finding.
+        self.assertEqual([f.severity for f in rules(findings, "G76_CHECK")], ["INFO"])
+
+    def test_what_cannot_be_cut_is_an_error_and_a_short_drawing_a_warning(self):
+        engine = LintEngine(make_cfg())
+        impossible = engine.run_all("G00 X0. Z0.\nG02 X40. Z-15. R1.")
+        many = engine.run_all("G00 X24. Z2.\nG76 P010060 Q0 R0.05\nG76 X17.4 Z-30. P1300 Q1 F2.")
+
+        self.assertEqual({f.severity for f in rules(impossible, "ARC_R_")}, {"ERROR"})
+        self.assertEqual([f.severity for f in rules(many, "CYCLE_TOO_MANY_PASSES")], ["WARNING"])
+
+    def test_a_pointed_p_or_q_says_what_to_write_instead(self):
+        engine = LintEngine(make_cfg())
+        groove = rules(engine.run_all("G75 R0.3\nG75 X26. Z-25. P1.5 Q2500 F0.05"), "PQ_DECIMAL_POINT")
+        rough = rules(engine.run_all("G71 U1. R0.5\nG71 P100. Q200 U0.4 W0.1 F0.25"), "PQ_DECIMAL_POINT")
+
+        self.assertEqual([(f.token, f.hint, f.related_code) for f in groove],
+                         [("P1.5", "Write P1500.", "G75")])
+        self.assertEqual([(f.token, f.hint) for f in rough], [("P100.", "Write P100.")])
+
+    def test_a_finding_for_a_model_carries_no_empty_fields(self):
+        finding = Diagnostic(line=3, severity="ERROR", rule="X", message="m")
+
+        self.assertEqual(finding.as_dict(), {"line": 3, "severity": "ERROR", "rule": "X", "message": "m"})
+
+    def test_lint_clean_means_no_error_and_no_warning(self):
+        info = Diagnostic(1, "INFO", "G76_CHECK", "hint")
+        warning = Diagnostic(1, "WARNING", "ORIGIN", "G54 expected.")
+        error = Diagnostic(2, "ERROR", "UNITS", "G21 (mm) expected.")
+
+        self.assertTrue(is_lint_clean([]))
+        self.assertTrue(is_lint_clean([info]))
+        self.assertFalse(is_lint_clean([info, warning]))
+        self.assertEqual(blocking([info, warning, error]), [warning, error])
+        # An ERROR outweighs any number of WARNINGs.
+        self.assertLess(weight([warning, warning, warning]), weight([error]))
+
+
+class ChuckCollisionTests(unittest.TestCase):
+    """A move into the chuck was drawn red and reported nowhere else."""
+
+    def test_a_move_into_the_jaws_is_an_error_on_its_line(self):
+        findings = LintEngine(machine_cfg()).run_all("G00 X40. Z2.\nG01 Z-60. F0.2\nG00 X100.")
+
+        hits = rules(findings, "CHUCK_COLLISION")
+        # The retract on line 3 starts at Z-60 inside the jaws and runs out
+        # through them: a second collision, not a repeat of the first.
+        self.assertEqual([(f.line, f.severity) for f in hits], [(2, "ERROR"), (3, "ERROR")])
+        self.assertIn("Z-50", hits[0].message)
+        self.assertIn("Ø60", hits[0].message)
+
+    def test_a_move_outside_the_jaws_is_not(self):
+        findings = LintEngine(machine_cfg()).run_all("G00 X80. Z2.\nG01 Z-60. F0.2\nG00 X100.")
+
+        self.assertEqual(rules(findings, "CHUCK_COLLISION"), [])
+
+    def test_without_a_chuck_diameter_every_diameter_behind_the_face_counts(self):
+        findings = LintEngine(machine_cfg(chuck_diameter=None)).run_all("G00 X80. Z2.\nG01 Z-60. F0.2")
+
+        hits = rules(findings, "CHUCK_COLLISION")
+        self.assertEqual([f.line for f in hits], [2])
+        self.assertIn("no chuck diameter is set", hits[0].message)
+
+    def test_without_a_configured_chuck_nothing_is_guessed(self):
+        # The parser's own default face is -5; reporting against it would turn
+        # every ordinary turning pass into a collision.
+        findings = LintEngine(make_cfg()).run_all("G00 X40. Z2.\nG01 Z-60. F0.2")
+
+        self.assertEqual(rules(findings, "CHUCK_COLLISION"), [])
+
+
+class SnippetTests(unittest.TestCase):
+    """A generated piece of a program is not held to the rules of a whole one."""
+
+    G71 = "G00 X42. Z2.\nG71 U1. R0.5\nG71 P10 Q20 U0.4 W0.1 F0.25\nN10 G00 X30.\nN20 G01 Z-20."
+
+    def test_code_without_an_end_is_a_snippet(self):
+        self.assertTrue(is_snippet(self.G71))
+        self.assertTrue(is_snippet("G00 X30. Z2. (then M30)"))      # a comment ends nothing
+        self.assertTrue(is_snippet("G01 Z-5. F0.1\nM300"))
+        self.assertFalse(is_snippet(self.G71 + "\nM30"))
+        self.assertFalse(is_snippet("G00 X30.\nM02"))
+        self.assertFalse(is_snippet("G00 X30.\nM2"))
+        self.assertFalse(is_snippet("G00 X30.\nM99"))
+
+    def test_a_snippet_has_no_header_g50_retract_or_open_compensation_findings(self):
+        engine = LintEngine(make_cfg(**SHOP_HEADER))
+        code = "G96 S150 M03\nG42\nG01 X30. Z-5. F0.2\n" + self.G71
+
+        as_program = {f.rule for f in engine.run_all(code)}
+        as_snippet = {f.rule for f in engine.run_all(code, snippet=True)}
+
+        self.assertTrue({"HEADER_CODE", "UNITS", "G50_BEFORE_G96", "TNR_OPEN_AT_END"} <= as_program)
+        self.assertEqual(as_snippet & {"HEADER_CODE", "UNITS", "ORIGIN", "G50_BEFORE_G96",
+                                       "RETRACT_BEFORE_M30", "TNR_OPEN_AT_END"}, set())
+
+    def test_the_rules_of_a_cycle_and_a_collision_still_apply_to_a_snippet(self):
+        engine = LintEngine(machine_cfg(protected_m_codes=[62]))
+        code = ("G75 R0.3\nG75 X26. Z-25. P1.5 Q2500 F0.05\n"
+                "G71 U1. R0.5\nG71 P10 Q20 U0.4 W0.1 F0\n(M62)\nG01 X40. Z-60. F0.2")
+
+        found = {f.rule for f in engine.run_all(code, snippet=True)}
+
+        self.assertTrue({"PQ_DECIMAL_POINT", "CYCLE_FEED_ZERO", "PROTECTED_M_CODE",
+                         "CHUCK_COLLISION"} <= found, found)
