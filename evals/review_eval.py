@@ -590,7 +590,7 @@ def load_programs(paths: List[str]) -> Dict[str, str]:
 
 
 def _model_of(settings) -> Tuple[str, str]:
-    from vibe_cnc.claude_client import (DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, SECTION_OF,
+    from vibe_cnc.ai_client import (DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, SECTION_OF,
                                         backend_of)
     ai = settings.data.get("ai") or {}
     mode = backend_of(ai)
@@ -685,7 +685,7 @@ def main(argv=None) -> int:
     if args.mode:
         ai["mode"] = args.mode          # in memory only; config.yaml is not written
     if args.model:
-        from vibe_cnc.claude_client import SECTION_OF, backend_of
+        from vibe_cnc.ai_client import SECTION_OF, backend_of
         if backend_of(ai) not in SECTION_OF:
             parser.error(f"ai.mode '{backend_of(ai)}' is not known; use --mode")
         ai.setdefault(SECTION_OF[backend_of(ai)], {})["model"] = args.model
@@ -715,7 +715,7 @@ def main(argv=None) -> int:
     out_path = args.out or os.path.join(
         OUT_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-{re.sub(r'[^A-Za-z0-9.-]+', '_', model)}.jsonl")
     print(f"Asking {model} ({mode}) {len(cases) * args.repeat} time(s); answers go to {out_path}")
-    from vibe_cnc.claude_client import AIClient
+    from vibe_cnc.ai_client import AIClient
     records = run(cases, AIClient(settings), mode, model, args.repeat, out_path,
                   args.keep_going)
     print()

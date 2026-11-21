@@ -20,8 +20,8 @@ import httpx2
 import requests
 import yaml
 
-from vibe_cnc import claude_client
-from vibe_cnc.claude_client import (
+from vibe_cnc import ai_client
+from vibe_cnc.ai_client import (
     AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_GENERATE_PROMPT, DEFAULT_OLLAMA_MODEL,
     DEFAULT_OPENAI_BASE_URL, DEFAULT_REVIEW_PROMPT, MAX_OUTPUT_TOKENS_WITHOUT_STREAMING, SECTION_OF,
     backend_of,
@@ -107,7 +107,7 @@ class ClaudeRequestTests(ClaudeCase):
 
     def test_the_retired_default_is_gone_from_everything_that_ships(self):
         retired = "claude-sonnet-4-20250514"
-        for name in ("vibe_cnc/claude_client.py", "vibe_cnc/dialogs/settings.py",
+        for name in ("vibe_cnc/ai_client.py", "vibe_cnc/dialogs/settings.py",
                      "config.example.yaml"):
             with open(os.path.join(ROOT, name), encoding="utf-8") as handle:
                 text = handle.read()
@@ -200,7 +200,7 @@ class ClaudeRequestTests(ClaudeCase):
                                 ("https://proxy.example.com/", "https://proxy.example.com"),
                                 ("", None), (None, None)):
             with self.subTest(given):
-                self.assertEqual(claude_client._sdk_base_url(given), expected)
+                self.assertEqual(ai_client._sdk_base_url(given), expected)
 
 
 class ClaudeAnswerTests(ClaudeCase):
@@ -350,7 +350,7 @@ class ClaudeErrorTests(ClaudeCase):
     def test_a_missing_sdk_package_is_a_message_and_not_a_crash(self):
         client = AIClient(settings(mode="claude", anthropic={}))
 
-        with mock.patch.object(claude_client, "_anthropic", side_effect=ImportError("no module")):
+        with mock.patch.object(ai_client, "_anthropic", side_effect=ImportError("no module")):
             ok, shown = client.ask_claude("x")
             ok_check, shown_check = client.check_claude()
 
@@ -515,7 +515,7 @@ class OllamaTests(unittest.TestCase):
 
     def ask(self, response, system=None, **ollama):
         client = AIClient(settings(mode="ollama", ollama=dict({"base_url": self.URL}, **ollama)))
-        with mock.patch.object(claude_client.requests, "post", side_effect=(
+        with mock.patch.object(ai_client.requests, "post", side_effect=(
                 response if isinstance(response, Exception) else None) or [response]) as post:
             result = client.ask_ollama("Review this", system)
         return result, post
@@ -630,7 +630,7 @@ class OllamaCheckTests(unittest.TestCase):
     def check(self, response, model=None, **ollama):
         client = AIClient(settings(ollama=dict({"base_url": "http://nas.local:11434/api/chat"}, **ollama)))
         effect = response if isinstance(response, Exception) else None
-        with mock.patch.object(claude_client.requests, "get",
+        with mock.patch.object(ai_client.requests, "get",
                                side_effect=effect, return_value=response) as get:
             return client.check_ollama(model), get
 
@@ -704,7 +704,7 @@ class OpenAICase(unittest.TestCase):
         effect = response if isinstance(response, Exception) else [response]
         environment = {"OPENAI_API_KEY": ""}
         environment.update(env or {})
-        with mock.patch.object(claude_client.requests, "post", side_effect=effect) as post, \
+        with mock.patch.object(ai_client.requests, "post", side_effect=effect) as post, \
                 mock.patch.dict(os.environ, environment):
             result = client.ask_openai("Review this", system)
         return result, post
@@ -745,7 +745,7 @@ class OpenAIRequestTests(OpenAICase):
 
     def test_without_an_address_it_is_openai(self):
         client = AIClient(settings(mode="openai", openai={"model": "some-model"}))
-        with mock.patch.object(claude_client.requests, "post", return_value=completion()) as post, \
+        with mock.patch.object(ai_client.requests, "post", return_value=completion()) as post, \
                 mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
             client.ask_openai("x")
 
@@ -1030,7 +1030,7 @@ class OpenAICheckTests(unittest.TestCase):
         effect = response if isinstance(response, Exception) else None
         environment = {"OPENAI_API_KEY": ""}
         environment.update(env or {})
-        with mock.patch.object(claude_client.requests, "get",
+        with mock.patch.object(ai_client.requests, "get",
                                side_effect=effect, return_value=response) as get, \
                 mock.patch.dict(os.environ, environment):
             return client.check_openai(model, base_url, key_env), get

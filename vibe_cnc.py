@@ -17,7 +17,7 @@ from vibe_cnc.macro_model import MacroModel
 from vibe_cnc.gcode_highlighter import GCodeHighlighter, GCodeEditor, TitlePanel
 from vibe_cnc.lint_engine import LintEngine
 from vibe_cnc.analysis_prompt import MAX_CODE_CHARS, build_analysis_prompt, read_policies
-from vibe_cnc.claude_client import AIClient, backend_of
+from vibe_cnc.ai_client import AIClient, backend_of
 from vibe_cnc.camotics_bridge import CamoticsBridge
 from vibe_cnc.gcode_plotter import GCodePlotterWidget
 from vibe_cnc.gcode_completer import install_completer

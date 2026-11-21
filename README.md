@@ -335,7 +335,7 @@ vibe_cnc/
 ├── requirements.txt            # Python dependencies
 │
 ├── vibe_cnc/
-│   ├── claude_client.py        # AI client (Claude, Ollama, OpenAI-compatible)
+│   ├── ai_client.py            # AI client (Claude, Ollama, OpenAI-compatible)
 │   ├── analysis_prompt.py      # What AI ANALYZE sends (shared with the eval)
 │   ├── gcode_highlighter.py    # Syntax highlighting + editor
 │   ├── gcode_plotter.py        # 2D visualization + live drawing

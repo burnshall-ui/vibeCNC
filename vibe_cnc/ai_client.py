@@ -1,4 +1,4 @@
-# claude_client.py — the AI backends: Claude through the Anthropic SDK, Ollama
+# ai_client.py — the AI backends: Claude through the Anthropic SDK, Ollama
 # over HTTP, and any server that speaks the OpenAI Chat Completions API.
 #
 # Every ask_* and check_* returns (ok, text). When ok is False the text says

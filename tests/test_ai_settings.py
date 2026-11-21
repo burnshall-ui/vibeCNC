@@ -12,7 +12,7 @@ from unittest import mock
 import yaml
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from vibe_cnc.claude_client import AIClient, BACKENDS
+from vibe_cnc.ai_client import AIClient, BACKENDS
 from vibe_cnc.dialogs import settings as settings_module
 from vibe_cnc.dialogs.settings import SettingsDialog
 

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSpinBox, QMessageBox, QFileDialog
 )
 
-from vibe_cnc.claude_client import (
+from vibe_cnc.ai_client import (
     AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL,
     NOT_A_VARIABLE_NAME, backend_of, is_variable_name,
 )

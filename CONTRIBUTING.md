@@ -97,7 +97,7 @@ def calculate_spindle_speed(diameter: float, cutting_speed: int) -> int:
 vibe_cnc/
 ├── vibe_cnc.py              # Main application
 ├── vibe_cnc/
-│   ├── claude_client.py     # AI integration
+│   ├── ai_client.py         # AI integration
 │   ├── gcode_plotter.py     # 2D visualization
 │   ├── lint_engine.py       # Policy checker
 │   └── ...
