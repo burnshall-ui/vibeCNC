@@ -7,6 +7,7 @@ read nor overwrite them.
 """
 import importlib.util
 import os
+import re
 import tempfile
 import unittest
 
@@ -354,6 +355,25 @@ class AssistBoxKeyTests(PanelCase):
         self.assertIn("Write a G71 for T1", prompt)
         self.assertEqual(system, win.ai.generate_prompt())
         self.assertNotEqual(system, win.ai.review_prompt())
+
+    def test_the_example_in_a_generation_teaches_no_d_word_in_a_cycle(self):
+        # It showed "G71 P10 Q20 U0.4 W0.1 D500 F0.25" and called D500 the
+        # spindle speed: every generation was taught a word the 0i-TF's
+        # two-block G71 does not take, with a wrong meaning.
+        win = self.window()
+        win.cfg.data["ai"].update({"offline": False, "mode": "ollama"})
+        win.input.setText("Write a G71 for T1")
+        calls = []
+        win.ai.ask = lambda prompt, system=None: calls.append(prompt) or (True, "GENERATE-REPLY")
+
+        win.action_generate()
+
+        self.assertTrue(self.wait_for_chat(win, "GENERATE-REPLY"))
+        cycle_lines = [ln for ln in calls[0].splitlines() if re.match(r"\s*G7[0-6]\b", ln)]
+        self.assertTrue(cycle_lines)
+        for line in cycle_lines:
+            self.assertNotRegex(line, r"\bD\d", line)
+        self.assertNotIn("RPM", calls[0])
 
     def test_the_tooltips_name_the_key_as_this_platform_writes_it(self):
         win = self.window()

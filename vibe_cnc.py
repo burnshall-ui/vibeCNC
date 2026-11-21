@@ -1164,11 +1164,13 @@ Example:
 <b>G-Code for Roughing Cycle:</b><br><br>
 <pre style='color:#6CFF6C; background:#0A0A0A; padding:4px;'>
 G71 U1.0 R0.5
-G71 P10 Q20 U0.4 W0.1 D500 F0.25
+G71 P10 Q20 U0.4 W0.1 F0.25
 </pre><br>
 <b>Explanation:</b><br>
-• U1.0: Depth of cut<br>
-• D500: RPM
+• U1.0 R0.5: depth of cut per pass (radius) and retract<br>
+• P10 Q20: first and last block of the contour<br>
+• U0.4 W0.1: finishing allowance in X (diameter) and Z<br>
+• F0.25: feed
 """
         enhanced_prompt = user + format_rules
 

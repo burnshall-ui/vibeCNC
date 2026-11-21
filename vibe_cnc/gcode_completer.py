@@ -66,13 +66,16 @@ class GCodeCompleter(QCompleter):
         "G65": "Macro call (G65 P... A... B... C...)",
         "G66": "Macro modal call (G66 P... A... B...)",
         "G67": "Macro modal call cancel",
+        # Two blocks each, as the 0i-TF takes them. The one-block form with a
+        # D word belongs to older controls; it was shown here, and taught a
+        # model in the generation prompt that D was the spindle speed.
         "G70": "Finish cycle (G70 P... Q...)",
-        "G71": "Roughing cycle OD (G71 U... R... P... Q... D... F...)",
-        "G72": "Roughing cycle facing (G72 W... R... P... Q... D... F...)",
-        "G73": "Pattern repeat cycle (G73 U... W... R... P... Q... D... F...)",
-        "G74": "Face grooving cycle (G74 R... X... Z... P... Q... F...)",
-        "G75": "Radial grooving cycle (G75 R... X... Z... P... Q... F...)",
-        "G76": "Threading cycle (G76 P... Q... R... X... Z... F...)",
+        "G71": "Roughing cycle OD (G71 U... R... / G71 P... Q... U... W... F...)",
+        "G72": "Roughing cycle facing (G72 W... R... / G72 P... Q... U... W... F...)",
+        "G73": "Pattern repeat cycle (G73 U... W... R... / G73 P... Q... U... W... F...)",
+        "G74": "Face grooving cycle (G74 R... / G74 X... Z... P... Q... R... F...)",
+        "G75": "Radial grooving cycle (G75 R... / G75 X... Z... P... Q... R... F...)",
+        "G76": "Threading cycle (G76 P... Q... R... / G76 X... Z... R... P... Q... F...)",
         "G80": "Canned cycle cancel",
         "G90": "Absolute programming",
         "G91": "Incremental programming",
