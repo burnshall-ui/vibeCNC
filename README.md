@@ -16,6 +16,8 @@ system A), with a rule-based checker and optional AI review and generation.
 > and keep a hand on feed hold. The authors accept no liability for crashes,
 > scrapped parts or injury.
 
+![Vibe CNC: a turning program in the editor, its toolpath drawn over the stock, and the linter's and the model's review in the assist pane](docs/images/vibe-cnc.png)
+
 ## Features
 
 - **Editor**: syntax highlighting, line numbers, find and replace,
