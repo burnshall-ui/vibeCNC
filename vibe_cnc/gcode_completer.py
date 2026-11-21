@@ -4,6 +4,18 @@ from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtGui import QTextCursor
 
 from vibe_cnc.fonts import mono_css
+from vibe_cnc.specs import load_specs
+
+
+def _dialect_tables():
+    """(G-codes, M-codes) with a short text each. An M-code whose meaning the
+    machine builder decides says so."""
+    dialect = load_specs().dialect
+    m_codes = {code: text + (" — machine-specific, see the machine's manual"
+                             if code in dialect.machine_specific else "")
+               for code, text in dialect.m_codes.items()}
+    return dict(dialect.g_codes), m_codes
+
 
 class GCodeCompleterModel(QAbstractListModel):
     """Custom Model for context-aware Autocomplete"""
@@ -39,79 +51,12 @@ class GCodeCompleterModel(QAbstractListModel):
 class GCodeCompleter(QCompleter):
     """Intelligent G-Code Autocompleter with Context-Awareness"""
     
-    # G-Code definitions with parameters
-    GCODES = {
-        "G00": "Rapid traverse (G00 X... Z...)",
-        "G01": "Linear interpolation (G01 X... Z... F...)",
-        "G02": "Circular interpolation CW (G02 X... Z... R... F...)",
-        "G03": "Circular interpolation CCW (G03 X... Z... R... F...)",
-        "G04": "Dwell (G04 P... or G04 U...)",
-        "G10": "Programmable data input (G10 P... X... Z... R...)",
-        "G18": "ZX plane (lathe)",
-        "G20": "Inch input",
-        "G21": "Metric input",
-        "G27": "Reference point check (G27 X... Z...)",
-        "G28": "Return to reference point (G28 U0 W0)",
-        "G32": "Simple threading (G32 Z... F...)",
-        "G40": "Tool nose radius compensation cancel",
-        "G41": "Tool nose radius compensation left (G41)",
-        "G42": "Tool nose radius compensation right (G42)",
-        "G50": "Set coordinate system (G50 S... / X... Z...)",
-        "G54": "Work offset 1",
-        "G55": "Work offset 2",
-        "G56": "Work offset 3",
-        "G57": "Work offset 4",
-        "G58": "Work offset 5",
-        "G59": "Work offset 6",
-        "G65": "Macro call (G65 P... A... B... C...)",
-        "G66": "Macro modal call (G66 P... A... B...)",
-        "G67": "Macro modal call cancel",
-        # Two blocks each, as the 0i-TF takes them. The one-block form with a
-        # D word belongs to older controls; it was shown here, and taught a
-        # model in the generation prompt that D was the spindle speed.
-        "G70": "Finish cycle (G70 P... Q...)",
-        "G71": "Roughing cycle OD (G71 U... R... / G71 P... Q... U... W... F...)",
-        "G72": "Roughing cycle facing (G72 W... R... / G72 P... Q... U... W... F...)",
-        "G73": "Pattern repeat cycle (G73 U... W... R... / G73 P... Q... U... W... F...)",
-        "G74": "Face grooving cycle (G74 R... / G74 X... Z... P... Q... R... F...)",
-        "G75": "Radial grooving cycle (G75 R... / G75 X... Z... P... Q... R... F...)",
-        "G76": "Threading cycle (G76 P... Q... R... / G76 X... Z... R... P... Q... F...)",
-        "G80": "Canned cycle cancel",
-        "G90": "Absolute programming",
-        "G91": "Incremental programming",
-        "G92": "Thread cutting (G92 X... Z... F...)",
-        "G94": "Feed per minute",
-        "G95": "Feed per revolution",
-        "G96": "Constant surface speed ON (G96 S...)",
-        "G97": "Constant surface speed OFF (G97 S...)",
-        "G98": "Feed per minute",
-        "G99": "Feed per revolution",
-    }
-    
-    MCODES = {
-        "M00": "Program stop",
-        "M01": "Optional stop",
-        "M02": "Program end",
-        "M03": "Spindle CW (M03 S...)",
-        "M04": "Spindle CCW (M04 S...)",
-        "M05": "Spindle stop",
-        "M06": "Tool change (M06 T...)",
-        "M08": "Coolant ON",
-        "M09": "Coolant OFF",
-        "M10": "Chuck open (4th axis)",
-        "M11": "Chuck close (4th axis)",
-        "M19": "Spindle orientation (M19 R...)",
-        "M30": "Program end with reset",
-        "M41": "Gear range 1 (low)",
-        "M42": "Gear range 2",
-        "M43": "Gear range 3",
-        "M44": "Gear range 4 (high)",
-        "M78": "External program call (M78 P...)",
-        "M79": "External program end",
-        "M98": "Subprogram call (M98 P...)",
-        "M99": "Subprogram end",
-    }
-    
+    # G- and M-codes from specs/fanuc_0i_tf/dialect.toml, G-code system A. The
+    # table that stood here described another system: G90/G91 as absolute and
+    # incremental, G94/G95 as feed modes -- on system A G90 and G94 are
+    # cycles and G91 does not exist.
+    GCODES, MCODES = _dialect_tables()
+
     AXES = {
         "X": "X axis (diameter)",
         "Z": "Z axis (length)",
