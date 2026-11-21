@@ -150,6 +150,14 @@ the server. Like the Claude test it does not run the model, so it cannot see a
 credit balance or quota; on OpenAI an empty account shows up on the first analysis
 as "no quota or credit left (429)".
 
+**OpenRouter:** address `https://openrouter.ai/api/v1`, key variable
+`OPENROUTER_API_KEY` (enter the variable's *name* in Settings → AI, never the key).
+Model ids look like `vendor/model`; free ones end in `:free` and have a low daily
+limit. Its model list answers without a key, so there a green Test connection says
+nothing about the key: the first analysis does. An empty account is reported as
+"no quota or credit left (402)". Whatever is analysed is sent to OpenRouter and the
+provider behind the model, so think about which programs leave the shop.
+
 ---
 
 ##  Usage

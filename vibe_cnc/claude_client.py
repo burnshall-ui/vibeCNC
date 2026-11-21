@@ -6,6 +6,7 @@
 # shown to the operator in the chat.
 import html
 import os
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -104,16 +105,13 @@ def _openai_root(value) -> str:
     return url
 
 
-def _openai_error(response) -> Tuple[str, str]:
-    """(message, code) out of an error response, whatever shape the server uses.
+def _openai_error_body(body) -> Tuple[str, str]:
+    """(message, code) out of an error body, whatever shape the server uses.
 
-    OpenAI sends {"error": {"message", "type", "code"}}; other servers send a
-    bare string under "error", FastAPI's "detail", or plain text.
+    OpenAI sends {"error": {"message", "type", "code"}} with a word for the
+    code, OpenRouter the same with the status as a number; other servers send
+    a bare string under "error", FastAPI's "detail", or a bare "message".
     """
-    try:
-        body = response.json()
-    except ValueError:
-        return (response.text or "").strip()[:300], ""
     if isinstance(body, dict):
         error = body.get("error")
         if isinstance(error, dict):
@@ -124,6 +122,30 @@ def _openai_error(response) -> Tuple[str, str]:
             if body.get(key):
                 return str(body[key]), ""
     return str(body)[:300], ""
+
+
+def _openai_error(response) -> Tuple[str, str]:
+    """(message, code) out of an error response; plain text if it is not JSON."""
+    try:
+        body = response.json()
+    except ValueError:
+        return (response.text or "").strip()[:300], ""
+    return _openai_error_body(body)
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+# Said without repeating what was entered: when it is not a name it is
+# usually the key itself, and the chat is no place for it.
+NOT_A_VARIABLE_NAME = (
+    "❌ ai.openai.api_key_env must be the NAME of an environment variable, such as "
+    "OPENROUTER_API_KEY, not the key itself. Put the key into that variable (macOS/Linux: "
+    "export OPENROUTER_API_KEY=... in your shell profile; Windows: setx OPENROUTER_API_KEY \"...\") "
+    "and enter only the name in Settings → AI.")
+
+
+def is_variable_name(name: str) -> bool:
+    return bool(_ENV_NAME.match(name or ""))
 
 
 class AIClient:
@@ -424,7 +446,9 @@ class AIClient:
         if not model:
             return (False, "❌ No model is set for the OpenAI-compatible server (ai.openai.model). "
                            "Enter one in Settings → AI; Test connection lists what the server offers.")
-        key_env = section.get("api_key_env") or "OPENAI_API_KEY"
+        key_env = str(section.get("api_key_env") or "OPENAI_API_KEY").strip()
+        if not is_variable_name(key_env):
+            return (False, NOT_A_VARIABLE_NAME)
         headers = self._openai_headers(key_env)
         try:
             timeout = float(section.get("timeout_s") or 180)
@@ -473,9 +497,19 @@ class AIClient:
         """Text out of a chat completion, and an honest word when there is none."""
         who = html.escape(who)
         choices = answer.get("choices") if isinstance(answer, dict) else None
+        if not choices and isinstance(answer, dict) and answer.get("error"):
+            # OpenRouter answers 200 with nothing but an error when the model
+            # failed after the request was accepted, every fallback included.
+            detail, _code = _openai_error_body(answer)
+            return (False, f"❌ {who}: the model failed to answer: {html.escape(detail) or 'no details'}")
         if not choices or not isinstance(choices[0], dict):
             return (False, f"❌ {who} answered, but not with a chat completion (no choices).")
         choice = choices[0]
+        if choice.get("finish_reason") == "error" or choice.get("error"):
+            # ... or it broke off halfway, with the error on the choice.
+            detail, _code = _openai_error_body({"error": choice.get("error") or ""})
+            return (False, f"❌ {who}: the model broke off while answering: "
+                           f"{html.escape(detail) or 'no details'}")
         message = choice.get("message") or {}
         content = message.get("content")
         if isinstance(content, list):
@@ -527,19 +561,24 @@ class AIClient:
                     f"revoked or for another service.{where}")
         if status == 403:
             return f"❌ {who}: not allowed (403): {detail}{where}"
+        wait = ""
+        if r.headers.get("retry-after"):
+            wait = f" Try again in {html.escape(r.headers['retry-after'])} s."
+
         if status == 404:
             if code == "model_not_found" or "model" in detail.lower():
                 return (f"❌ {who}: model '{html.escape(model)}' was not found (404): {said} "
                         f"Test connection in Settings → AI lists what the server offers.{where}")
-            return (f"❌ {who}: nothing found there (404). ai.openai.base_url should be the API "
-                    f"root, which usually ends in /v1.{where}")
+            what = f": {said}" if detail else "."
+            return (f"❌ {who}: not found (404){what} If the address is wrong: ai.openai.base_url "
+                    f"should be the API root, which usually ends in /v1.{where}")
+        # OpenAI says an empty account with 429 insufficient_quota, OpenRouter
+        # with 402.
+        if status == 402 or (status == 429 and (code == "insufficient_quota"
+                                                or "quota" in detail.lower())):
+            return (f"❌ {who}: the account has no quota or credit left ({status}): {said} Check the "
+                    f"billing of the account the key belongs to.{wait}{where}")
         if status == 429:
-            if code == "insufficient_quota" or "quota" in detail.lower():
-                return (f"❌ {who}: the account has no quota or credit left (429): {said} Check the "
-                        f"billing of the account the key belongs to.{where}")
-            wait = ""
-            if r.headers.get("retry-after"):
-                wait = f" Try again in {html.escape(r.headers['retry-after'])} s."
             return f"❌ {who}: rate limit reached (429).{wait}{where}"
         if status == 400:
             hint = ""
@@ -549,19 +588,23 @@ class AIClient:
             return f"❌ {who} rejected the request (400): {detail}{hint}{where}"
         return f"❌ {who}: error {status}: {detail or 'no details'}{where}"
 
-    def check_openai(self, model: Optional[str] = None,
-                     base_url: Optional[str] = None) -> Tuple[bool, str]:
+    def check_openai(self, model: Optional[str] = None, base_url: Optional[str] = None,
+                     key_env: Optional[str] = None) -> Tuple[bool, str]:
         """Does the server answer, and does it offer this model? Nothing is run.
 
-        Model and address are the ones given (the settings dialog passes what
-        is typed, saved or not), else the saved ones. Like the Claude check it
-        cannot see a credit balance or a quota.
+        Model, address and key variable are the ones given (the settings
+        dialog passes what is typed, saved or not), else the saved ones. Like
+        the Claude check it cannot see a credit balance or a quota, and where
+        the model list is public (OpenRouter) it cannot see whether the key
+        works either.
         """
         section = self._section("openai")
         root = _openai_root(base_url if base_url is not None else section.get("base_url"))
         who = urlsplit(root).netloc or root
         model = str(model if model is not None else section.get("model") or "").strip()
-        key_env = section.get("api_key_env") or "OPENAI_API_KEY"
+        key_env = str(key_env or section.get("api_key_env") or "OPENAI_API_KEY").strip()
+        if not is_variable_name(key_env):
+            return (False, NOT_A_VARIABLE_NAME)
         headers = self._openai_headers(key_env)
         try:
             r = requests.get(root + "/models", headers=headers, timeout=10)
@@ -595,6 +638,7 @@ class AIClient:
         if model in offered:
             return (True, f"✅ {html.escape(who)} answers and offers model '{html.escape(model)}'. "
                           "This check does not run the model, so it cannot see a credit balance "
-                          "or quota; the first analysis does.")
+                          "or quota -- and where anyone may read the model list, as on OpenRouter, "
+                          "not whether the key works either. The first analysis shows both.")
         return (False, f"❌ {html.escape(who)} answers, but does not offer model "
                        f"'{html.escape(model)}'. It offers: {shown}")

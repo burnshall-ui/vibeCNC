@@ -125,13 +125,14 @@ class TestConnectionTests(unittest.TestCase):
         dialog = self.dialog("openai")
         dialog.openai_url_input.setText(" http://localhost:1234/v1 ")
         dialog.openai_model_input.setText("qwen/qwen3-4b")
+        dialog.openai_key_env_input.setText(" LMS_KEY ")
         check_openai = mock.Mock(return_value=(True, "✅ localhost:1234 answers."))
         check_claude, check_ollama = mock.Mock(), mock.Mock()
 
         info, _warning = self.press(dialog, check_openai=check_openai, check_claude=check_claude,
                                     check_ollama=check_ollama)
 
-        check_openai.assert_called_once_with("qwen/qwen3-4b", "http://localhost:1234/v1")
+        check_openai.assert_called_once_with("qwen/qwen3-4b", "http://localhost:1234/v1", "LMS_KEY")
         check_claude.assert_not_called()
         check_ollama.assert_not_called()
         info.assert_called_once()
@@ -160,6 +161,31 @@ class TestConnectionTests(unittest.TestCase):
         self.assertEqual(written["ai"]["mode"], "openai")
         self.assertEqual(written["ai"]["openai"]["base_url"], "http://localhost:1234/v1")
         self.assertEqual(written["ai"]["openai"]["model"], "qwen/qwen3-4b")
+        self.assertEqual(written["ai"]["openai"]["api_key_env"], "OPENAI_API_KEY")
+
+    def test_the_key_variable_is_saved_by_name(self):
+        dialog = self.dialog("openai")
+        dialog.openai_key_env_input.setText("OPENROUTER_API_KEY")
+
+        written = self.save(dialog)
+
+        self.assertEqual(written["ai"]["openai"]["api_key_env"], "OPENROUTER_API_KEY")
+
+    def test_a_key_typed_where_its_variable_belongs_is_not_written_to_the_config(self):
+        dialog = self.dialog("openai")
+        dialog.openai_key_env_input.setText("sk-or-v1-0123456789abcdef")
+        with mock.patch.object(settings_module, "open", mock.mock_open(), create=True) as opened, \
+                mock.patch.object(settings_module.yaml, "dump") as dump, \
+                mock.patch.object(QMessageBox, "information"), \
+                mock.patch.object(QMessageBox, "warning") as warning:
+            dialog.save_settings()
+
+        dump.assert_not_called()
+        opened.assert_not_called()
+        warning.assert_called_once()
+        self.assertIn("NAME", warning.call_args.args[2])
+        self.assertNotIn("sk-or-v1", warning.call_args.args[2])
+        self.assertNotEqual(dialog.cfg.data["ai"]["openai"].get("api_key_env"), "sk-or-v1-0123456789abcdef")
 
     def test_an_emptied_address_is_saved_as_openai_s(self):
         dialog = self.dialog("openai")

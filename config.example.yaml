@@ -112,8 +112,9 @@ ai:
     # As the server names it. There is no default; Settings → AI → Test
     # connection lists what the server offers.
     model: ''
-    # The variable that holds the key. A local server usually needs none:
-    # leave the variable unset and no key is sent.
+    # The NAME of the variable that holds the key, not the key (OpenRouter:
+    # OPENROUTER_API_KEY). A local server usually needs none: leave the
+    # variable unset and no key is sent.
     api_key_env: OPENAI_API_KEY
     timeout_s: 180
     # Neither of these is sent unless set; a server that does not know one may

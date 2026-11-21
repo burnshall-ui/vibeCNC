@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
 )
 
 from vibe_cnc.claude_client import (
-    AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL, backend_of,
+    AIClient, BACKENDS, DEFAULT_CLAUDE_MODEL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE_URL,
+    NOT_A_VARIABLE_NAME, backend_of, is_variable_name,
 )
 
 
@@ -101,6 +102,14 @@ class SettingsDialog(QDialog):
         self.openai_model_input.setPlaceholderText("as the server names it -- Test connection lists them")
         ai_layout.addRow("OpenAI-compatible Model:", self.openai_model_input)
 
+        # The name of the variable, never the key: config.yaml is plain text.
+        self.openai_key_env_input = QLineEdit()
+        self.openai_key_env_input.setText(openai.get('api_key_env') or "OPENAI_API_KEY")
+        self.openai_key_env_input.setToolTip("The NAME of the environment variable that holds the key "
+                                             "(OpenRouter: OPENROUTER_API_KEY), not the key itself. "
+                                             "A local server needs none: leave the variable unset.")
+        ai_layout.addRow("OpenAI-compatible Key Variable:", self.openai_key_env_input)
+
         # Asks the Models API (Claude), the tag list (Ollama) or the model
         # list (OpenAI-compatible) about the model typed above. Nothing is run
         # and nothing is billed.
@@ -172,7 +181,8 @@ class SettingsDialog(QDialog):
             check, args = client.check_claude, (self.claude_model_input.text().strip(),)
         elif mode == "openai":
             check, args = client.check_openai, (self.openai_model_input.text().strip(),
-                                                self.openai_url_input.text().strip())
+                                                self.openai_url_input.text().strip(),
+                                                self.openai_key_env_input.text().strip())
         else:
             check, args = client.check_ollama, (self.ollama_model_input.text().strip(),)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -192,6 +202,11 @@ class SettingsDialog(QDialog):
             self.camotics_path_input.setText(path)
 
     def save_settings(self):
+        key_env = self.openai_key_env_input.text().strip() or "OPENAI_API_KEY"
+        if not is_variable_name(key_env):
+            # Most likely the key itself; it would be written to config.yaml.
+            QMessageBox.warning(self, "Not saved", NOT_A_VARIABLE_NAME.replace("❌ ", ""))
+            return
         self.cfg.data['machine']['chuck_z_limit'] = self.chuck_z_input.value()
         diameter = self.chuck_diameter_input.value()
         self.cfg.data['machine']['chuck_diameter'] = diameter if diameter > 0 else None
@@ -204,6 +219,7 @@ class SettingsDialog(QDialog):
         openai = ai.setdefault('openai', {})
         openai['base_url'] = self.openai_url_input.text().strip() or DEFAULT_OPENAI_BASE_URL
         openai['model'] = self.openai_model_input.text().strip()
+        openai['api_key_env'] = key_env
         self.cfg.data['paths']['camotics_exe'] = self.camotics_path_input.text().strip()
         self.cfg.data['paths']['sim_share'] = self.vm_share_input.text().strip()
         self.cfg.data['ui']['font_base_pt'] = self.font_size_input.value()

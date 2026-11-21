@@ -903,8 +903,51 @@ class OpenAIErrorTests(OpenAICase):
         (ok, text), _post = self.ask(http(404, text="File Not Found"), base_url="http://localhost:8080")
 
         self.assertFalse(ok)
-        self.assertIn("nothing found", text)
+        self.assertIn("not found (404): File Not Found.", text)
         self.assertIn("/v1", text)
+
+    def test_any_other_404_shows_what_the_server_said(self):
+        (ok, text), _post = self.ask(openai_failure(404, "No endpoints found for this request", code=404))
+
+        self.assertFalse(ok)
+        self.assertIn("No endpoints found for this request", text)
+
+    def test_openrouter_s_payment_required_is_a_missing_credit(self):
+        (ok, text), _post = self.ask(http(402, {"error": {
+            "code": 402, "message": "Insufficient credits. Add more using https://openrouter.ai/credits"}}))
+
+        self.assertFalse(ok)
+        self.assertIn("no quota or credit left (402)", text)
+        self.assertIn("Insufficient credits", text)
+
+    def test_a_failure_reported_with_status_200_is_not_taken_for_an_answer(self):
+        # OpenRouter: the request was accepted, then every provider failed.
+        (ok, text), _post = self.ask(http(200, {"error": {"code": 502, "message": "Provider returned error"}}))
+
+        self.assertFalse(ok)
+        self.assertIn("failed to answer", text)
+        self.assertIn("Provider returned error", text)
+
+    def test_an_answer_that_broke_off_halfway_is_not_taken_for_one(self):
+        response = completion("Line 5: G2", finish="error")
+        response._content = json.dumps(dict(json.loads(response._content), choices=[{
+            "index": 0, "finish_reason": "error",
+            "message": {"role": "assistant", "content": "Line 5: G2"},
+            "error": {"code": 502, "message": "Upstream disconnected"}}])).encode("utf-8")
+
+        (ok, text), _post = self.ask(response)
+
+        self.assertFalse(ok)
+        self.assertIn("broke off", text)
+        self.assertIn("Upstream disconnected", text)
+
+    def test_a_key_where_its_variable_belongs_is_not_sent_and_not_shown(self):
+        (ok, text), post = self.ask(completion(), api_key_env="sk-or-v1-0123456789abcdef")
+
+        self.assertFalse(ok)
+        self.assertIn("NAME of an environment variable", text)
+        self.assertNotIn("sk-or-v1", text)
+        post.assert_not_called()
 
     def test_an_account_without_credit_is_told_so(self):
         (ok, text), _post = self.ask(openai_failure(
@@ -981,7 +1024,7 @@ class OpenAIErrorTests(OpenAICase):
 
 
 class OpenAICheckTests(unittest.TestCase):
-    def check(self, response, model=None, base_url=None, env=None, **openai):
+    def check(self, response, model=None, base_url=None, env=None, key_env=None, **openai):
         client = AIClient(settings(openai=dict({"base_url": "http://nas.local:1234/v1",
                                                  "model": "saved-model"}, **openai)))
         effect = response if isinstance(response, Exception) else None
@@ -990,7 +1033,7 @@ class OpenAICheckTests(unittest.TestCase):
         with mock.patch.object(claude_client.requests, "get",
                                side_effect=effect, return_value=response) as get, \
                 mock.patch.dict(os.environ, environment):
-            return client.check_openai(model, base_url), get
+            return client.check_openai(model, base_url, key_env), get
 
     @staticmethod
     def models(*ids):
@@ -1015,6 +1058,22 @@ class OpenAICheckTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("offers model 'saved-model'", text)
         self.assertIn("quota", text)
+        # OpenRouter's model list answers without a key, so a green check
+        # says nothing about the key there.
+        self.assertIn("not whether the key works", text)
+
+    def test_it_uses_the_key_variable_it_is_given(self):
+        (_ok, _text), get = self.check(self.models("saved-model"), key_env="OPENROUTER_API_KEY",
+                                       env={"OPENROUTER_API_KEY": "sk-or-1", "OPENAI_API_KEY": "sk-oa"})
+
+        self.assertEqual(get.call_args.kwargs["headers"], {"Authorization": "Bearer sk-or-1"})
+
+    def test_a_key_where_its_variable_belongs_is_not_sent(self):
+        (ok, text), get = self.check(self.models("saved-model"), key_env="sk-or-v1-0123456789abcdef")
+
+        self.assertFalse(ok)
+        self.assertNotIn("sk-or-v1", text)
+        get.assert_not_called()
 
     def test_a_model_that_is_not_offered_says_what_is(self):
         (ok, text), _get = self.check(self.models("llama-3.2-3b", "qwen3-4b"), model="gpt-9")
